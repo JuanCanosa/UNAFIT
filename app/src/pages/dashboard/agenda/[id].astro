@@ -26,7 +26,7 @@ const aulaId = Astro.params.id as string;
 const { data: aula, error: aulaErr } = await supabase
   .from('aulas_agenda')
   .select(`
-    id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade,
+    id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, obs_aquecimento,
     wods ( id, nome, score_type, treino ),
     checkins ( id )
   `)
@@ -96,6 +96,12 @@ if (Astro.request.method === 'POST') {
     }).eq('id', aulaId);
     if (error) formError = error.message;
     else return Astro.redirect(`/dashboard/agenda/${aulaId}?saved=1`);
+  }
+
+  if (action === 'salvar_obs_aquecimento') {
+    const obs = (form.get('obs_aquecimento') as string) ?? '';
+    await supabase.from('aulas_agenda').update({ obs_aquecimento: obs || null }).eq('id', aulaId);
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
   }
 
   if (action === 'vincular_wod') {
@@ -233,6 +239,32 @@ const modalidadeCor: Record<string, string> = {
           })}
         </div>
       )}
+      <!-- Comentário do aquecimento -->
+      <div class="mt-4 pt-4 border-t border-border/40">
+        {canEdit ? (
+          <form method="POST" class="space-y-2">
+            <input type="hidden" name="action" value="salvar_obs_aquecimento" />
+            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+              Comentário / Instruções
+            </label>
+            <textarea
+              name="obs_aquecimento"
+              rows="3"
+              placeholder="Ex: Serão 3 rounds e depois pra finalizar 200 metros de corrida"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none"
+            >{aula.obs_aquecimento ?? ''}</textarea>
+            <button type="submit"
+              class="w-full rounded-lg bg-muted border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors">
+              Salvar comentário
+            </button>
+          </form>
+        ) : aula.obs_aquecimento ? (
+          <div class="rounded-lg bg-muted/40 px-3 py-2.5">
+            <p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Comentário</p>
+            <p class="text-sm text-foreground whitespace-pre-line">{aula.obs_aquecimento}</p>
+          </div>
+        ) : null}
+      </div>
     </Card>
 
     <!-- ── WOD ───────────────────────────────────────────── -->

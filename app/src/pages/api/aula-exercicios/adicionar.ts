@@ -29,8 +29,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return new Response(JSON.stringify({ error: 'aula_id é obrigatório' }), { status: 400 });
   }
 
-  const secoes = ['mobilidade', 'skills', 'wod'];
-  if (!secao || !secoes.includes(secao)) {
+  if (!secao || secao !== 'aquecimento') {
     return new Response(JSON.stringify({ error: 'secao inválida' }), { status: 400 });
   }
 
