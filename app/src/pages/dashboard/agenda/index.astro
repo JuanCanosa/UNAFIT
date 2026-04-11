@@ -1,0 +1,331 @@
+---
+/**
+ * /dashboard/agenda
+ * Calendário mensal de aulas com destaque para o dia atual.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+
+const url = new URL(Astro.request.url);
+const mesParam = url.searchParams.get('mes');
+const hoje = new Date();
+const hojeISO = hoje.toISOString().split('T')[0];
+
+let ano = hoje.getFullYear();
+let mes = hoje.getMonth();
+
+if (mesParam && /^\d{4}-\d{2}$/.test(mesParam)) {
+  const [y, m] = mesParam.split('-').map(Number);
+  ano = y; mes = m - 1;
+}
+
+const primeiroDia = new Date(ano, mes, 1);
+const ultimoDia   = new Date(ano, mes + 1, 0);
+const primISO     = primeiroDia.toISOString().split('T')[0];
+const ultISO      = ultimoDia.toISOString().split('T')[0];
+
+// Handle POST — criar nova aula
+let formError = '';
+if (Astro.request.method === 'POST') {
+  const form       = await Astro.request.formData();
+  const modalidade = form.get('modalidade') as string;
+  const data_aula  = form.get('data_aula') as string;
+  const h_inicio   = form.get('horario_inicio') as string;
+  const h_fim      = form.get('horario_fim') as string;
+  const capacidade = form.get('capacidade_max') as string;
+
+  const { error } = await supabase.from('aulas_agenda').insert({
+    academia_id:    profile.academia_id,
+    modalidade,
+    data_aula,
+    horario_inicio: h_inicio,
+    horario_fim:    h_fim,
+    capacidade_max: capacidade ? parseInt(capacidade) : null,
+    criado_por:     profile.id,
+  });
+
+  if (error) formError = error.message;
+  else return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+}
+
+// Busca aulas do mês
+const { data: aulas } = await supabase
+  .from('aulas_agenda')
+  .select(`
+    id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade,
+    wods ( nome ),
+    checkins ( id )
+  `)
+  .eq('academia_id', profile.academia_id!)
+  .gte('data_aula', primISO)
+  .lte('data_aula', ultISO)
+  .order('horario_inicio');
+
+// Indexa por data
+const aulasPorData: Record<string, typeof aulas> = {};
+for (const aula of aulas ?? []) {
+  if (!aulasPorData[aula.data_aula]) aulasPorData[aula.data_aula] = [];
+  aulasPorData[aula.data_aula]!.push(aula);
+}
+
+// Grade do calendário
+const diaDaSemanaInicio = primeiroDia.getDay();
+const totalDias = ultimoDia.getDate();
+const diasNoCalendario: (number | null)[] = [
+  ...Array(diaDaSemanaInicio).fill(null),
+  ...Array.from({ length: totalDias }, (_, i) => i + 1),
+];
+while (diasNoCalendario.length % 7 !== 0) diasNoCalendario.push(null);
+
+// Navegação
+const mesAnterior = new Date(ano, mes - 1, 1);
+const mesSeguinte = new Date(ano, mes + 1, 1);
+const fmtMesNav   = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+const nomeMes     = primeiroDia.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+const diasSemana  = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function isoDoMes(dia: number) {
+  return `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+}
+
+const modalidadeCores: Record<string, string> = {
+  'CrossFit':         'bg-primary/20 text-primary border-primary/30 hover:bg-primary/30',
+  'Treino Livre':     'bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30',
+  'Treino Funcional': 'bg-orange-500/20 text-orange-400 border-orange-500/30 hover:bg-orange-500/30',
+};
+const modalidadeCoresHoje: Record<string, string> = {
+  'CrossFit':         'bg-primary/25 text-primary border-primary/40',
+  'Treino Livre':     'bg-green-500/25 text-green-400 border-green-500/40',
+  'Treino Funcional': 'bg-orange-500/25 text-orange-400 border-orange-500/40',
+};
+---
+
+<DashboardLayout title="Agenda de Aulas">
+
+  <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-foreground capitalize">{nomeMes}</h1>
+      <p class="text-sm text-muted-foreground">{aulas?.length ?? 0} aula{(aulas?.length ?? 0) !== 1 ? 's' : ''} este mês</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <a href={`/dashboard/agenda?mes=${fmtMesNav(mesAnterior)}`}
+        class="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </a>
+      <a href={`/dashboard/agenda?mes=${fmtMesNav(hoje)}`}
+        class="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors">
+        Hoje
+      </a>
+      <a href={`/dashboard/agenda?mes=${fmtMesNav(mesSeguinte)}`}
+        class="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </a>
+      {canEdit && (
+        <button id="btn-nova-aula"
+          class="ml-1 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          Nova Aula
+        </button>
+      )}
+    </div>
+  </div>
+
+  <!-- Legenda de modalidades -->
+  <div class="mb-4 flex flex-wrap items-center gap-3 text-xs">
+    <span class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-primary/70"></span>CrossFit</span>
+    <span class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-green-500/70"></span>Treino Livre</span>
+    <span class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-orange-500/70"></span>Treino Funcional</span>
+  </div>
+
+  <!-- Grade do calendário -->
+  <div class="rounded-xl border border-border bg-card overflow-hidden">
+    <!-- Cabeçalho -->
+    <div class="grid grid-cols-7 border-b border-border">
+      {diasSemana.map((d, i) => (
+        <div class:list={[
+          'py-2.5 text-center text-xs font-semibold uppercase tracking-wider',
+          i === 0 || i === 6 ? 'text-muted-foreground/50' : 'text-muted-foreground'
+        ]}>
+          {d}
+        </div>
+      ))}
+    </div>
+
+    <!-- Células -->
+    <div class="grid grid-cols-7 divide-x divide-y divide-border">
+      {diasNoCalendario.map((dia) => {
+        if (dia === null) return <div class="min-h-[110px] bg-muted/20" />;
+
+        const iso       = isoDoMes(dia);
+        const aulasHoje = aulasPorData[iso] ?? [];
+        const isHoje    = iso === hojeISO;
+        const isFim     = new Date(iso + 'T12:00:00').getDay() % 6 === 0;
+
+        return (
+          <div class:list={[
+            'min-h-[110px] p-1.5 flex flex-col gap-1',
+            isHoje ? 'bg-primary/5' : isFim ? 'bg-muted/20' : 'bg-card',
+          ]}>
+            <div class="flex items-center justify-between px-0.5 mb-0.5">
+              <span class:list={[
+                'flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold',
+                isHoje ? 'bg-primary text-primary-foreground' : isFim ? 'text-muted-foreground/50' : 'text-foreground'
+              ]}>
+                {dia}
+              </span>
+            </div>
+
+            {aulasHoje.map((aula) => {
+              const wodNome  = (aula.wods as any)?.nome;
+              const label    = wodNome ?? aula.modalidade;
+              const cores    = isHoje
+                ? (modalidadeCoresHoje[aula.modalidade] ?? modalidadeCoresHoje['CrossFit'])
+                : (modalidadeCores[aula.modalidade]     ?? modalidadeCores['CrossFit']);
+              return (
+                <a href={`/dashboard/agenda/${aula.id}`}
+                  class:list={['block rounded-md px-1.5 py-1 text-xs leading-tight border transition-colors', cores]}>
+                  <p class="font-semibold truncate">{label}</p>
+                  <p class="opacity-80 mt-0.5">{aula.horario_inicio.slice(0, 5)}</p>
+                </a>
+              );
+            })}
+
+            {canEdit && (
+              <button data-date={iso}
+                class:list={[
+                  'btn-add-dia mt-auto rounded-md py-0.5 text-xs transition-colors',
+                  aulasHoje.length > 0
+                    ? 'border border-dashed border-border/50 text-muted-foreground/40 hover:border-primary/40 hover:text-primary'
+                    : 'text-muted-foreground/20 hover:text-primary/40'
+                ]}>
+                +
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+
+</DashboardLayout>
+
+<!-- Modal Nova Aula -->
+<div id="modal-aula" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <div>
+        <h2 class="text-lg font-bold text-foreground">Nova Aula</h2>
+        <p class="text-xs text-muted-foreground mt-0.5">Após criar, vincule o WOD e o aquecimento</p>
+      </div>
+      <button id="modal-aula-close" class="text-muted-foreground hover:text-foreground transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form method="POST" class="space-y-4">
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Modalidade</label>
+        <div class="grid grid-cols-3 gap-2">
+          {['CrossFit', 'Treino Livre', 'Treino Funcional'].map((m, i) => (
+            <label class="cursor-pointer">
+              <input type="radio" name="modalidade" value={m} class="sr-only peer" required checked={i === 0} />
+              <span class="flex items-center justify-center rounded-lg border border-border px-2 py-2.5 text-xs font-semibold text-muted-foreground text-center transition-colors peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary hover:border-border/80 hover:text-foreground leading-tight">
+                {m}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Data</label>
+        <input id="input-data-aula" name="data_aula" type="date" required
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Início</label>
+          <input name="horario_inicio" type="time" required value="06:00"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Fim</label>
+          <input name="horario_fim" type="time" required value="07:00"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Capacidade Máxima</label>
+        <input name="capacidade_max" type="number" min="1" placeholder="Sem limite"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+
+      {formError && <p class="text-xs text-destructive">{formError}</p>}
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" id="btn-aula-cancelar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Criar Aula →
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const modal     = document.getElementById('modal-aula')!;
+  const inputData = document.getElementById('input-data-aula') as HTMLInputElement;
+
+  function openModal(date?: string) {
+    const hoje = new Date().toISOString().split('T')[0];
+    inputData.value = date ?? hoje;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+  }
+  function closeModal() {
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  }
+
+  document.getElementById('btn-nova-aula')?.addEventListener('click', () => openModal());
+  document.getElementById('modal-aula-close')!.addEventListener('click', closeModal);
+  document.getElementById('btn-aula-cancelar')!.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+  document.querySelectorAll('.btn-add-dia').forEach(btn => {
+    btn.addEventListener('click', () => openModal((btn as HTMLElement).dataset.date));
+  });
+</script>

@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── UNAFIT Design Tokens ─────────────────────────────────────────────────── */
+/* Dark-mode only. Paleta fitness: fundo quase-preto + verde neon primário.    */
+
+@layer base {
+  :root {
+    /* Surfaces */
+    --background:        240 10%  4%;   /* #09090f */
+    --foreground:        220 20% 92%;   /* #e4e6f0 */
+    --card:              240  8%  7%;   /* #101018 */
+    --card-foreground:   220 20% 92%;
+    --popover:           240  8%  9%;
+    --popover-foreground:220 20% 92%;
+
+    /* Primary — verde neon */
+    --primary:           152 100% 45%;  /* #00e67a */
+    --primary-foreground:152 100%  8%;  /* texto escuro sobre verde */
+
+    /* Secondary */
+    --secondary:         240  8% 13%;
+    --secondary-foreground: 220 20% 75%;
+
+    /* Muted */
+    --muted:             240  8% 12%;
+    --muted-foreground:  240 12% 52%;
+
+    /* Accent */
+    --accent:            240  8% 15%;
+    --accent-foreground: 220 20% 85%;
+
+    /* Danger */
+    --destructive:         0 84% 55%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Warning — laranja para faturas pendentes */
+    --warning:           22 100% 58%;   /* #ff6b2b */
+    --warning-foreground:22 100%  8%;
+
+    /* Estrutura */
+    --border:            240  8% 14%;
+    --input:             240  8% 14%;
+    --ring:              152 100% 45%;
+    --radius:            0.75rem;
+
+    /* Sidebar */
+    --sidebar-bg:        240 10%  5%;
+    --sidebar-border:    240  8% 11%;
+    --sidebar-item-hover:240  8% 10%;
+    --sidebar-item-active:152 100% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  /* Scrollbar personalizada */
+  ::-webkit-scrollbar          { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track    { background: hsl(var(--background)); }
+  ::-webkit-scrollbar-thumb    { background: hsl(var(--border)); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+}
+
+/* ─── Utilitários UNAFIT ────────────────────────────────────────────────────── */
+@layer utilities {
+  .text-primary       { color: hsl(var(--primary)); }
+  .text-warning       { color: hsl(var(--warning)); }
+  .bg-primary         { background-color: hsl(var(--primary)); }
+  .bg-warning         { background-color: hsl(var(--warning)); }
+  .border-primary     { border-color: hsl(var(--primary)); }
+  .border-warning     { border-color: hsl(var(--warning)); }
+  .ring-primary       { --tw-ring-color: hsl(var(--primary)); }
+
+  /* Glow verde — botão principal */
+  .glow-primary {
+    box-shadow: 0 0 16px 0 hsl(var(--primary) / 0.35),
+                0 0 40px 0 hsl(var(--primary) / 0.15);
+  }
+  .glow-primary:hover {
+    box-shadow: 0 0 22px 0 hsl(var(--primary) / 0.55),
+                0 0 60px 0 hsl(var(--primary) / 0.25);
+  }
+
+  /* Glow laranja — avisos */
+  .glow-warning {
+    box-shadow: 0 0 16px 0 hsl(var(--warning) / 0.35),
+                0 0 40px 0 hsl(var(--warning) / 0.15);
+  }
+
+  /* Gradiente sutil de topo nos cards */
+  .card-shine {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--card)) 0%,
+      hsl(240 8% 9%) 100%
+    );
+  }
+}

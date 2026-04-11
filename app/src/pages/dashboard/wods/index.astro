@@ -1,0 +1,239 @@
+---
+/**
+ * /dashboard/wods
+ * WODs com data de aplicação. Próximos (padrão) ou Histórico.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const canEdit  = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const hojeISO  = new Date().toISOString().split('T')[0];
+const url        = new URL(Astro.request.url);
+const view       = url.searchParams.get('view'); // null = próximos, 'historico' = passados
+const criarParam = url.searchParams.get('criar'); // '1' = auto-abre modal
+const dataParam  = url.searchParams.get('data');  // YYYY-MM-DD pre-fill
+
+let formError = '';
+
+if (Astro.request.method === 'POST') {
+  const form            = await Astro.request.formData();
+  const nome            = (form.get('nome') as string)?.trim();
+  const treino          = (form.get('treino') as string)?.trim();
+  const score_type      = form.get('score_type') as string;
+  const data_aplicacao  = form.get('data_aplicacao') as string;
+
+  if (!nome || !treino || !data_aplicacao) {
+    formError = 'Nome, treino e data são obrigatórios.';
+  } else {
+    const { error } = await supabase.from('wods').insert({
+      academia_id: profile.academia_id,
+      nome, treino, score_type, data_aplicacao,
+      criado_por: profile.id,
+    });
+    if (error) formError = error.message;
+    else return Astro.redirect('/dashboard/wods');
+  }
+}
+
+// Busca WODs filtrados por data
+const query = supabase
+  .from('wods')
+  .select('id, nome, score_type, treino, data_aplicacao, criado_em')
+  .eq('academia_id', profile.academia_id!);
+
+const { data: wods } = await (view === 'historico'
+  ? query.or(`data_aplicacao.lt.${hojeISO},data_aplicacao.is.null`).order('data_aplicacao', { ascending: false, nullsFirst: false })
+  : query.gte('data_aplicacao', hojeISO).order('data_aplicacao', { ascending: true })
+);
+
+const scoreLabels: Record<string, string> = {
+  tempo: 'Tempo', reps: 'Reps', carga: 'Carga (kg)',
+  rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
+};
+
+function fmtData(iso: string) {
+  const d = new Date(iso + 'T12:00:00');
+  if (iso === hojeISO) return 'Hoje';
+  const amanha = new Date(); amanha.setDate(amanha.getDate() + 1);
+  if (iso === amanha.toISOString().split('T')[0]) return 'Amanhã';
+  return d.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+---
+
+<DashboardLayout title="WODs">
+
+  <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">WODs</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        {view === 'historico' ? 'WODs passados' : 'WODs agendados'}
+      </p>
+    </div>
+    {canEdit && (
+      <button id="btn-novo-wod"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Novo WOD
+      </button>
+    )}
+  </div>
+
+  <!-- Tabs -->
+  <div class="mb-5 flex gap-1 rounded-lg border border-border bg-muted/40 p-1 w-fit">
+    <a href="/dashboard/wods"
+      class:list={['rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+        !view ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']}>
+      Próximos
+    </a>
+    <a href="/dashboard/wods?view=historico"
+      class:list={['rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+        view === 'historico' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']}>
+      Histórico
+    </a>
+  </div>
+
+  {!wods || wods.length === 0 ? (
+    <div class="rounded-xl border border-border bg-card py-14 text-center">
+      <svg class="mx-auto mb-3 h-10 w-10 text-muted-foreground/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+      {view === 'historico'
+        ? <p class="text-muted-foreground">Nenhum WOD aplicado ainda.</p>
+        : <p class="text-muted-foreground">Nenhum WOD agendado. Crie um WOD com data futura.</p>
+      }
+    </div>
+  ) : (
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {wods.map((wod) => {
+        const isHoje   = wod.data_aplicacao === hojeISO;
+        return (
+          <a href={`/dashboard/wods/${wod.id}`}
+            class="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 hover:border-primary/30 transition-colors">
+
+            <!-- Nome + score -->
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-bold text-foreground group-hover:text-primary transition-colors leading-tight">{wod.nome}</h3>
+              <Badge variant="primary" class="shrink-0">{scoreLabels[wod.score_type] ?? wod.score_type}</Badge>
+            </div>
+
+            <!-- Treino preview -->
+            <div class="rounded-lg bg-muted/50 px-3 py-2.5 flex-1">
+              <p class="text-xs font-mono text-foreground whitespace-pre-line line-clamp-3">{wod.treino}</p>
+            </div>
+
+            <div class="flex items-center justify-between mt-auto">
+              {wod.data_aplicacao
+                ? <span class:list={['text-xs font-medium', isHoje ? 'text-primary' : 'text-muted-foreground']}>
+                    {fmtData(wod.data_aplicacao)}
+                  </span>
+                : <span class="text-xs text-muted-foreground/50 italic">Sem data</span>
+              }
+              <span class="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+            </div>
+          </a>
+        );
+      })}
+    </div>
+  )}
+
+</DashboardLayout>
+
+<!-- Modal Novo WOD -->
+<div id="modal-wod" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Novo WOD</h2>
+      <button id="wod-close" class="text-muted-foreground hover:text-foreground transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form method="POST" class="space-y-4">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome *</label>
+          <input name="nome" type="text" required placeholder="ex: Fran, Murph"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Data de aplicação *</label>
+          <input name="data_aplicacao" type="date" required id="input-data-aplicacao"
+            value={dataParam ?? ''}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Tipo de Score *</label>
+        <select name="score_type" required
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary">
+          <option value="tempo">Tempo</option>
+          <option value="reps">Reps</option>
+          <option value="carga">Carga (kg)</option>
+          <option value="rounds_reps">Rounds + Reps</option>
+          <option value="pass_fail">Pass / Fail</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Prescrição *</label>
+        <textarea name="treino" required rows="4"
+          placeholder="21-15-9 reps de:&#10;- Thruster (43kg)&#10;- Pull-up&#10;Para Tempo."
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none font-mono"
+        ></textarea>
+      </div>
+
+      {formError && <p class="text-xs text-destructive">{formError}</p>}
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" id="wod-cancelar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Salvar WOD
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script define:vars={{ criarParam }}>
+  const modal   = document.getElementById('modal-wod');
+  const btnOpen = document.getElementById('btn-novo-wod');
+  const btnCls  = document.getElementById('wod-close');
+  const btnCanc = document.getElementById('wod-cancelar');
+
+  function open()  { modal.classList.remove('hidden'); modal.classList.add('flex'); }
+  function close() { modal.classList.add('hidden');    modal.classList.remove('flex'); }
+
+  btnOpen?.addEventListener('click', open);
+  btnCls?.addEventListener('click', close);
+  btnCanc?.addEventListener('click', close);
+  modal?.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+  // Auto-abre o modal se vier de um atalho da agenda
+  if (criarParam === '1') {
+    open();
+  }
+</script>

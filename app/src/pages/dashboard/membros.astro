@@ -1,0 +1,304 @@
+---
+/**
+ * /dashboard/membros
+ * Lista de alunos da academia — visível apenas para dono e saas_admin.
+ * Permite: visualizar, cadastrar, ativar/desativar.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: myProfile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!myProfile || (myProfile.role !== 'dono' && myProfile.role !== 'saas_admin')) {
+  return Astro.redirect('/dashboard');
+}
+
+// Busca todos os membros da academia
+const { data: membros } = await supabase
+  .from('profiles')
+  .select('id, nome_completo, role, telefone, ativo, criado_em')
+  .eq('academia_id', myProfile.academia_id!)
+  .order('nome_completo');
+
+const alunos   = membros?.filter(m => m.role === 'aluno')     ?? [];
+const staff    = membros?.filter(m => m.role !== 'aluno')     ?? [];
+const ativos   = alunos.filter(a => a.ativo).length;
+const inativos = alunos.filter(a => !a.ativo).length;
+
+// Handle POST — cadastrar novo membro ou toggle ativo
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'toggle_ativo') {
+    const id    = form.get('id') as string;
+    const ativo = form.get('ativo') === 'true';
+    await supabase.from('profiles').update({ ativo: !ativo }).eq('id', id);
+    return Astro.redirect('/dashboard/membros');
+  }
+
+  if (action === 'cadastrar') {
+    const email         = form.get('email') as string;
+    const nome_completo = form.get('nome_completo') as string;
+    const telefone      = form.get('telefone') as string;
+
+    // Cria usuário via API de administração — retorna novo UUID
+    const res = await fetch(`${Astro.url.origin}/api/membros/criar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'Cookie': Astro.request.headers.get('cookie') ?? '' },
+      body: JSON.stringify({ email, nome_completo, telefone }),
+    });
+    return Astro.redirect('/dashboard/membros');
+  }
+}
+---
+
+<DashboardLayout title="Membros">
+
+  <!-- Cabeçalho -->
+  <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">Membros</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Gerencie os alunos e staff da academia</p>
+    </div>
+    <button
+      id="btn-novo"
+      class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+    >
+      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      Novo Membro
+    </button>
+  </div>
+
+  <!-- Stats -->
+  <div class="mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Alunos</p>
+      <p class="mt-1 text-2xl font-bold text-foreground">{alunos.length}</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ativos</p>
+      <p class="mt-1 text-2xl font-bold text-primary">{ativos}</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Inativos</p>
+      <p class="mt-1 text-2xl font-bold text-muted-foreground">{inativos}</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Staff</p>
+      <p class="mt-1 text-2xl font-bold text-foreground">{staff.length}</p>
+    </Card>
+  </div>
+
+  <!-- Tabela de Alunos -->
+  <Card class="mb-6">
+    <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Alunos</h2>
+
+    {alunos.length === 0 ? (
+      <p class="py-8 text-center text-muted-foreground text-sm">Nenhum aluno cadastrado ainda.</p>
+    ) : (
+      <div class="overflow-x-auto -mx-5">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Nome</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Telefone</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Desde</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+              <th class="px-5 pb-3 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {alunos.map((m) => (
+              <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                <td class="px-5 py-3">
+                  <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                      {m.nome_completo.charAt(0).toUpperCase()}
+                    </div>
+                    <span class="font-medium text-foreground">{m.nome_completo}</span>
+                  </div>
+                </td>
+                <td class="px-5 py-3 text-muted-foreground hidden sm:table-cell">
+                  {m.telefone ?? '—'}
+                </td>
+                <td class="px-5 py-3 text-muted-foreground hidden md:table-cell">
+                  {new Date(m.criado_em).toLocaleDateString('pt-BR')}
+                </td>
+                <td class="px-5 py-3">
+                  {m.ativo
+                    ? <Badge variant="success">Ativo</Badge>
+                    : <Badge variant="muted">Inativo</Badge>
+                  }
+                </td>
+                <td class="px-5 py-3 text-right">
+                  <form method="POST">
+                    <input type="hidden" name="action" value="toggle_ativo" />
+                    <input type="hidden" name="id" value={m.id} />
+                    <input type="hidden" name="ativo" value={m.ativo.toString()} />
+                    <button
+                      type="submit"
+                      class="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                    >
+                      {m.ativo ? 'Desativar' : 'Ativar'}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </Card>
+
+  <!-- Staff -->
+  {staff.length > 0 && (
+    <Card>
+      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Staff</h2>
+      <div class="overflow-x-auto -mx-5">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Nome</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cargo</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Telefone</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((m) => (
+              <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                <td class="px-5 py-3">
+                  <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                      {m.nome_completo.charAt(0).toUpperCase()}
+                    </div>
+                    <span class="font-medium text-foreground">{m.nome_completo}</span>
+                  </div>
+                </td>
+                <td class="px-5 py-3">
+                  <Badge variant="primary">{m.role === 'dono' ? 'Dono' : 'Professor'}</Badge>
+                </td>
+                <td class="px-5 py-3 text-muted-foreground hidden sm:table-cell">{m.telefone ?? '—'}</td>
+                <td class="px-5 py-3">
+                  {m.ativo ? <Badge variant="success">Ativo</Badge> : <Badge variant="muted">Inativo</Badge>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )}
+
+</DashboardLayout>
+
+<!-- Modal Novo Membro -->
+<div id="modal-novo" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Cadastrar Aluno</h2>
+      <button id="modal-close" class="text-muted-foreground hover:text-foreground transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form id="form-novo" class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome Completo</label>
+        <input
+          name="nome_completo" type="text" required
+          placeholder="João da Silva"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">E-mail</label>
+        <input
+          name="email" type="email" required
+          placeholder="joao@email.com"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Telefone</label>
+        <input
+          name="telefone" type="tel"
+          placeholder="(11) 99999-9999"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+
+      <p id="form-error" class="hidden text-xs text-destructive"></p>
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" id="btn-cancelar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+          Cadastrar
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const modal    = document.getElementById('modal-novo')!;
+  const btnNovo  = document.getElementById('btn-novo')!;
+  const btnClose = document.getElementById('modal-close')!;
+  const btnCanc  = document.getElementById('btn-cancelar')!;
+  const formNovo = document.getElementById('form-novo') as HTMLFormElement;
+  const errEl    = document.getElementById('form-error')!;
+
+  function openModal()  { modal.classList.remove('hidden'); modal.classList.add('flex'); }
+  function closeModal() { modal.classList.add('hidden');    modal.classList.remove('flex'); }
+
+  btnNovo.addEventListener('click', openModal);
+  btnClose.addEventListener('click', closeModal);
+  btnCanc.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+  formNovo.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitBtn = formNovo.querySelector('button[type="submit"]') as HTMLButtonElement;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Cadastrando...';
+    errEl.classList.add('hidden');
+
+    const data = Object.fromEntries(new FormData(formNovo));
+    const res = await fetch('/api/membros/criar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const json = await res.json();
+
+    if (res.ok) {
+      window.location.reload();
+    } else {
+      errEl.textContent = json.error ?? 'Erro ao cadastrar.';
+      errEl.classList.remove('hidden');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Cadastrar';
+    }
+  });
+</script>

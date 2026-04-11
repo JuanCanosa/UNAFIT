@@ -1,0 +1,25 @@
+---
+interface Props {
+  class?: string;
+  variant?: 'default' | 'warning' | 'success' | 'muted';
+}
+
+const { class: extraClass = '', variant = 'default' } = Astro.props;
+
+const variants = {
+  default: 'bg-card border-border',
+  warning: 'bg-card border-warning/40',
+  success: 'bg-card border-primary/40',
+  muted:   'bg-muted border-border',
+};
+
+const classes = [
+  'rounded-xl border p-5 text-card-foreground shadow-sm card-shine',
+  variants[variant],
+  extraClass,
+].join(' ');
+---
+
+<div class={classes}>
+  <slot />
+</div>

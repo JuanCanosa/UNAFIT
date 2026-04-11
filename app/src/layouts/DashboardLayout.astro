@@ -1,0 +1,93 @@
+---
+import '@/styles/globals.css';
+import Sidebar from '@/components/Sidebar.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+import type { UserRole } from '@/types/database';
+
+interface Props {
+  title?: string;
+}
+
+const { title = 'UNAFIT' } = Astro.props;
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+if (authError || !user) {
+  return Astro.redirect('/login');
+}
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, nome_completo, academia_id, ativo')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || !profile.ativo) {
+  return Astro.redirect('/login');
+}
+
+const currentPath = new URL(Astro.request.url).pathname;
+---
+
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title} — UNAFIT</title>
+    <!-- Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body class="min-h-screen bg-background">
+
+    <!-- Sidebar -->
+    <Sidebar
+      role={profile.role as UserRole}
+      nomeCompleto={profile.nome_completo}
+      currentPath={currentPath}
+    />
+
+    <!-- Layout principal (offset pelo sidebar no desktop) -->
+    <div class="lg:pl-64 min-h-screen flex flex-col">
+
+      <!-- Topbar mobile -->
+      <header class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background/80 backdrop-blur-sm px-4 lg:hidden">
+        <!-- Hamburger -->
+        <button
+          id="sidebar-open"
+          class="text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Abrir menu"
+        >
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <!-- Logo mobile -->
+        <span class="text-base font-bold">UNA<span class="text-primary">FIT</span></span>
+      </header>
+
+      <!-- Conteúdo da página -->
+      <main class="flex-1 p-5 lg:p-7 animate-fade-in">
+        <slot />
+      </main>
+
+    </div>
+
+    <!-- Botão fechar sidebar mobile (dentro do sidebar) -->
+    <button
+      id="sidebar-close"
+      class="absolute right-3 top-3 z-50 text-muted-foreground hover:text-foreground lg:hidden hidden"
+      aria-label="Fechar menu"
+    >
+      <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </button>
+
+  </body>
+</html>

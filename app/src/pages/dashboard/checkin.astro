@@ -1,0 +1,368 @@
+---
+/**
+ * /dashboard/checkin
+ * Página de check-in para Alunos.
+ *
+ * Estados renderizados server-side:
+ *   - statusFinanceiro = 'ok'              → mostra botão "Confirmar Check-in"
+ *   - statusFinanceiro = 'bloqueado'        → mostra card "Mensalidade Pendente"
+ *   - Aula já com check-in feito           → badge "Presença Confirmada"
+ *   - Fora da janela de tempo              → badge "Fora do horário"
+ */
+
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import Badge from '@/components/ui/Badge.astro';
+import Button from '@/components/ui/Button.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+// ─── Autenticação ─────────────────────────────────────────────────────────────
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, nome_completo, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') {
+  return Astro.redirect('/dashboard');
+}
+
+// ─── Aulas de hoje ────────────────────────────────────────────────────────────
+const hojeISO = new Date().toISOString().split('T')[0];
+
+const { data: aulas } = await supabase
+  .from('aulas_agenda')
+  .select(`
+    id,
+    data_aula,
+    horario_inicio,
+    horario_fim,
+    capacidade_max,
+    wods ( nome, score_type, treino )
+  `)
+  .eq('academia_id', profile.academia_id!)
+  .eq('data_aula', hojeISO)
+  .order('horario_inicio');
+
+// ─── Check-ins já feitos pelo aluno hoje ─────────────────────────────────────
+const aulaIds = aulas?.map(a => a.id) ?? [];
+const checkinsFeitosSet = new Set<string>();
+
+if (aulaIds.length > 0) {
+  const { data: checkins } = await supabase
+    .from('checkins')
+    .select('aula_id')
+    .eq('aluno_id', user.id)
+    .in('aula_id', aulaIds);
+  checkins?.forEach(c => checkinsFeitosSet.add(c.aula_id));
+}
+
+// ─── Status financeiro (via admin — não expõe dados de fatura ao front) ──────
+const admin      = createSupabaseAdminClient();
+const mesAtual   = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
+
+const [{ count: bloqueantes }, { count: pagoMes }] = await Promise.all([
+  admin.from('faturas')
+    .select('id', { count: 'exact', head: true })
+    .eq('aluno_id', user.id)
+    .eq('academia_id', profile.academia_id!)
+    .in('status', ['pendente', 'vencida']),
+  admin.from('faturas')
+    .select('id', { count: 'exact', head: true })
+    .eq('aluno_id', user.id)
+    .eq('academia_id', profile.academia_id!)
+    .eq('status', 'paga')
+    .eq('mes_referencia', mesAtual),
+]);
+
+const financeiroBloqueado = (bloqueantes ?? 0) > 0 || (pagoMes ?? 0) === 0;
+
+// Link de pagamento: aluno tem permissão via RLS para ver suas próprias faturas
+let linkPagamento: string | null = null;
+if (financeiroBloqueado) {
+  const { data: fatura } = await supabase
+    .from('faturas')
+    .select('asaas_link_boleto')
+    .eq('aluno_id', user.id)
+    .in('status', ['pendente', 'vencida'])
+    .order('vencimento', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  linkPagamento = fatura?.asaas_link_boleto ?? null;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function formatHorario(time: string) {
+  return time.substring(0, 5); // "HH:MM"
+}
+
+function dentroJanela(dataAula: string, inicio: string, fim: string): boolean {
+  const agora = new Date();
+  const inicioDate = new Date(`${dataAula}T${inicio}`);
+  const fimDate    = new Date(`${dataAula}T${fim}`);
+  const abertura   = new Date(inicioDate.getTime() - 10 * 60_000);
+  const fechamento = new Date(fimDate.getTime()    + 60 * 60_000);
+  return agora >= abertura && agora <= fechamento;
+}
+
+const scoreTypeLabel: Record<string, string> = {
+  tempo:       'Para Tempo',
+  reps:        'Max Reps',
+  carga:       'Max Carga',
+  rounds_reps: 'AMRAP',
+  pass_fail:   'Pass/Fail',
+};
+---
+
+<DashboardLayout title="Check-in">
+
+  <!-- Cabeçalho -->
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-foreground">Check-in</h1>
+    <p class="mt-1 text-sm text-muted-foreground">
+      {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+    </p>
+  </div>
+
+  <!-- ── TRAVA FINANCEIRA — card de aviso ──────────────────────────────────── -->
+  {financeiroBloqueado && (
+    <Card variant="warning" class="mb-6 glow-warning">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-4">
+        <!-- Ícone -->
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-warning/15 border border-warning/30">
+          <svg class="h-6 w-6 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+
+        <!-- Texto -->
+        <div class="flex-1">
+          <h3 class="font-bold text-warning text-base">Mensalidade Pendente</h3>
+          <p class="mt-0.5 text-sm text-muted-foreground">
+            Você possui mensalidade(s) em aberto. Regularize para liberar o check-in.
+          </p>
+        </div>
+
+        <!-- Botão Pagar Agora -->
+        {linkPagamento
+          ? (
+            <a href={linkPagamento} target="_blank" rel="noopener noreferrer">
+              <Button variant="warning" size="md">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+                Pagar Agora
+              </Button>
+            </a>
+          ) : (
+            <p class="text-xs text-muted-foreground">Contate a academia para regularizar.</p>
+          )
+        }
+      </div>
+    </Card>
+  )}
+
+  <!-- ── LISTA DE AULAS DO DIA ──────────────────────────────────────────────── -->
+  {!aulas || aulas.length === 0
+    ? (
+      <Card class="text-center py-12">
+        <svg class="mx-auto h-10 w-10 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <p class="mt-3 text-sm font-medium text-foreground">Nenhuma aula agendada para hoje.</p>
+        <p class="mt-1 text-xs text-muted-foreground">Fale com seu professor ou acompanhe a agenda.</p>
+      </Card>
+    )
+    : (
+      <div class="space-y-4">
+        {aulas.map((aula) => {
+          const jaFezCheckin = checkinsFeitosSet.has(aula.id);
+          const naJanela     = dentroJanela(aula.data_aula, aula.horario_inicio, aula.horario_fim);
+          // @ts-ignore — Supabase retorna join como objeto
+          const wod = aula.wods as { nome: string; score_type: string; treino: string } | null;
+
+          return (
+            <Card
+              variant={jaFezCheckin ? 'success' : 'default'}
+              class={jaFezCheckin ? 'border-primary/30' : ''}
+            >
+              <div class="flex flex-col sm:flex-row sm:items-start gap-4">
+
+                <!-- Horário coluna -->
+                <div class="flex flex-col items-center justify-center min-w-[72px] rounded-lg bg-muted px-3 py-2 text-center">
+                  <span class="text-lg font-bold text-foreground font-mono">
+                    {formatHorario(aula.horario_inicio)}
+                  </span>
+                  <span class="text-[10px] text-muted-foreground">
+                    até {formatHorario(aula.horario_fim)}
+                  </span>
+                </div>
+
+                <!-- Info WOD -->
+                <div class="flex-1 min-w-0">
+                  <div class="flex flex-wrap items-center gap-2 mb-1">
+                    <h3 class="font-bold text-base text-foreground">
+                      {wod?.nome ?? 'WOD do dia'}
+                    </h3>
+                    {wod?.score_type && (
+                      <Badge variant="primary">
+                        {scoreTypeLabel[wod.score_type] ?? wod.score_type}
+                      </Badge>
+                    )}
+                    {jaFezCheckin && (
+                      <Badge variant="success">
+                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                        Presença Confirmada
+                      </Badge>
+                    )}
+                  </div>
+
+                  {wod?.treino && (
+                    <p class="text-sm text-muted-foreground line-clamp-2 whitespace-pre-line">
+                      {wod.treino}
+                    </p>
+                  )}
+
+                  {aula.capacidade_max && (
+                    <p class="mt-1 text-xs text-muted-foreground">
+                      Capacidade: {aula.capacidade_max} alunos
+                    </p>
+                  )}
+                </div>
+
+                <!-- Ação -->
+                <div class="flex items-center sm:justify-end">
+                  {jaFezCheckin
+                    ? (
+                      <!-- Já fez check-in: ícone de confirmação -->
+                      <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 border border-primary/30">
+                        <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    )
+                    : financeiroBloqueado
+                    ? (
+                      <!-- Trava financeira ativa: botão desabilitado com ícone de cadeado -->
+                      <Button variant="ghost" disabled class="cursor-not-allowed opacity-40">
+                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        Bloqueado
+                      </Button>
+                    )
+                    : !naJanela
+                    ? (
+                      <!-- Fora da janela de tempo -->
+                      <Badge variant="muted">
+                        <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Fora do horário
+                      </Badge>
+                    )
+                    : (
+                      <!-- Tudo ok: botão de confirmar check-in -->
+                      <Button
+                        variant="primary"
+                        id={`btn-checkin-${aula.id}`}
+                        data-aula-id={aula.id}
+                        class="checkin-btn"
+                      >
+                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Confirmar Check-in
+                      </Button>
+                    )
+                  }
+                </div>
+
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    )
+  }
+
+  <!-- Toast de feedback -->
+  <div
+    id="toast"
+    class="fixed bottom-6 right-6 z-50 hidden max-w-sm rounded-xl border px-4 py-3 shadow-lg text-sm font-medium transition-all duration-300"
+  ></div>
+
+</DashboardLayout>
+
+<!-- ── Lógica de Check-in (client-side) ──────────────────────────────────── -->
+<script>
+  const toast = document.getElementById('toast')!;
+
+  function showToast(msg: string, type: 'success' | 'error') {
+    toast.textContent = msg;
+    toast.className = [
+      'fixed bottom-6 right-6 z-50 max-w-sm rounded-xl border px-4 py-3 shadow-lg text-sm font-medium',
+      type === 'success'
+        ? 'bg-card border-primary/40 text-primary'
+        : 'bg-card border-destructive/40 text-destructive',
+    ].join(' ');
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), 4000);
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.checkin-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const aulaId = btn.dataset.aulaId;
+      if (!aulaId) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Registrando…';
+
+      try {
+        const res = await fetch('/api/checkin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ aula_id: aulaId }),
+        });
+
+        const data = await res.json() as { ok: boolean; motivo?: string };
+
+        if (data.ok) {
+          showToast('Check-in confirmado! 💪', 'success');
+          // Atualiza o botão visualmente sem reload
+          btn.outerHTML = `
+            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 border border-primary/30">
+              <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>`;
+        } else {
+          showToast(data.motivo ?? 'Erro ao confirmar check-in.', 'error');
+          btn.disabled = false;
+          btn.innerHTML = `
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Confirmar Check-in`;
+        }
+      } catch {
+        showToast('Erro de conexão. Tente novamente.', 'error');
+        btn.disabled = false;
+        btn.innerHTML = 'Confirmar Check-in';
+      }
+    });
+  });
+</script>

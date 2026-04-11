@@ -1,0 +1,31 @@
+{
+  "name": "unafit",
+  "type": "module",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/node": "^10.0.4",
+    "@radix-ui/react-slot": "^1.1.2",
+    "@supabase/ssr": "^0.6.0",
+    "@supabase/supabase-js": "^2.49.0",
+    "astro": "^6.1.5",
+    "autoprefixer": "^10.4.20",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.475.0",
+    "pg": "^8.20.0",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

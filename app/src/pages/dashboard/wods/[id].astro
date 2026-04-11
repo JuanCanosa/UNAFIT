@@ -1,0 +1,703 @@
+---
+/**
+ * /dashboard/wods/[id]
+ * 2 colunas: esquerda = detalhes/edição inline, direita = exercícios por grupos de rounds.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const wodId = Astro.params.id as string;
+
+const { data: wod, error: wodErr } = await supabase
+  .from('wods')
+  .select('id, nome, treino, score_type, data_aplicacao, criado_em')
+  .eq('id', wodId)
+  .eq('academia_id', profile.academia_id!)
+  .single();
+
+if (wodErr || !wod) return Astro.redirect('/dashboard/wods');
+
+const { data: wodExercicios } = await supabase
+  .from('wod_exercicios')
+  .select('id, ordem, repeticoes, carga, distancia, observacao, grupo_id, exercicios ( id, nome )')
+  .eq('wod_id', wodId)
+  .order('ordem');
+
+const { data: grupos } = await supabase
+  .from('wod_grupos')
+  .select('id, rounds, ordem')
+  .eq('wod_id', wodId)
+  .order('ordem');
+
+let formError = '';
+
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'editar_wod') {
+    const nome           = (form.get('nome') as string)?.trim();
+    const treino         = (form.get('treino') as string)?.trim();
+    const score_type     = form.get('score_type') as string;
+    const data_aplicacao = (form.get('data_aplicacao') as string) || null;
+
+    if (!nome || !treino) {
+      formError = 'Nome e prescrição são obrigatórios.';
+    } else {
+      const { error } = await supabase
+        .from('wods')
+        .update({ nome, treino, score_type, data_aplicacao })
+        .eq('id', wodId);
+      if (error) formError = error.message;
+      else return Astro.redirect(`/dashboard/wods/${wodId}?saved=1`);
+    }
+  }
+
+  if (action === 'criar_grupo') {
+    const rounds = parseInt(form.get('rounds') as string) || 1;
+    const { count } = await supabase
+      .from('wod_grupos')
+      .select('id', { count: 'exact', head: true })
+      .eq('wod_id', wodId);
+    await supabase.from('wod_grupos').insert({ wod_id: wodId, rounds, ordem: (count ?? 0) + 1 });
+    return Astro.redirect(`/dashboard/wods/${wodId}`);
+  }
+
+  if (action === 'remover_grupo') {
+    await supabase.from('wod_grupos').delete().eq('id', form.get('grupo_id') as string);
+    return Astro.redirect(`/dashboard/wods/${wodId}`);
+  }
+
+  if (action === 'remover_exercicio') {
+    await supabase.from('wod_exercicios').delete().eq('id', form.get('wod_exercicio_id') as string);
+    return Astro.redirect(`/dashboard/wods/${wodId}`);
+  }
+}
+
+const urlParams    = new URL(Astro.request.url).searchParams;
+const savedParam   = urlParams.get('saved');
+const reaproveitar = urlParams.get('reaproveitar') === '1';
+const hojeISO      = new Date().toISOString().split('T')[0];
+
+const scoreLabels: Record<string, string> = {
+  tempo: 'Tempo', reps: 'Reps', carga: 'Carga (kg)',
+  rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
+};
+
+const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+
+// Agrupa exercícios por grupo
+const exsByGrupo: Record<string, any[]> = {};
+const exsSemGrupo: any[] = [];
+for (const ex of (wodExercicios ?? []) as any[]) {
+  if (ex.grupo_id) {
+    if (!exsByGrupo[ex.grupo_id]) exsByGrupo[ex.grupo_id] = [];
+    exsByGrupo[ex.grupo_id].push(ex);
+  } else {
+    exsSemGrupo.push(ex);
+  }
+}
+
+const temGrupos    = grupos && grupos.length > 0;
+const totalEx      = (wodExercicios ?? []).length;
+---
+
+<DashboardLayout title={wod.nome}>
+
+  <div class="mb-5">
+    <a href="/dashboard/wods" class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+      </svg>
+      WODs
+    </a>
+  </div>
+
+  {savedParam && (
+    <div class="mb-5 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-primary">
+      ✓ WOD atualizado com sucesso.
+    </div>
+  )}
+
+  <div class="grid gap-6 lg:grid-cols-2">
+
+    <!-- Coluna esquerda: detalhes / edição -->
+    <div class="rounded-xl border border-border bg-card p-6">
+      <h2 class="mb-5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Detalhes do WOD</h2>
+
+      {canEdit ? (
+        <form method="POST" class="space-y-4">
+          <input type="hidden" name="action" value="editar_wod" />
+
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome *</label>
+            <input name="nome" type="text" required value={wod.nome}
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+            />
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Score *</label>
+              <select name="score_type" required
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary">
+                {['tempo','reps','carga','rounds_reps','pass_fail'].map(s => (
+                  <option value={s} selected={wod.score_type === s}>{scoreLabels[s]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Data de aplicação</label>
+              <input id="input-data" name="data_aplicacao" type="date"
+                value={wod.data_aplicacao ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+              Prescrição *
+              <span class="normal-case font-normal ml-1">(ex: "Para Tempo", "AMRAP 20min")</span>
+            </label>
+            <textarea name="treino" required rows="5"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none"
+            >{wod.treino}</textarea>
+          </div>
+
+          {formError && <p class="text-xs text-destructive">{formError}</p>}
+
+          <button type="submit"
+            class="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+            Salvar alterações
+          </button>
+        </form>
+      ) : (
+        <div class="space-y-4">
+          <div>
+            <p class="text-xs text-muted-foreground mb-1">Nome</p>
+            <p class="font-semibold text-foreground">{wod.nome}</p>
+          </div>
+          <div class="flex gap-4">
+            <div>
+              <p class="text-xs text-muted-foreground mb-1">Score</p>
+              <Badge variant="primary">{scoreLabels[wod.score_type] ?? wod.score_type}</Badge>
+            </div>
+            {wod.data_aplicacao && (
+              <div>
+                <p class="text-xs text-muted-foreground mb-1">Data</p>
+                <p class="text-sm text-foreground">{new Date(wod.data_aplicacao + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+              </div>
+            )}
+          </div>
+          <div>
+            <p class="text-xs text-muted-foreground mb-1">Prescrição</p>
+            <pre class="whitespace-pre-wrap text-sm text-foreground font-mono">{wod.treino}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+
+    <!-- Coluna direita: exercícios por grupos -->
+    <div class="rounded-xl border border-border bg-card p-6 flex flex-col">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Exercícios ({totalEx})
+        </h2>
+        {canEdit && (
+          <div class="flex items-center gap-2">
+            <button id="btn-novo-grupo"
+              class="inline-flex items-center gap-1 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+              <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              Grupo
+            </button>
+            <button id="btn-add-exercicio" data-grupo=""
+              class="inline-flex items-center gap-1 rounded-lg bg-primary/10 border border-primary/20 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition-colors">
+              <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              + Exercício
+            </button>
+          </div>
+        )}
+      </div>
+
+      {totalEx === 0 && !temGrupos ? (
+        <div class="flex-1 flex flex-col items-center justify-center py-12 text-center gap-2">
+          <svg class="h-10 w-10 text-muted-foreground/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <p class="text-sm text-muted-foreground">Nenhum exercício vinculado.</p>
+          {canEdit && <p class="text-xs text-muted-foreground">Crie um "Grupo" de rounds ou adicione exercícios avulsos.</p>}
+        </div>
+      ) : temGrupos ? (
+        <div class="space-y-3 flex-1">
+          {grupos!.map((grupo) => {
+            const exs: any[] = exsByGrupo[(grupo as any).id] ?? [];
+            return (
+              <div class="rounded-xl border border-border/60 overflow-hidden">
+                <div class="flex items-center justify-between gap-2 px-3 py-2 bg-primary/10 border-b border-border/40">
+                  <span class="text-xs font-bold text-primary uppercase tracking-wider">
+                    {grupo.rounds} {grupo.rounds === 1 ? 'ROUND' : 'ROUNDS'}
+                  </span>
+                  <div class="flex items-center gap-1">
+                    {canEdit && (
+                      <button
+                        class="btn-add-ex-grupo inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors px-2 py-1 rounded"
+                        data-grupo={(grupo as any).id}>
+                        + exercício
+                      </button>
+                    )}
+                    {canEdit && (
+                      <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="remover_grupo" />
+                        <input type="hidden" name="grupo_id" value={(grupo as any).id} />
+                        <button type="submit"
+                          onclick="return confirm('Remover este grupo? Os exercícios ficam sem grupo.')"
+                          class="text-muted-foreground/40 hover:text-destructive transition-colors p-1 rounded">
+                          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+                <div class="p-2 space-y-1">
+                  {exs.length === 0 ? (
+                    <p class="text-xs text-muted-foreground text-center py-3 italic">Sem exercícios. Clique em "+ exercício".</p>
+                  ) : (
+                    exs.map((we: any, i: number) => {
+                      const ex = we.exercicios;
+                      return (
+                        <div class="group flex items-center gap-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 hover:border-primary/20 transition-colors">
+                          <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">
+                            {i + 1}
+                          </span>
+                          <div class="flex-1 min-w-0">
+                            <p class="font-semibold text-foreground text-sm">{ex?.nome}</p>
+                            <div class="mt-0.5 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                              {we.repeticoes && <span>{we.repeticoes} reps</span>}
+                              {we.carga      && <span class="font-medium text-foreground">{/^\d+([.,]\d+)?$/.test(String(we.carga).trim()) ? `${we.carga}kg` : we.carga}</span>}
+                              {we.distancia  && <span class="font-medium text-foreground">{we.distancia}</span>}
+                              {we.observacao && <span class="italic">{we.observacao}</span>}
+                            </div>
+                          </div>
+                          {canEdit && (
+                            <form method="POST" class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <input type="hidden" name="action" value="remover_exercicio" />
+                              <input type="hidden" name="wod_exercicio_id" value={we.id} />
+                              <button type="submit" onclick="return confirm('Remover?')"
+                                class="text-muted-foreground hover:text-destructive transition-colors p-1">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </form>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {exsSemGrupo.length > 0 && (
+            <div>
+              <p class="text-xs text-muted-foreground px-1 mb-1.5">Sem grupo</p>
+              <div class="space-y-1">
+                {exsSemGrupo.map((we: any) => {
+                  const ex = we.exercicios;
+                  return (
+                    <div class="group flex items-center gap-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 hover:border-border transition-colors">
+                      <div class="flex-1 min-w-0">
+                        <p class="font-semibold text-foreground text-sm">{ex?.nome}</p>
+                        <div class="mt-0.5 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                          {we.repeticoes && <span>{we.repeticoes} reps</span>}
+                          {we.carga      && <span class="font-medium text-foreground">{/^\d+([.,]\d+)?$/.test(String(we.carga).trim()) ? `${we.carga}kg` : we.carga}</span>}
+                          {we.distancia  && <span class="font-medium text-foreground">{we.distancia}</span>}
+                          {we.observacao && <span class="italic">{we.observacao}</span>}
+                        </div>
+                      </div>
+                      {canEdit && (
+                        <form method="POST" class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <input type="hidden" name="action" value="remover_exercicio" />
+                          <input type="hidden" name="wod_exercicio_id" value={we.id} />
+                          <button type="submit" onclick="return confirm('Remover?')"
+                            class="text-muted-foreground hover:text-destructive transition-colors p-1">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div id="lista-exercicios" class="space-y-2 flex-1">
+          {(wodExercicios ?? []).map((we: any) => {
+            const ex = we.exercicios;
+            return (
+              <div class="group flex items-center gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-3 hover:border-primary/20 transition-colors"
+                data-id={we.id} draggable={canEdit ? 'true' : 'false'}>
+                {canEdit && (
+                  <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground transition-colors px-1 touch-none">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 8h16M4 16h16" />
+                    </svg>
+                  </span>
+                )}
+                <span class="ordem-badge flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                  {we.ordem}
+                </span>
+                <div class="flex-1 min-w-0">
+                  <p class="font-semibold text-foreground text-sm">{ex?.nome}</p>
+                  <div class="mt-0.5 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    {we.repeticoes && <span>{we.repeticoes} reps</span>}
+                    {we.carga      && <span class="font-medium text-foreground">{/^\d+([.,]\d+)?$/.test(String(we.carga).trim()) ? `${we.carga}kg` : we.carga}</span>}
+                    {we.distancia  && <span class="font-medium text-foreground">{we.distancia}</span>}
+                    {we.observacao && <span class="italic">{we.observacao}</span>}
+                  </div>
+                </div>
+                {canEdit && (
+                  <form method="POST" class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <input type="hidden" name="action" value="remover_exercicio" />
+                    <input type="hidden" name="wod_exercicio_id" value={we.id} />
+                    <button type="submit"
+                      onclick="return confirm('Remover este exercício?')"
+                      class="text-muted-foreground hover:text-destructive transition-colors p-1">
+                      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </form>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+
+  </div>
+
+</DashboardLayout>
+
+<!-- Modal: Novo Grupo de Rounds -->
+<div id="modal-novo-grupo" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Novo Grupo de Rounds</h2>
+      <button id="grupo-close" class="text-muted-foreground hover:text-foreground">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+    <form method="POST" class="space-y-4">
+      <input type="hidden" name="action" value="criar_grupo" />
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Quantidade de Rounds *</label>
+        <input name="rounds" type="number" min="1" max="99" required placeholder="ex: 3"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="grupo-cancelar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Criar Grupo
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Adicionar Exercício -->
+<div id="modal-exercicio" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Adicionar Exercício</h2>
+      <button id="ex-close" class="text-muted-foreground hover:text-foreground">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <div id="step-busca" class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome do Exercício</label>
+        <input id="ex-busca" type="text" placeholder="Digite para buscar ou criar..."
+          autocomplete="off"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+      <div id="ex-resultados" class="hidden space-y-1 max-h-48 overflow-y-auto rounded-lg border border-border bg-background p-1"></div>
+      <div id="ex-selecionado" class="hidden rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5">
+        <p class="text-xs text-primary font-semibold uppercase tracking-wider mb-0.5">Selecionado</p>
+        <p id="ex-selecionado-nome" class="text-sm font-bold text-foreground"></p>
+        <p id="ex-selecionado-novo" class="hidden text-xs text-muted-foreground mt-0.5">Será criado automaticamente</p>
+      </div>
+    </div>
+
+    <form id="form-exercicio" class="hidden space-y-4 mt-4">
+      <input type="hidden" id="ex-id-hidden" name="exercicio_id" />
+      <input type="hidden" id="ex-novo-nome" name="novo_nome" />
+      <input type="hidden" id="ex-grupo-id" name="grupo_id" />
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Repetições</label>
+          <input name="repeticoes" type="text" placeholder='ex: "21-15-9"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Carga</label>
+          <input name="carga" type="text" placeholder='ex: "43kg"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Distância</label>
+          <input name="distancia" type="text" placeholder='ex: "400m", "5km"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Observação</label>
+          <input name="observacao" type="text" placeholder='ex: "kipping permitido"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+      </div>
+
+      <p id="ex-form-error" class="hidden text-xs text-destructive"></p>
+
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="ex-voltar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Voltar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+          Vincular
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script define:vars={{ wodId, reaproveitar, hojeISO }}>
+  // Modal Novo Grupo
+  const modalGrupo   = document.getElementById('modal-novo-grupo');
+  const btnNovoGrupo = document.getElementById('btn-novo-grupo');
+  const grupoClose   = document.getElementById('grupo-close');
+  const grupoCancelar= document.getElementById('grupo-cancelar');
+
+  function openGrupo()  { modalGrupo.classList.remove('hidden'); modalGrupo.classList.add('flex'); }
+  function closeGrupo() { modalGrupo.classList.add('hidden');    modalGrupo.classList.remove('flex'); }
+
+  btnNovoGrupo?.addEventListener('click', openGrupo);
+  grupoClose?.addEventListener('click', closeGrupo);
+  grupoCancelar?.addEventListener('click', closeGrupo);
+  modalGrupo?.addEventListener('click', (e) => { if (e.target === modalGrupo) closeGrupo(); });
+
+  // Modal Adicionar Exercício
+  const modalEx = document.getElementById('modal-exercicio');
+  const exGrupoId = document.getElementById('ex-grupo-id');
+
+  function openModal(grupoId)  {
+    if (exGrupoId) exGrupoId.value = grupoId || '';
+    modalEx.classList.remove('hidden');
+    modalEx.classList.add('flex');
+    setTimeout(() => document.getElementById('ex-busca')?.focus(), 50);
+  }
+  function closeModal() { modalEx.classList.add('hidden'); modalEx.classList.remove('flex'); }
+
+  document.getElementById('btn-add-exercicio')?.addEventListener('click', () => { resetModal(); openModal(''); });
+  document.getElementById('ex-close')?.addEventListener('click', closeModal);
+  modalEx?.addEventListener('click', (e) => { if (e.target === modalEx) closeModal(); });
+
+  document.querySelectorAll('.btn-add-ex-grupo').forEach(btn => {
+    btn.addEventListener('click', () => { resetModal(); openModal(btn.dataset.grupo); });
+  });
+
+  // Reaproveitar: preenche data de hoje
+  if (reaproveitar) {
+    const inputData = document.getElementById('input-data');
+    if (inputData) {
+      inputData.value = hojeISO;
+      inputData.focus();
+      inputData.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  // Live search
+  let debounce = null;
+  const exBusca      = document.getElementById('ex-busca');
+  const exResultados = document.getElementById('ex-resultados');
+  const exSel        = document.getElementById('ex-selecionado');
+  const exSelNome    = document.getElementById('ex-selecionado-nome');
+  const exSelNovo    = document.getElementById('ex-selecionado-novo');
+  const stepBusca    = document.getElementById('step-busca');
+  const formEx       = document.getElementById('form-exercicio');
+  const exIdH        = document.getElementById('ex-id-hidden');
+  const exNomeNovo   = document.getElementById('ex-novo-nome');
+  const exFormError  = document.getElementById('ex-form-error');
+
+  function resetModal() {
+    if (exBusca) exBusca.value = '';
+    exResultados?.classList.add('hidden');
+    if (exResultados) exResultados.innerHTML = '';
+    exSel?.classList.add('hidden');
+    formEx?.classList.add('hidden');
+    stepBusca?.classList.remove('hidden');
+    exFormError?.classList.add('hidden');
+    formEx?.reset();
+  }
+
+  exBusca?.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = exBusca.value.trim();
+    if (!q) { exResultados?.classList.add('hidden'); return; }
+    debounce = setTimeout(() => buscar(q), 250);
+  });
+
+  async function buscar(q) {
+    const res  = await fetch(`/api/exercicios/buscar?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    exResultados.innerHTML = '';
+    exResultados.classList.remove('hidden');
+    for (const ex of data.exercicios ?? []) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'w-full text-left px-3 py-2 text-sm rounded-md hover:bg-primary/10 hover:text-primary transition-colors text-foreground';
+      btn.textContent = ex.nome;
+      btn.onclick = () => selecionar(ex.id, ex.nome, false);
+      exResultados.appendChild(btn);
+    }
+    const exato = data.exercicios?.some(e => e.nome.toLowerCase() === q.toLowerCase());
+    if (!exato) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'w-full text-left px-3 py-2 text-sm rounded-md border border-dashed border-primary/40 text-primary hover:bg-primary/10 transition-colors flex items-center gap-2 mt-1';
+      btn.innerHTML = `<svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg> Criar "${q}"`;
+      btn.onclick = () => selecionar(null, q, true);
+      exResultados.appendChild(btn);
+    }
+  }
+
+  function selecionar(id, nome, isNovo) {
+    exResultados?.classList.add('hidden');
+    exSel?.classList.remove('hidden');
+    if (exSelNome) exSelNome.textContent = nome;
+    exSelNovo?.classList.toggle('hidden', !isNovo);
+    if (exIdH) exIdH.value     = id ?? '';
+    if (exNomeNovo) exNomeNovo.value = isNovo ? nome : '';
+    formEx?.classList.remove('hidden');
+  }
+
+  document.getElementById('ex-voltar')?.addEventListener('click', () => {
+    exSel?.classList.add('hidden');
+    formEx?.classList.add('hidden');
+    if (exBusca) exBusca.value = '';
+  });
+
+  // Drag & drop (só na lista plana, sem grupos)
+  const lista = document.getElementById('lista-exercicios');
+  let dragging = null;
+
+  if (lista) {
+    lista.querySelectorAll('[draggable="true"]').forEach(item => {
+      item.addEventListener('dragstart', (e) => {
+        dragging = item;
+        setTimeout(() => item.classList.add('opacity-40'), 0);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('opacity-40');
+        lista.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        dragging = null;
+        salvarOrdem();
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!dragging || dragging === item) return;
+        const rect  = item.getBoundingClientRect();
+        const depois = e.clientY > rect.top + rect.height / 2;
+        lista.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        item.classList.add('drag-over');
+        if (depois) item.after(dragging); else item.before(dragging);
+        lista.querySelectorAll('[data-id]').forEach((el, i) => {
+          const badge = el.querySelector('.ordem-badge');
+          if (badge) badge.textContent = String(i + 1);
+        });
+      });
+    });
+  }
+
+  async function salvarOrdem() {
+    const ids = Array.from(lista?.querySelectorAll('[data-id]') ?? []).map(el => el.dataset.id);
+    await fetch('/api/exercicios/reordenar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wod_id: wodId, ids }),
+    });
+  }
+
+  formEx?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    exFormError?.classList.add('hidden');
+    const btn = formEx.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Salvando...';
+    const fd = new FormData(formEx);
+    const res = await fetch('/api/exercicios/vincular', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        wod_id:       wodId,
+        exercicio_id: fd.get('exercicio_id') || null,
+        novo_nome:    fd.get('novo_nome')    || null,
+        repeticoes:   fd.get('repeticoes')   || null,
+        carga:        fd.get('carga')        || null,
+        distancia:    fd.get('distancia')    || null,
+        observacao:   fd.get('observacao')   || null,
+        grupo_id:     fd.get('grupo_id')     || null,
+      }),
+    });
+    const json = await res.json();
+    if (res.ok) { window.location.reload(); }
+    else {
+      if (exFormError) exFormError.textContent = json.error ?? 'Erro ao vincular.';
+      exFormError?.classList.remove('hidden');
+      btn.disabled = false; btn.textContent = 'Vincular';
+    }
+  });
+</script>

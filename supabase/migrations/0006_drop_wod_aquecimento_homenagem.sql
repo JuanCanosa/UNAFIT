@@ -1,0 +1,2 @@
+ALTER TABLE wods DROP COLUMN IF EXISTS aquecimento;
+ALTER TABLE wods DROP COLUMN IF EXISTS homenagem;

@@ -1,0 +1,48 @@
+---
+interface Props {
+  variant?: 'primary' | 'secondary' | 'destructive' | 'warning' | 'ghost' | 'outline';
+  size?: 'sm' | 'md' | 'lg';
+  disabled?: boolean;
+  type?: 'button' | 'submit' | 'reset';
+  class?: string;
+  id?: string;
+  'data-aula-id'?: string;
+}
+
+const {
+  variant = 'primary',
+  size = 'md',
+  disabled = false,
+  type = 'button',
+  class: extraClass = '',
+  ...rest
+} = Astro.props;
+
+const base = 'inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 select-none';
+
+const variants = {
+  primary:     'bg-primary text-primary-foreground hover:bg-primary/90 glow-primary active:scale-95',
+  secondary:   'bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+  warning:     'bg-warning text-warning-foreground hover:bg-warning/90 glow-warning active:scale-95',
+  ghost:       'hover:bg-accent hover:text-accent-foreground',
+  outline:     'border border-primary text-primary hover:bg-primary/10 active:scale-95',
+};
+
+const sizes = {
+  sm:  'h-8 px-3 text-xs',
+  md:  'h-10 px-4 text-sm',
+  lg:  'h-12 px-6 text-base',
+};
+
+const classes = [base, variants[variant], sizes[size], extraClass].join(' ');
+---
+
+<button
+  type={type}
+  disabled={disabled}
+  class={classes}
+  {...rest}
+>
+  <slot />
+</button>

@@ -1,0 +1,745 @@
+---
+/**
+ * /dashboard/agenda/[id]
+ * Detalhe de uma aula: vincula WOD, gerencia exercícios de AQUECIMENTO e WOD.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const aulaId = Astro.params.id as string;
+
+// Busca a aula
+const { data: aula, error: aulaErr } = await supabase
+  .from('aulas_agenda')
+  .select(`
+    id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade,
+    wods ( id, nome, score_type, treino ),
+    checkins ( id )
+  `)
+  .eq('id', aulaId)
+  .eq('academia_id', profile.academia_id!)
+  .single();
+
+if (aulaErr || !aula) return Astro.redirect('/dashboard/agenda');
+
+// Exercícios por seção
+// Exercícios do aquecimento (específicos da aula)
+const { data: aulaExercicios } = await supabase
+  .from('aula_exercicios')
+  .select(`id, secao, ordem, repeticoes, carga, distancia, observacao, nome_livre, exercicios ( id, nome )`)
+  .eq('aula_id', aulaId)
+  .order('ordem');
+
+const exAquecimento = aulaExercicios ?? [];
+
+// Exercícios do WOD vinculado (vêm do WOD, não da aula)
+const wodId = (aula.wods as any)?.id;
+const { data: wodExercicios } = wodId ? await supabase
+  .from('wod_exercicios')
+  .select(`id, ordem, repeticoes, carga, distancia, observacao, grupo_id, exercicios ( id, nome )`)
+  .eq('wod_id', wodId)
+  .order('ordem') : { data: [] };
+
+const { data: wodGrupos } = wodId ? await supabase
+  .from('wod_grupos')
+  .select('id, rounds, ordem')
+  .eq('wod_id', wodId)
+  .order('ordem') : { data: [] };
+
+// WODs disponíveis para vincular — apenas os do mesmo dia da aula
+const { data: wods } = await supabase
+  .from('wods')
+  .select('id, nome, score_type, treino')
+  .eq('academia_id', profile.academia_id!)
+  .eq('data_aplicacao', aula.data_aula)
+  .order('nome');
+
+const wod      = aula.wods as any;
+const checkins = Array.isArray(aula.checkins) ? aula.checkins.length : 0;
+const canEdit    = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const hojeISO    = new Date().toISOString().split('T')[0];
+const isHoje     = aula.data_aula === hojeISO;
+const savedParam = new URL(Astro.request.url).searchParams.get('saved');
+
+// Handle POST
+let formError = '';
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'editar_aula') {
+    const modalidade    = form.get('modalidade') as string;
+    const data_aula     = form.get('data_aula') as string;
+    const horario_inicio= form.get('horario_inicio') as string;
+    const horario_fim   = form.get('horario_fim') as string;
+    const capacidade    = form.get('capacidade_max') as string;
+    const { error } = await supabase.from('aulas_agenda').update({
+      modalidade,
+      data_aula,
+      horario_inicio,
+      horario_fim,
+      capacidade_max: capacidade ? parseInt(capacidade) : null,
+    }).eq('id', aulaId);
+    if (error) formError = error.message;
+    else return Astro.redirect(`/dashboard/agenda/${aulaId}?saved=1`);
+  }
+
+  if (action === 'vincular_wod') {
+    const wod_id = form.get('wod_id') as string || null;
+    await supabase.from('aulas_agenda').update({ wod_id }).eq('id', aulaId);
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
+  }
+
+  if (action === 'remover_exercicio') {
+    await supabase.from('aula_exercicios').delete().eq('id', form.get('ae_id') as string);
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
+  }
+}
+
+const scoreLabels: Record<string, string> = {
+  tempo: 'Tempo', reps: 'Reps', carga: 'Carga (kg)',
+  rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
+};
+
+const modalidadeCor: Record<string, string> = {
+  'CrossFit':         'bg-primary/15 text-primary',
+  'Treino Livre':     'bg-green-500/15 text-green-400',
+  'Treino Funcional': 'bg-orange-500/15 text-orange-400',
+};
+---
+
+<DashboardLayout title={`Aula — ${new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR')}`}>
+
+  <!-- Cabeçalho -->
+  <div class="mb-6">
+    <a href="/dashboard/agenda" class="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+      </svg>
+      Agenda
+    </a>
+
+    {savedParam && (
+      <div class="mb-4 flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-400">
+        <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        Aula atualizada com sucesso.
+      </div>
+    )}
+
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-foreground capitalize">
+          {new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+        </h1>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <span class:list={['rounded-md px-2.5 py-1 text-xs font-semibold', modalidadeCor[aula.modalidade] ?? 'bg-muted text-muted-foreground']}>
+            {aula.modalidade}
+          </span>
+          <span class="text-sm text-muted-foreground">{aula.horario_inicio.slice(0,5)} – {aula.horario_fim.slice(0,5)}</span>
+          <span class="text-sm text-muted-foreground">{checkins}{aula.capacidade_max ? `/${aula.capacidade_max}` : ''} aluno{checkins !== 1 ? 's' : ''}</span>
+          {isHoje && <Badge variant="primary">Hoje</Badge>}
+        </div>
+      </div>
+      {canEdit && (
+        <button id="btn-editar-aula"
+          class="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors shrink-0">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+          Editar aula
+        </button>
+      )}
+    </div>
+  </div>
+
+  <div class="grid gap-5 lg:grid-cols-2">
+
+    <!-- ── AQUECIMENTO ───────────────────────────────────── -->
+    <Card class="flex flex-col">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/15">
+            <svg class="h-4 w-4 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-foreground">Aquecimento</h2>
+            <p class="text-xs text-muted-foreground">{exAquecimento.length} exercício{exAquecimento.length !== 1 ? 's' : ''}</p>
+          </div>
+        </div>
+        {canEdit && (
+          <button data-secao="aquecimento"
+            class="btn-add-ex inline-flex items-center gap-1 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+            <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Add
+          </button>
+        )}
+      </div>
+
+      {exAquecimento.length === 0 ? (
+        <div class="flex-1 flex items-center justify-center py-10 text-center">
+          <p class="text-xs text-muted-foreground">{canEdit ? 'Clique em Add para inserir exercícios.' : 'Nenhum exercício.'}</p>
+        </div>
+      ) : (
+        <div class="space-y-2">
+          {exAquecimento.map((e) => {
+            const nome = (e.exercicios as any)?.nome ?? e.nome_livre ?? '—';
+            return (
+              <div class="group flex items-start gap-2.5 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 hover:border-border transition-colors">
+                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-orange-400 text-[10px] font-bold mt-0.5">{e.ordem}</span>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-foreground">{nome}</p>
+                  <div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    {e.repeticoes && <span>{e.repeticoes} reps</span>}
+                    {e.carga      && <span class="font-medium">{e.carga}</span>}
+                    {(e as any).distancia && <span class="font-medium">{(e as any).distancia}</span>}
+                    {e.observacao && <span class="italic">{e.observacao}</span>}
+                  </div>
+                </div>
+                {canEdit && (
+                  <form method="POST" class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <input type="hidden" name="action" value="remover_exercicio" />
+                    <input type="hidden" name="ae_id" value={e.id} />
+                    <button type="submit" onclick="return confirm('Remover?')"
+                      class="text-muted-foreground hover:text-destructive transition-colors p-0.5">
+                      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </form>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+
+    <!-- ── WOD ───────────────────────────────────────────── -->
+    <Card class="flex flex-col">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15">
+            <svg class="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-foreground">WOD</h2>
+            <p class="text-xs text-muted-foreground">
+              {wod ? wod.nome : 'Nenhum WOD vinculado'}
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          {wod && <Badge variant="primary" class="shrink-0">{scoreLabels[wod.score_type] ?? wod.score_type}</Badge>}
+          {wod && canEdit && (
+            <button id="btn-vincular-wod"
+              class="inline-flex items-center gap-1 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+              <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              Trocar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {!wod ? (
+        <div class="flex-1 flex flex-col items-center justify-center py-10 text-center gap-3">
+          <svg class="h-10 w-10 text-muted-foreground/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          {wods && wods.length > 0 ? (
+            <>
+              <p class="text-sm text-muted-foreground">Nenhum WOD vinculado a esta aula.</p>
+              {canEdit && (
+                <div class="flex flex-wrap justify-center gap-2">
+                  <button id="btn-vincular-wod-empty"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/20 transition-colors">
+                    Vincular WOD
+                  </button>
+                  <a href={`/dashboard/wods?criar=1&data=${aula.data_aula}`}
+                    class="inline-flex items-center gap-2 rounded-lg bg-muted border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    Criar WOD
+                  </a>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <p class="text-sm text-muted-foreground">Nenhum WOD criado para este dia.</p>
+              {canEdit && (
+                <a href={`/dashboard/wods?criar=1&data=${aula.data_aula}`}
+                  class="inline-flex items-center gap-2 rounded-lg bg-primary border border-primary/30 px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Criar WOD para este dia
+                </a>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <div class="space-y-3 flex-1">
+          {wod.treino && (
+            <div class="rounded-lg bg-muted/40 px-3 py-2.5 border border-border/50">
+              <p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Prescrição</p>
+              <p class="text-sm text-foreground whitespace-pre-line font-mono">{wod.treino}</p>
+            </div>
+          )}
+          {wodExercicios && wodExercicios.length > 0 && (
+            wodGrupos && wodGrupos.length > 0 ? (
+              <div class="space-y-2">
+                {wodGrupos.map((grupo) => {
+                  const exs = (wodExercicios as any[]).filter(e => e.grupo_id === (grupo as any).id);
+                  return (
+                    <div class="rounded-lg border border-border/60 overflow-hidden">
+                      <div class="px-3 py-1.5 bg-primary/10 border-b border-border/40">
+                        <span class="text-xs font-bold text-primary uppercase tracking-wider">
+                          {grupo.rounds} {grupo.rounds === 1 ? 'ROUND' : 'ROUNDS'}
+                        </span>
+                      </div>
+                      <div class="p-1.5 space-y-1">
+                        {exs.map((e: any, i: number) => (
+                          <div class="flex items-start gap-2 px-2 py-1.5 rounded">
+                            <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[9px] font-bold mt-0.5">{i + 1}</span>
+                            <div class="flex-1 min-w-0">
+                              <p class="text-sm font-medium text-foreground">{e.exercicios?.nome ?? '—'}</p>
+                              <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                {e.repeticoes && <span>{e.repeticoes} reps</span>}
+                                {e.carga      && <span class="font-medium">{e.carga}</span>}
+                                {e.distancia  && <span class="font-medium">{e.distancia}</span>}
+                                {e.observacao && <span class="italic">{e.observacao}</span>}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(wodExercicios as any[]).filter(e => !(e as any).grupo_id).map((e: any) => (
+                  <div class="flex items-start gap-2.5 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5">
+                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold mt-0.5">{e.ordem}</span>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium text-foreground">{e.exercicios?.nome ?? '—'}</p>
+                      <div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        {e.repeticoes && <span>{e.repeticoes} reps</span>}
+                        {e.carga      && <span class="font-medium">{e.carga}</span>}
+                        {e.distancia  && <span class="font-medium">{e.distancia}</span>}
+                        {e.observacao && <span class="italic">{e.observacao}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div class="space-y-2">
+                {(wodExercicios as any[]).map((e) => (
+                  <div class="flex items-start gap-2.5 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5">
+                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold mt-0.5">{e.ordem}</span>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium text-foreground">{(e as any).exercicios?.nome ?? '—'}</p>
+                      <div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        {e.repeticoes && <span>{e.repeticoes} reps</span>}
+                        {e.carga      && <span class="font-medium">{e.carga}</span>}
+                        {(e as any).distancia  && <span class="font-medium">{(e as any).distancia}</span>}
+                        {e.observacao && <span class="italic">{e.observacao}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+          {canEdit && (
+            <a href={`/dashboard/wods/${wod.id}`}
+              class="block text-center text-xs text-muted-foreground hover:text-primary transition-colors py-1">
+              Editar exercícios no WOD →
+            </a>
+          )}
+        </div>
+      )}
+    </Card>
+
+  </div>
+
+</DashboardLayout>
+
+<!-- Modal Editar Aula -->
+<div id="modal-editar-aula" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Editar Aula</h2>
+      <button id="editar-aula-close" class="text-muted-foreground hover:text-foreground transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form method="POST" class="space-y-4">
+      <input type="hidden" name="action" value="editar_aula" />
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Modalidade</label>
+        <div class="flex flex-col gap-2">
+          {['CrossFit', 'Treino Livre', 'Treino Funcional'].map(m => (
+            <label class="flex items-center gap-3 rounded-lg border border-border p-3 cursor-pointer hover:border-primary/30 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input type="radio" name="modalidade" value={m} checked={aula.modalidade === m} class="accent-primary" required />
+              <span class="text-sm font-medium text-foreground">{m}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Data</label>
+          <input name="data_aula" type="date" required value={aula.data_aula}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Início</label>
+          <input name="horario_inicio" type="time" required value={aula.horario_inicio.slice(0,5)}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Fim</label>
+          <input name="horario_fim" type="time" required value={aula.horario_fim.slice(0,5)}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Capacidade máxima</label>
+        <input name="capacidade_max" type="number" min="1" placeholder="Ex: 20"
+          value={aula.capacidade_max ?? ''}
+          class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+
+      {formError && <p class="text-xs text-destructive">{formError}</p>}
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" id="editar-aula-cancelar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Salvar alterações
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Vincular WOD -->
+<div id="modal-vincular-wod" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Vincular WOD</h2>
+      <button id="wod-link-close" class="text-muted-foreground hover:text-foreground">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+    <form method="POST" class="space-y-4">
+      <input type="hidden" name="action" value="vincular_wod" />
+      {!wods || wods.length === 0 ? (
+        <div class="rounded-lg border border-border/50 bg-muted/30 px-4 py-6 text-center">
+          <p class="text-sm text-muted-foreground">Nenhum WOD com data {new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR')}.</p>
+          <p class="mt-1 text-xs text-muted-foreground">Crie o WOD com essa data de aplicação primeiro.</p>
+          <a href="/dashboard/wods" class="mt-3 inline-block text-xs text-primary hover:underline">Ir para WODs →</a>
+        </div>
+      ) : (
+        <div class="space-y-2 max-h-64 overflow-y-auto">
+          {wod && (
+            <label class="flex items-center gap-3 rounded-lg border border-border p-3 cursor-pointer hover:border-primary/30 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input type="radio" name="wod_id" value="" class="accent-primary" />
+              <span class="text-sm text-muted-foreground italic">— Remover WOD vinculado —</span>
+            </label>
+          )}
+          {wods.map(w => (
+            <label class="flex items-center gap-3 rounded-lg border border-border p-3 cursor-pointer hover:border-primary/30 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input type="radio" name="wod_id" value={w.id} class="accent-primary" checked={wod?.id === w.id} />
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-semibold text-foreground">{w.nome}</p>
+                <p class="text-xs text-muted-foreground">{scoreLabels[w.score_type] ?? w.score_type}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="wod-link-cancel"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Confirmar
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Adicionar Exercício -->
+<div id="modal-ex" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
+    <div class="mb-1 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-foreground">Adicionar Exercício</h2>
+      <button id="ex-close" class="text-muted-foreground hover:text-foreground">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+    <p id="label-secao" class="mb-4 text-sm text-muted-foreground"></p>
+
+    <div id="step-busca" class="space-y-3">
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome do Exercício</label>
+        <input id="ex-busca" type="text" placeholder="Buscar ou criar..."
+          autocomplete="off"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
+      <div id="ex-resultados" class="hidden space-y-1 max-h-44 overflow-y-auto rounded-lg border border-border bg-background p-1"></div>
+      <div id="ex-selecionado" class="hidden rounded-lg border border-primary/30 bg-primary/10 px-3 py-2">
+        <p class="text-xs text-primary font-semibold uppercase tracking-wider">Selecionado</p>
+        <p id="ex-sel-nome" class="text-sm font-bold text-foreground mt-0.5"></p>
+        <p id="ex-sel-novo" class="hidden text-xs text-muted-foreground">Será criado automaticamente</p>
+      </div>
+    </div>
+
+    <form id="form-ex" class="hidden space-y-3 mt-4">
+      <input type="hidden" id="ex-secao-h" name="secao" />
+      <input type="hidden" id="ex-id-h" name="exercicio_id" />
+      <input type="hidden" id="ex-nome-novo-h" name="novo_nome" />
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Repetições</label>
+          <input name="repeticoes" type="text" placeholder='ex: "3x5", "21-15-9"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Carga</label>
+          <input name="carga" type="text" placeholder='ex: "43kg", "70% 1RM"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Distância</label>
+          <input name="distancia" type="text" placeholder='ex: "400m", "5km"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Observação</label>
+          <input name="observacao" type="text" placeholder='ex: "ritmo forte"'
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+      </div>
+      <p id="ex-form-error" class="hidden text-xs text-destructive"></p>
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="ex-voltar"
+          class="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Voltar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+          Adicionar
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script define:vars={{ aulaId }}>
+  // ── Modal Editar Aula ──────────────────────────────────
+  const modalEditarAula    = document.getElementById('modal-editar-aula');
+  const btnEditarAula      = document.getElementById('btn-editar-aula');
+  const editarAulaClose    = document.getElementById('editar-aula-close');
+  const editarAulaCancelar = document.getElementById('editar-aula-cancelar');
+
+  function openEditarAula()  { modalEditarAula.classList.remove('hidden'); modalEditarAula.classList.add('flex'); }
+  function closeEditarAula() { modalEditarAula.classList.add('hidden');    modalEditarAula.classList.remove('flex'); }
+
+  btnEditarAula?.addEventListener('click', openEditarAula);
+  editarAulaClose?.addEventListener('click', closeEditarAula);
+  editarAulaCancelar?.addEventListener('click', closeEditarAula);
+  modalEditarAula?.addEventListener('click', (e) => { if (e.target === modalEditarAula) closeEditarAula(); });
+
+  // ── Modal Vincular WOD ─────────────────────────────────
+  const modalWod     = document.getElementById('modal-vincular-wod');
+  const btnVincular  = document.getElementById('btn-vincular-wod');
+  const btnVinEmpty  = document.getElementById('btn-vincular-wod-empty');
+  const wodLinkClose = document.getElementById('wod-link-close');
+  const wodLinkCancel= document.getElementById('wod-link-cancel');
+
+  function openWodModal()  { modalWod.classList.remove('hidden'); modalWod.classList.add('flex'); }
+  function closeWodModal() { modalWod.classList.add('hidden');    modalWod.classList.remove('flex'); }
+
+  btnVincular?.addEventListener('click', openWodModal);
+  btnVinEmpty?.addEventListener('click', openWodModal);
+  wodLinkClose?.addEventListener('click', closeWodModal);
+  wodLinkCancel?.addEventListener('click', closeWodModal);
+  modalWod?.addEventListener('click', (e) => { if (e.target === modalWod) closeWodModal(); });
+
+  // ── Modal Adicionar Exercício ───────────────────────────
+  const modalEx   = document.getElementById('modal-ex');
+  const exBusca   = document.getElementById('ex-busca');
+  const exResuls  = document.getElementById('ex-resultados');
+  const exSel     = document.getElementById('ex-selecionado');
+  const exSelNome = document.getElementById('ex-sel-nome');
+  const exSelNovo = document.getElementById('ex-sel-novo');
+  const labelSec  = document.getElementById('label-secao');
+  const stepBusca = document.getElementById('step-busca');
+  const formEx    = document.getElementById('form-ex');
+  const exSecaoH  = document.getElementById('ex-secao-h');
+  const exIdH     = document.getElementById('ex-id-h');
+  const exNomeH   = document.getElementById('ex-nome-novo-h');
+  const exErrP    = document.getElementById('ex-form-error');
+
+  const secoesLabels = { aquecimento: 'Aquecimento', wod: 'WOD' };
+
+  function openExModal(secao) {
+    exSecaoH.value = secao;
+    labelSec.textContent = `Seção: ${secoesLabels[secao]}`;
+    resetExModal();
+    modalEx.classList.remove('hidden');
+    modalEx.classList.add('flex');
+    setTimeout(() => exBusca.focus(), 50);
+  }
+  function closeExModal() { modalEx.classList.add('hidden'); modalEx.classList.remove('flex'); }
+  function resetExModal() {
+    exBusca.value = '';
+    exResuls.classList.add('hidden'); exResuls.innerHTML = '';
+    exSel.classList.add('hidden');
+    formEx.classList.add('hidden');
+    stepBusca.classList.remove('hidden');
+    exErrP.classList.add('hidden');
+    formEx.reset();
+  }
+
+  document.querySelectorAll('.btn-add-ex').forEach(btn => {
+    btn.addEventListener('click', () => openExModal(btn.dataset.secao));
+  });
+  document.getElementById('ex-close').addEventListener('click', closeExModal);
+  modalEx.addEventListener('click', (e) => { if (e.target === modalEx) closeExModal(); });
+
+  // Live search
+  let timer = null;
+  exBusca.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = exBusca.value.trim();
+    if (!q) { exResuls.classList.add('hidden'); return; }
+    timer = setTimeout(() => buscar(q), 250);
+  });
+
+  async function buscar(q) {
+    const res  = await fetch(`/api/exercicios/buscar?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    exResuls.innerHTML = '';
+    exResuls.classList.remove('hidden');
+    for (const ex of data.exercicios ?? []) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'w-full text-left px-3 py-2 text-sm rounded-md hover:bg-primary/10 hover:text-primary transition-colors text-foreground';
+      btn.textContent = ex.nome;
+      btn.onclick = () => selecionar(ex.id, ex.nome, false);
+      exResuls.appendChild(btn);
+    }
+    const exato = data.exercicios?.some(e => e.nome.toLowerCase() === q.toLowerCase());
+    if (!exato) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'w-full text-left px-3 py-2 text-sm rounded-md border border-dashed border-primary/40 text-primary hover:bg-primary/10 transition-colors flex items-center gap-2 mt-1';
+      btn.innerHTML = `<svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg> Criar "${q}"`;
+      btn.onclick = () => selecionar(null, q, true);
+      exResuls.appendChild(btn);
+    }
+  }
+
+  function selecionar(id, nome, isNovo) {
+    exResuls.classList.add('hidden');
+    exSel.classList.remove('hidden');
+    exSelNome.textContent = nome;
+    exSelNovo.classList.toggle('hidden', !isNovo);
+    exIdH.value   = id ?? '';
+    exNomeH.value = isNovo ? nome : '';
+    formEx.classList.remove('hidden');
+  }
+
+  document.getElementById('ex-voltar').addEventListener('click', () => {
+    exSel.classList.add('hidden');
+    formEx.classList.add('hidden');
+    exBusca.value = '';
+  });
+
+  formEx.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    exErrP.classList.add('hidden');
+    const btn = formEx.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Salvando...';
+    const fd   = new FormData(formEx);
+    const body = {
+      aula_id:      aulaId,
+      secao:        fd.get('secao'),
+      exercicio_id: fd.get('exercicio_id') || null,
+      novo_nome:    fd.get('novo_nome') || null,
+      repeticoes:   fd.get('repeticoes') || null,
+      carga:        fd.get('carga') || null,
+      distancia:    fd.get('distancia') || null,
+      observacao:   fd.get('observacao') || null,
+    };
+    const res  = await fetch('/api/aula-exercicios/adicionar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      window.location.reload();
+    } else {
+      exErrP.textContent = json.error ?? 'Erro ao adicionar.';
+      exErrP.classList.remove('hidden');
+      btn.disabled = false; btn.textContent = 'Adicionar';
+    }
+  });
+</script>

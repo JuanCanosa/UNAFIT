@@ -1,0 +1,30 @@
+# Dependências
+node_modules/
+app/node_modules/
+
+# Build
+app/dist/
+app/.astro/
+
+# Env — NUNCA commitar
+.env
+.env.local
+.env.*.local
+app/.env
+app/.env.local
+
+# Supabase local (não precisamos do estado local)
+supabase/.branches/
+supabase/.temp/
+
+# Scripts temporários / utilitários locais
+cleanup-auth.mjs
+fix-passwords.mjs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

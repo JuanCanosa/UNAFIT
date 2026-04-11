@@ -1,0 +1,27 @@
+---
+interface Props {
+  variant?: 'default' | 'primary' | 'warning' | 'destructive' | 'muted' | 'success';
+  class?: string;
+}
+
+const { variant = 'default', class: extraClass = '' } = Astro.props;
+
+const variants = {
+  default:     'bg-secondary text-secondary-foreground',
+  primary:     'bg-primary/15 text-primary border border-primary/30',
+  success:     'bg-primary/15 text-primary border border-primary/30',
+  warning:     'bg-warning/15 text-warning border border-warning/30',
+  destructive: 'bg-destructive/15 text-destructive border border-destructive/30',
+  muted:       'bg-muted text-muted-foreground',
+};
+
+const classes = [
+  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold',
+  variants[variant],
+  extraClass,
+].join(' ');
+---
+
+<span class={classes}>
+  <slot />
+</span>

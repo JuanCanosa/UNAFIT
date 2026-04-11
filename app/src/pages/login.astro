@@ -1,0 +1,245 @@
+---
+import '@/styles/globals.css';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+// Redireciona se já estiver logado
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (user) return Astro.redirect('/dashboard');
+
+// ── Processa POST do formulário ────────────────────────────────────────────────
+let errorMessage = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const email    = form.get('email')?.toString().trim()    ?? '';
+  const password = form.get('password')?.toString()        ?? '';
+
+  if (!email || !password) {
+    errorMessage = 'Preencha e-mail e senha.';
+  } else {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      errorMessage =
+        error.message.includes('Invalid login credentials')
+          ? 'E-mail ou senha incorretos.'
+          : 'Erro ao entrar. Tente novamente.';
+    } else {
+      return Astro.redirect('/dashboard');
+    }
+  }
+}
+---
+
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Entrar — UNAFIT</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+
+  <body class="min-h-screen bg-background text-foreground flex items-center justify-center p-4 antialiased">
+
+    <!-- Fundo com grid sutil -->
+    <div class="pointer-events-none fixed inset-0 bg-[linear-gradient(hsl(var(--border)/0.4)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.4)_1px,transparent_1px)] bg-[size:48px_48px]" aria-hidden="true"></div>
+    <!-- Glow central verde -->
+    <div class="pointer-events-none fixed inset-0 flex items-center justify-center" aria-hidden="true">
+      <div class="h-[400px] w-[600px] rounded-full bg-primary/5 blur-[120px]"></div>
+    </div>
+
+    <!-- Card de login -->
+    <div class="relative z-10 w-full max-w-sm animate-fade-in">
+
+      <!-- Logo -->
+      <div class="mb-8 text-center">
+        <div class="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 border border-primary/30 mb-4">
+          <svg class="h-7 w-7 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <h1 class="text-3xl font-bold tracking-tight">
+          UNA<span class="text-primary">FIT</span>
+        </h1>
+        <p class="mt-1 text-sm text-muted-foreground">Bem-vindo de volta. Entre na sua conta.</p>
+      </div>
+
+      <!-- Formulário -->
+      <div class="rounded-2xl border border-border bg-card p-6 shadow-xl card-shine">
+
+        <!-- Erro -->
+        {errorMessage && (
+          <div class="mb-4 flex items-center gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-3 text-sm text-destructive">
+            <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            {errorMessage}
+          </div>
+        )}
+
+        <form method="POST" class="space-y-4" novalidate>
+
+          <!-- E-mail -->
+          <div class="space-y-1.5">
+            <label for="email" class="text-sm font-medium text-foreground">
+              E-mail
+            </label>
+            <div class="relative">
+              <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207" />
+              </svg>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autocomplete="email"
+                required
+                placeholder="seu@email.com"
+                class="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground
+                       focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-colors"
+              />
+            </div>
+          </div>
+
+          <!-- Senha -->
+          <div class="space-y-1.5">
+            <label for="password" class="text-sm font-medium text-foreground">
+              Senha
+            </label>
+            <div class="relative">
+              <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                placeholder="••••••••"
+                class="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-10 text-sm text-foreground placeholder:text-muted-foreground
+                       focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-colors"
+              />
+              <!-- Toggle mostrar senha -->
+              <button
+                type="button"
+                id="toggle-password"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Mostrar senha"
+              >
+                <svg id="eye-icon" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Botão -->
+          <button
+            type="submit"
+            id="submit-btn"
+            class="mt-2 h-11 w-full rounded-lg bg-primary text-primary-foreground text-sm font-semibold
+                   glow-primary hover:bg-primary/90 active:scale-[0.98] transition-all duration-200
+                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
+                   disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
+          >
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+            </svg>
+            Entrar
+          </button>
+
+        </form>
+      </div>
+
+      <!-- Credenciais de teste (ambiente de dev) -->
+      <details class="mt-4 rounded-xl border border-border bg-muted/50 text-xs">
+        <summary class="cursor-pointer px-4 py-2.5 font-medium text-muted-foreground hover:text-foreground transition-colors select-none">
+          Credenciais de teste
+        </summary>
+        <div class="px-4 pb-3 pt-1 space-y-1.5 font-mono">
+          {[
+            ['Dono',      'dono@crossfit-exemplo.com'],
+            ['Professor', 'professor@crossfit-exemplo.com'],
+            ['Aluno RX',  'joao.rx@email.com'],
+            ['Aluno Scaled', 'maria.scaled@email.com'],
+          ].map(([role, email]) => (
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-muted-foreground w-24 shrink-0">{role}</span>
+              <button
+                type="button"
+                class="fill-email-btn truncate text-primary hover:underline text-left"
+                data-email={email}
+                data-password="Senha@123"
+              >
+                {email}
+              </button>
+            </div>
+          ))}
+          <p class="pt-1 text-muted-foreground">Senha: <span class="text-foreground">Senha@123</span></p>
+        </div>
+      </details>
+
+    </div>
+
+  </body>
+</html>
+
+<script>
+  // Toggle mostrar/ocultar senha
+  const toggleBtn  = document.getElementById('toggle-password')!;
+  const passwordInput = document.getElementById('password') as HTMLInputElement;
+  const eyeIcon    = document.getElementById('eye-icon')!;
+
+  toggleBtn.addEventListener('click', () => {
+    const isPassword = passwordInput.type === 'password';
+    passwordInput.type = isPassword ? 'text' : 'password';
+    eyeIcon.innerHTML = isPassword
+      ? `<path stroke-linecap="round" stroke-linejoin="round"
+           d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7
+              a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878
+              9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3
+              3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543
+              7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />`
+      : `<path stroke-linecap="round" stroke-linejoin="round"
+           d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+         <path stroke-linecap="round" stroke-linejoin="round"
+           d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943
+              9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />`;
+  });
+
+  // Preenche campos com credenciais de teste ao clicar
+  document.querySelectorAll<HTMLButtonElement>('.fill-email-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      (document.getElementById('email') as HTMLInputElement).value = btn.dataset.email!;
+      (document.getElementById('password') as HTMLInputElement).value = btn.dataset.password!;
+    });
+  });
+
+  // Loading state no submit
+  document.querySelector('form')!.addEventListener('submit', () => {
+    const btn = document.getElementById('submit-btn') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.innerHTML = `
+      <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      Entrando...`;
+  });
+</script>
