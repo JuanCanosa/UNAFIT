@@ -53,18 +53,27 @@ if (Astro.request.method === 'POST') {
   const action = (form.get('action') as string) ?? 'perfil';
 
   if (action === 'perfil') {
-    const nome_completo = (form.get('nome_completo') as string)?.trim();
-    const telefone      = (form.get('telefone') as string)?.trim() || null;
+    const nome_completo  = (form.get('nome_completo') as string)?.trim();
+    const telefone       = (form.get('telefone') as string)?.trim() || null;
+    const nome_academia  = (form.get('nome_academia') as string)?.trim();
 
     if (!nome_completo) {
       erro = 'O nome é obrigatório.';
     } else {
       const { error } = await supabase.from('profiles').update({ nome_completo, telefone }).eq('id', user.id);
-      if (error) erro = error.message;
-      else {
-        sucesso = true;
+      if (error) {
+        erro = error.message;
+      } else {
         profile.nome_completo = nome_completo;
         profile.telefone = telefone;
+
+        // Atualiza nome da academia se for dono e campo preenchido
+        if (isDono && nome_academia && academia) {
+          const adminClient = createSupabaseAdminClient();
+          await adminClient.from('academias').update({ nome: nome_academia }).eq('id', profile.academia_id!);
+          academia.nome = nome_academia;
+        }
+        sucesso = true;
       }
     }
   }
@@ -154,19 +163,74 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
 
   <div class="grid gap-6 lg:grid-cols-3">
 
-    <!-- Card identidade -->
-    <Card class="lg:col-span-1 flex flex-col items-center text-center py-8">
-      <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/15 border-2 border-primary/30 text-primary text-3xl font-bold mb-4">
-        {profile.nome_completo.charAt(0).toUpperCase()}
-      </div>
-      <h2 class="text-lg font-bold text-foreground">{profile.nome_completo}</h2>
-      <p class="text-sm text-muted-foreground mb-3">{user.email}</p>
-      <Badge variant="primary">{roleLabels[profile.role]}</Badge>
-      {academia && <p class="mt-3 text-xs text-muted-foreground">{academia.nome}</p>}
-      <p class="mt-2 text-xs text-muted-foreground">
-        Membro desde {new Date(profile.criado_em).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-      </p>
-    </Card>
+    <!-- Coluna esquerda: identidade + logo -->
+    <div class="lg:col-span-1 space-y-6">
+
+      <!-- Card identidade -->
+      <Card class="flex flex-col items-center text-center py-8">
+        <!-- Logo da academia OU avatar inicial -->
+        {academia?.logo_url
+          ? (
+            <div class="mb-4 w-full px-4 flex justify-center">
+              <img src={academia.logo_url} alt={academia?.nome ?? 'Logo'} class="max-h-20 max-w-full object-contain" />
+            </div>
+          )
+          : (
+            <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/15 border-2 border-primary/30 text-primary text-3xl font-bold mb-4">
+              {profile.nome_completo.charAt(0).toUpperCase()}
+            </div>
+          )
+        }
+        <h2 class="text-lg font-bold text-foreground">{profile.nome_completo}</h2>
+        <p class="text-sm text-muted-foreground mb-3">{user.email}</p>
+        <Badge variant="primary">{roleLabels[profile.role]}</Badge>
+        {academia && <p class="mt-3 text-xs font-medium text-muted-foreground">{academia.nome}</p>}
+        <p class="mt-2 text-xs text-muted-foreground">
+          Membro desde {new Date(profile.criado_em).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+        </p>
+      </Card>
+
+      <!-- Logo da academia (apenas dono) -->
+      {isDono && (
+        <Card>
+          <h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Logo da Academia</h2>
+          <p class="text-xs text-zinc-500 mb-4">Aparece na barra lateral para todos os usuários.</p>
+
+          <!-- Preview atual -->
+          <div class="mb-4 rounded-lg border border-zinc-700 bg-zinc-900 flex items-center justify-center p-3 h-20 overflow-hidden">
+            {academia?.logo_url
+              ? <img id="logo-preview" src={academia.logo_url} alt="Logo atual" class="max-w-full max-h-full object-contain" />
+              : <img id="logo-preview" src="/logo-unafit.png" alt="Logo padrão" class="max-w-full max-h-full object-contain opacity-30" />
+            }
+          </div>
+          <p class="text-xs text-zinc-400 mb-3">
+            {academia?.logo_url ? 'Logo personalizada ativa' : 'Usando logo padrão UNAFIT'} · PNG, JPG ou SVG · máx. 2 MB
+          </p>
+
+          <!-- Upload -->
+          <form method="POST" enctype="multipart/form-data" class="space-y-3">
+            <input type="hidden" name="action" value="logo" />
+            <input id="input-logo" name="logo" type="file" accept="image/*" required
+              class="w-full text-sm text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-zinc-600 file:text-xs file:text-zinc-300 file:bg-zinc-800 hover:file:bg-zinc-700 cursor-pointer" />
+            <button type="submit"
+              class="w-full px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg">
+              Enviar logo
+            </button>
+          </form>
+
+          {academia?.logo_url && (
+            <form method="POST" class="mt-3 text-center">
+              <input type="hidden" name="action" value="remover_logo" />
+              <button type="submit" onclick="return confirm('Remover logo personalizada e voltar para o padrão UNAFIT?')"
+                class="text-xs text-red-500 hover:text-red-400">
+                Remover logo personalizada
+              </button>
+            </form>
+          )}
+        </Card>
+      )}
+
+    </div>
 
     <!-- Formulários -->
     <div class="lg:col-span-2 space-y-6">
@@ -197,62 +261,19 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
             <input type="text" value={roleLabels[profile.role]} disabled
               class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
           </div>
+          {isDono && (
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome da Academia</label>
+              <input name="nome_academia" type="text" value={academia?.nome ?? ''} placeholder="Nome da sua academia"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary" />
+            </div>
+          )}
           <button type="submit"
             class="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
             Salvar Alterações
           </button>
         </form>
       </Card>
-
-      <!-- Logo da academia (apenas dono) -->
-      {isDono && (
-        <Card>
-          <h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Logo da Academia</h2>
-          <p class="text-xs text-zinc-500 mb-5">Aparece na barra lateral do sistema para todos os usuários da sua academia.</p>
-
-          <!-- Preview atual -->
-          <div class="mb-5 flex items-center gap-4">
-            <div class="w-40 h-16 border border-zinc-700 rounded-lg flex items-center justify-center bg-zinc-900 overflow-hidden p-2">
-              {academia?.logo_url
-                ? <img id="logo-preview" src={academia.logo_url} alt="Logo atual" class="max-w-full max-h-full object-contain" />
-                : <img id="logo-preview" src="/logo-unafit.png" alt="Logo padrão" class="max-w-full max-h-full object-contain opacity-30" />
-              }
-            </div>
-            <div>
-              <p class="text-sm text-zinc-300">
-                {academia?.logo_url ? 'Logo personalizada ativa' : 'Usando logo padrão UNAFIT'}
-              </p>
-              <p class="text-xs text-zinc-500 mt-0.5">PNG, JPG ou SVG · máx. 2 MB</p>
-            </div>
-          </div>
-
-          <!-- Upload -->
-          <form method="POST" enctype="multipart/form-data" class="space-y-3">
-            <input type="hidden" name="action" value="logo" />
-            <div class="flex gap-3 items-end">
-              <div class="flex-1">
-                <label class="block text-xs text-zinc-400 mb-1">Selecionar nova logo</label>
-                <input id="input-logo" name="logo" type="file" accept="image/*" required
-                  class="w-full text-sm text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-zinc-600 file:text-xs file:text-zinc-300 file:bg-zinc-800 hover:file:bg-zinc-700 cursor-pointer" />
-              </div>
-              <button type="submit"
-                class="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg whitespace-nowrap">
-                Enviar logo
-              </button>
-            </div>
-          </form>
-
-          {academia?.logo_url && (
-            <form method="POST" class="mt-3">
-              <input type="hidden" name="action" value="remover_logo" />
-              <button type="submit" onclick="return confirm('Remover logo personalizada e voltar para o padrão UNAFIT?')"
-                class="text-xs text-red-500 hover:text-red-400">
-                Remover logo personalizada
-              </button>
-            </form>
-          )}
-        </Card>
-      )}
 
       <!-- Assinatura UNAFIT (apenas dono) -->
       {isDono && (
