@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST https://skcvbaiqeubbyhdcqjkc.supabase.co/storage/v1/bucket -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNrY3ZiYWlxZXViYnloZGNxamtjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTc3MjU0NCwiZXhwIjoyMDkxMzQ4NTQ0fQ.cw8vrqjFpaPHNSmk_Ql74RWn8t3bM1tb1RHsAxnzxvs' -H 'Content-Type: application/json' -d '{\"id\":\"academy-assets\",\"name\":\"academy-assets\",\"public\":true,\"fileSizeLimit\":2097152,\"allowedMimeTypes\":[\"image/png\",\"image/jpeg\",\"image/jpg\",\"image/svg+xml\",\"image/webp\",\"image/gif\"]}')"
+    ]
+  }
+}
