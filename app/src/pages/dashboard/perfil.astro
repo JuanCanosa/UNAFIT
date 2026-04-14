@@ -117,6 +117,17 @@ const roleLabels: Record<string, string> = {
   professor:  'Professor',
   aluno:      'Aluno',
 };
+
+const saasStatusMap: Record<string, { label: string; cls: string }> = {
+  pago:      { label: 'Pago',      cls: 'bg-green-900/30 text-green-400 border border-green-600/30' },
+  pendente:  { label: 'Pendente',  cls: 'bg-yellow-900/30 text-yellow-400 border border-yellow-600/30' },
+  vencido:   { label: 'Vencido',   cls: 'bg-red-900/30 text-red-400 border border-red-600/30' },
+  cancelado: { label: 'Cancelado', cls: 'bg-zinc-900/30 text-zinc-400 border border-zinc-600/30' },
+};
+
+const saasAssinaturaStatusLabels: Record<string, string> = {
+  ativa: 'Ativa', trial: 'Trial', suspensa: 'Suspensa', cancelada: 'Cancelada',
+};
 ---
 
 <DashboardLayout title="Meu Perfil">
@@ -262,7 +273,7 @@ const roleLabels: Record<string, string> = {
                   saasAssinatura.status === 'suspensa' && 'bg-yellow-900/30 text-yellow-400 border border-yellow-600/30',
                   saasAssinatura.status === 'cancelada'&& 'bg-zinc-900/30 text-zinc-400 border border-zinc-600/30',
                 ]}>
-                  {{ativa:'Ativa',trial:'Trial',suspensa:'Suspensa',cancelada:'Cancelada'}[saasAssinatura.status as string] ?? saasAssinatura.status}
+                  {saasAssinaturaStatusLabels[saasAssinatura.status] ?? saasAssinatura.status}
                 </span>
               </div>
               <div>
@@ -296,13 +307,7 @@ const roleLabels: Record<string, string> = {
                 </thead>
                 <tbody>
                   {saasFaturas.map((f) => {
-                    const statusMap: Record<string, { label: string; cls: string }> = {
-                      pago:      { label: 'Pago',      cls: 'bg-green-900/30 text-green-400 border border-green-600/30' },
-                      pendente:  { label: 'Pendente',  cls: 'bg-yellow-900/30 text-yellow-400 border border-yellow-600/30' },
-                      vencido:   { label: 'Vencido',   cls: 'bg-red-900/30 text-red-400 border border-red-600/30' },
-                      cancelado: { label: 'Cancelado', cls: 'bg-zinc-900/30 text-zinc-400 border border-zinc-600/30' },
-                    };
-                    const s = statusMap[f.status] ?? { label: f.status, cls: 'bg-zinc-800 text-zinc-400' };
+                    const s = saasStatusMap[f.status] ?? { label: f.status, cls: 'bg-zinc-800 text-zinc-400' };
                     return (
                       <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
                         <td class="px-5 py-3 text-foreground">{f.descricao}</td>
