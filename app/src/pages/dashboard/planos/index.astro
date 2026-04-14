@@ -1,0 +1,301 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || (profile.role !== 'dono' && profile.role !== 'saas_admin'))
+  return Astro.redirect('/dashboard');
+
+let formError = '';
+let successMsg = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'criar_plano' || action === 'editar_plano') {
+    const nome = (form.get('nome') as string)?.trim();
+    const descricao = (form.get('descricao') as string)?.trim();
+    const valor = parseFloat(form.get('valor') as string);
+    const vencimento_dia = parseInt(form.get('vencimento_dia') as string);
+
+    if (!nome || isNaN(valor) || isNaN(vencimento_dia)) {
+      formError = 'Preencha todos os campos obrigatórios.';
+    } else if (action === 'criar_plano') {
+      const { error } = await supabase.from('planos').insert({
+        academia_id: profile.academia_id, nome, descricao: descricao || null, valor, vencimento_dia,
+      });
+      if (error) formError = error.message;
+      else return Astro.redirect('/dashboard/planos?saved=1');
+    } else {
+      const id = form.get('plano_id') as string;
+      const { error } = await supabase.from('planos')
+        .update({ nome, descricao: descricao || null, valor, vencimento_dia })
+        .eq('id', id).eq('academia_id', profile.academia_id!);
+      if (error) formError = error.message;
+      else return Astro.redirect('/dashboard/planos?saved=1');
+    }
+  }
+
+  if (action === 'toggle_plano') {
+    const id = form.get('plano_id') as string;
+    const ativo = form.get('ativo') === 'true';
+    await supabase.from('planos').update({ ativo: !ativo }).eq('id', id).eq('academia_id', profile.academia_id!);
+    return Astro.redirect('/dashboard/planos');
+  }
+
+  if (action === 'criar_categoria' || action === 'editar_categoria') {
+    const nome = (form.get('cat_nome') as string)?.trim();
+    const cor = (form.get('cat_cor') as string) || '#6366f1';
+    if (!nome) { formError = 'Nome da categoria é obrigatório.'; }
+    else if (action === 'criar_categoria') {
+      const { error } = await supabase.from('categorias_alunos').insert({ academia_id: profile.academia_id, nome, cor });
+      if (error) formError = error.message;
+      else return Astro.redirect('/dashboard/planos?saved=1');
+    } else {
+      const id = form.get('cat_id') as string;
+      const { error } = await supabase.from('categorias_alunos').update({ nome, cor }).eq('id', id).eq('academia_id', profile.academia_id!);
+      if (error) formError = error.message;
+      else return Astro.redirect('/dashboard/planos?saved=1');
+    }
+  }
+
+  if (action === 'excluir_categoria') {
+    const id = form.get('cat_id') as string;
+    const { error } = await supabase.from('categorias_alunos').delete().eq('id', id).eq('academia_id', profile.academia_id!);
+    if (error) formError = error.message;
+    else return Astro.redirect('/dashboard/planos');
+  }
+}
+
+const saved = new URL(Astro.request.url).searchParams.get('saved');
+
+const [{ data: planos }, { data: categorias }] = await Promise.all([
+  supabase.from('planos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
+  supabase.from('categorias_alunos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
+]);
+---
+
+<DashboardLayout title="Planos & Categorias">
+  <div class="p-6 max-w-5xl mx-auto space-y-8">
+
+    {saved && (
+      <div class="bg-green-900/40 border border-green-600 text-green-300 px-4 py-3 rounded-lg text-sm">
+        Salvo com sucesso!
+      </div>
+    )}
+    {formError && (
+      <div class="bg-red-900/40 border border-red-600 text-red-300 px-4 py-3 rounded-lg text-sm">
+        {formError}
+      </div>
+    )}
+
+    <!-- PLANOS -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-white">Planos</h2>
+        <button onclick="document.getElementById('modal-plano').classList.remove('hidden')"
+          class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg">
+          + Novo Plano
+        </button>
+      </div>
+
+      {!planos?.length ? (
+        <div class="border border-zinc-700 rounded-xl p-8 text-center text-zinc-500">
+          Nenhum plano cadastrado ainda.
+        </div>
+      ) : (
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {planos.map((p) => (
+            <div class={`border rounded-xl p-4 space-y-2 ${p.ativo ? 'border-zinc-700 bg-zinc-900' : 'border-zinc-800 bg-zinc-900/50 opacity-60'}`}>
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <p class="font-semibold text-white">{p.nome}</p>
+                  {p.descricao && <p class="text-xs text-zinc-400 mt-0.5">{p.descricao}</p>}
+                </div>
+                <span class={`text-xs px-2 py-0.5 rounded-full ${p.ativo ? 'bg-green-900/50 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}>
+                  {p.ativo ? 'Ativo' : 'Inativo'}
+                </span>
+              </div>
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-green-400 font-bold">R$ {Number(p.valor).toFixed(2).replace('.', ',')}</span>
+                <span class="text-zinc-500">Vence dia {p.vencimento_dia}</span>
+              </div>
+              <div class="flex gap-2 pt-1">
+                <button
+                  onclick={`abrirEditarPlano(${JSON.stringify(p)})`}
+                  class="flex-1 text-xs py-1 border border-zinc-600 hover:border-zinc-400 text-zinc-300 rounded-lg">
+                  Editar
+                </button>
+                <form method="POST">
+                  <input type="hidden" name="action" value="toggle_plano" />
+                  <input type="hidden" name="plano_id" value={p.id} />
+                  <input type="hidden" name="ativo" value={String(p.ativo)} />
+                  <button class="text-xs py-1 px-3 border border-zinc-600 hover:border-zinc-400 text-zinc-400 rounded-lg">
+                    {p.ativo ? 'Desativar' : 'Ativar'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+
+    <!-- CATEGORIAS -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-white">Categorias de Alunos</h2>
+        <button onclick="document.getElementById('modal-categoria').classList.remove('hidden')"
+          class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg">
+          + Nova Categoria
+        </button>
+      </div>
+
+      {!categorias?.length ? (
+        <div class="border border-zinc-700 rounded-xl p-8 text-center text-zinc-500">
+          Nenhuma categoria cadastrada ainda.
+        </div>
+      ) : (
+        <div class="flex flex-wrap gap-3">
+          {categorias.map((c) => (
+            <div class="flex items-center gap-3 border border-zinc-700 bg-zinc-900 rounded-xl px-4 py-2">
+              <span class="w-3 h-3 rounded-full flex-shrink-0" style={`background:${c.cor}`}></span>
+              <span class="text-white text-sm font-medium">{c.nome}</span>
+              <div class="flex gap-1 ml-2">
+                <button onclick={`abrirEditarCategoria(${JSON.stringify(c)})`}
+                  class="text-xs text-zinc-400 hover:text-white px-2 py-0.5 border border-zinc-700 rounded">
+                  Editar
+                </button>
+                <form method="POST" onsubmit="return confirm('Excluir categoria?')">
+                  <input type="hidden" name="action" value="excluir_categoria" />
+                  <input type="hidden" name="cat_id" value={c.id} />
+                  <button class="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 border border-zinc-700 rounded">×</button>
+                </form>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  </div>
+
+  <!-- Modal Plano -->
+  <div id="modal-plano" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-md space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 id="modal-plano-titulo" class="text-lg font-bold text-white">Novo Plano</h3>
+        <button onclick="fecharModalPlano()" class="text-zinc-400 hover:text-white text-xl">×</button>
+      </div>
+      <form method="POST" class="space-y-3">
+        <input id="plano-action" type="hidden" name="action" value="criar_plano" />
+        <input id="plano-id" type="hidden" name="plano_id" />
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Nome *</label>
+          <input id="plano-nome" name="nome" required
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Descrição</label>
+          <input id="plano-descricao" name="descricao"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Valor (R$) *</label>
+            <input id="plano-valor" name="valor" type="number" min="0" step="0.01" required
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Dia vencimento *</label>
+            <input id="plano-vencimento" name="vencimento_dia" type="number" min="1" max="28" required
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button type="button" onclick="fecharModalPlano()"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Categoria -->
+  <div id="modal-categoria" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 id="modal-cat-titulo" class="text-lg font-bold text-white">Nova Categoria</h3>
+        <button onclick="fecharModalCategoria()" class="text-zinc-400 hover:text-white text-xl">×</button>
+      </div>
+      <form method="POST" class="space-y-3">
+        <input id="cat-action" type="hidden" name="action" value="criar_categoria" />
+        <input id="cat-id" type="hidden" name="cat_id" />
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Nome *</label>
+          <input id="cat-nome" name="cat_nome" required
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Cor</label>
+          <input id="cat-cor" name="cat_cor" type="color" value="#6366f1"
+            class="w-full h-10 bg-zinc-800 border border-zinc-700 rounded-lg px-2 cursor-pointer" />
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button type="button" onclick="fecharModalCategoria()"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</DashboardLayout>
+
+<script>
+function fecharModalPlano() {
+  document.getElementById('modal-plano')!.classList.add('hidden');
+  (document.getElementById('plano-action') as HTMLInputElement).value = 'criar_plano';
+  (document.getElementById('plano-id') as HTMLInputElement).value = '';
+  (document.getElementById('plano-nome') as HTMLInputElement).value = '';
+  (document.getElementById('plano-descricao') as HTMLInputElement).value = '';
+  (document.getElementById('plano-valor') as HTMLInputElement).value = '';
+  (document.getElementById('plano-vencimento') as HTMLInputElement).value = '';
+  document.getElementById('modal-plano-titulo')!.textContent = 'Novo Plano';
+}
+function abrirEditarPlano(p: any) {
+  (document.getElementById('plano-action') as HTMLInputElement).value = 'editar_plano';
+  (document.getElementById('plano-id') as HTMLInputElement).value = p.id;
+  (document.getElementById('plano-nome') as HTMLInputElement).value = p.nome;
+  (document.getElementById('plano-descricao') as HTMLInputElement).value = p.descricao || '';
+  (document.getElementById('plano-valor') as HTMLInputElement).value = p.valor;
+  (document.getElementById('plano-vencimento') as HTMLInputElement).value = p.vencimento_dia;
+  document.getElementById('modal-plano-titulo')!.textContent = 'Editar Plano';
+  document.getElementById('modal-plano')!.classList.remove('hidden');
+}
+function fecharModalCategoria() {
+  document.getElementById('modal-categoria')!.classList.add('hidden');
+  (document.getElementById('cat-action') as HTMLInputElement).value = 'criar_categoria';
+  (document.getElementById('cat-id') as HTMLInputElement).value = '';
+  (document.getElementById('cat-nome') as HTMLInputElement).value = '';
+  document.getElementById('modal-cat-titulo')!.textContent = 'Nova Categoria';
+}
+function abrirEditarCategoria(c: any) {
+  (document.getElementById('cat-action') as HTMLInputElement).value = 'editar_categoria';
+  (document.getElementById('cat-id') as HTMLInputElement).value = c.id;
+  (document.getElementById('cat-nome') as HTMLInputElement).value = c.nome;
+  (document.getElementById('cat-cor') as HTMLInputElement).value = c.cor || '#6366f1';
+  document.getElementById('modal-cat-titulo')!.textContent = 'Editar Categoria';
+  document.getElementById('modal-categoria')!.classList.remove('hidden');
+}
+</script>

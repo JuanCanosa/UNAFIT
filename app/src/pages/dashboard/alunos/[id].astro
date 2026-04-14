@@ -1,0 +1,411 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const { id: alunoId } = Astro.params;
+const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+
+let formError = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'editar_aluno') {
+    const campos: Record<string, any> = {
+      nome:                 (form.get('nome') as string)?.trim(),
+      email:                (form.get('email') as string)?.trim().toLowerCase(),
+      telefone:             (form.get('telefone') as string)?.trim(),
+      categoria_id:         form.get('categoria_id') || null,
+      status:               form.get('status') as string,
+      endereco_cep:         form.get('endereco_cep') || null,
+      endereco_rua:         form.get('endereco_rua') || null,
+      endereco_numero:      form.get('endereco_numero') || null,
+      endereco_complemento: form.get('endereco_complemento') || null,
+      endereco_bairro:      form.get('endereco_bairro') || null,
+      endereco_cidade:      form.get('endereco_cidade') || null,
+      endereco_estado:      form.get('endereco_estado') || null,
+    };
+    const { error } = await supabase.from('alunos').update(campos)
+      .eq('id', alunoId!).eq('academia_id', profile.academia_id!);
+    if (error) formError = error.message;
+    else return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+  }
+
+  if (action === 'adicionar_plano') {
+    const plano_id = form.get('plano_id') as string;
+    if (plano_id) {
+      // Cancela planos ativos anteriores
+      await supabase.from('aluno_planos').update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
+        .eq('aluno_id', alunoId!).eq('status', 'ativo');
+      await supabase.from('aluno_planos').insert({
+        academia_id: profile.academia_id, aluno_id: alunoId, plano_id,
+      });
+    }
+    return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+  }
+
+  if (action === 'cancelar_plano') {
+    const ap_id = form.get('aluno_plano_id') as string;
+    await supabase.from('aluno_planos').update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
+      .eq('id', ap_id).eq('academia_id', profile.academia_id!);
+    return Astro.redirect(`/dashboard/alunos/${alunoId}`);
+  }
+
+  if (action === 'registrar_pagamento') {
+    const pagamento_id = form.get('pagamento_id') as string;
+    await supabase.from('pagamentos').update({ status: 'pago', data_pagamento: new Date().toISOString().split('T')[0] })
+      .eq('id', pagamento_id).eq('academia_id', profile.academia_id!);
+    return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+  }
+}
+
+const savedParam = new URL(Astro.request.url).searchParams.get('saved');
+const novoParam  = new URL(Astro.request.url).searchParams.get('novo');
+
+// Busca dados do aluno
+const { data: aluno } = await supabase
+  .from('alunos')
+  .select(`*, categorias_alunos(id, nome, cor)`)
+  .eq('id', alunoId!)
+  .eq('academia_id', profile.academia_id!)
+  .single();
+
+if (!aluno) return Astro.redirect('/dashboard/alunos');
+
+const [
+  { data: matriculas },
+  { data: pagamentos },
+  { data: checkins },
+  { data: categorias },
+  { data: planos },
+] = await Promise.all([
+  supabase.from('aluno_planos').select('*, planos(id, nome, valor, vencimento_dia)')
+    .eq('aluno_id', alunoId!).order('created_at', { ascending: false }),
+  supabase.from('pagamentos').select('*').eq('aluno_id', alunoId!).order('data_vencimento', { ascending: false }).limit(12),
+  supabase.from('checkins')
+    .select('id, created_at, aulas_agenda(id, data_aula, horario_inicio, modalidade, wods(id, nome))')
+    .eq('aluno_id', alunoId!).order('created_at', { ascending: false }).limit(20),
+  supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
+  supabase.from('planos').select('id, nome, valor').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
+]);
+
+const matriculaAtiva = matriculas?.find((m: any) => m.status === 'ativo');
+
+const statusPagCores: Record<string, string> = {
+  pago:      'text-green-400 bg-green-900/30',
+  pendente:  'text-yellow-400 bg-yellow-900/30',
+  vencido:   'text-red-400 bg-red-900/30',
+  cancelado: 'text-zinc-500 bg-zinc-800',
+};
+---
+
+<DashboardLayout title={aluno.nome}>
+  <div class="p-6 max-w-5xl mx-auto space-y-6">
+
+    <!-- Breadcrumb + Banner -->
+    <div class="flex items-center gap-3 text-sm">
+      <a href="/dashboard/alunos" class="text-zinc-400 hover:text-white">← Alunos</a>
+      <span class="text-zinc-700">/</span>
+      <span class="text-white">{aluno.nome}</span>
+    </div>
+
+    {(savedParam || novoParam) && (
+      <div class="bg-green-900/40 border border-green-600 text-green-300 px-4 py-3 rounded-lg text-sm">
+        {novoParam ? 'Aluno cadastrado! E-mail de confirmação enviado.' : 'Alterações salvas com sucesso!'}
+      </div>
+    )}
+    {formError && (
+      <div class="bg-red-900/40 border border-red-600 text-red-300 px-4 py-3 rounded-lg text-sm">{formError}</div>
+    )}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- Coluna esquerda: Perfil -->
+      <div class="lg:col-span-1 space-y-4">
+        <!-- Card perfil -->
+        <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+          <div class="flex items-start justify-between">
+            <div>
+              <h1 class="text-lg font-bold text-white">{aluno.nome}</h1>
+              <p class="text-zinc-400 text-sm">{aluno.email}</p>
+            </div>
+            <span class={`text-xs px-2 py-0.5 rounded-full ${
+              aluno.status === 'ativo' ? 'bg-green-900/50 text-green-400' :
+              aluno.status === 'pendente' ? 'bg-yellow-900/50 text-yellow-400' :
+              'bg-zinc-800 text-zinc-500'
+            }`}>{aluno.status}</span>
+          </div>
+
+          <div class="space-y-1.5 text-sm text-zinc-400 border-t border-zinc-800 pt-3">
+            <p><span class="text-zinc-600">Tel:</span> {aluno.telefone}</p>
+            <p><span class="text-zinc-600">CPF:</span> {aluno.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')}</p>
+            {aluno.categorias_alunos && (
+              <p class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full" style={`background:${aluno.categorias_alunos.cor}`}></span>
+                {aluno.categorias_alunos.nome}
+              </p>
+            )}
+          </div>
+
+          {(aluno.endereco_rua) && (
+            <div class="text-xs text-zinc-500 border-t border-zinc-800 pt-3">
+              {aluno.endereco_rua}{aluno.endereco_numero ? `, ${aluno.endereco_numero}` : ''}<br />
+              {aluno.endereco_bairro && `${aluno.endereco_bairro} — `}{aluno.endereco_cidade}/{aluno.endereco_estado}
+              {aluno.endereco_cep && ` · ${aluno.endereco_cep}`}
+            </div>
+          )}
+
+          {canEdit && (
+            <button onclick="document.getElementById('modal-editar').classList.remove('hidden')"
+              class="w-full py-2 border border-zinc-600 hover:border-zinc-400 text-zinc-300 text-sm rounded-lg">
+              Editar dados
+            </button>
+          )}
+        </div>
+
+        <!-- Plano atual -->
+        <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-zinc-300">Plano atual</h2>
+            {canEdit && (
+              <button onclick="document.getElementById('modal-plano').classList.remove('hidden')"
+                class="text-xs text-red-400 hover:text-red-300">Trocar</button>
+            )}
+          </div>
+          {matriculaAtiva ? (
+            <div>
+              <p class="text-white font-medium">{(matriculaAtiva as any).planos?.nome}</p>
+              <p class="text-green-400 text-sm">R$ {Number((matriculaAtiva as any).planos?.valor).toFixed(2).replace('.', ',')}/mês</p>
+              <p class="text-zinc-500 text-xs">Vence dia {(matriculaAtiva as any).planos?.vencimento_dia}</p>
+              {canEdit && (
+                <form method="POST" class="mt-3">
+                  <input type="hidden" name="action" value="cancelar_plano" />
+                  <input type="hidden" name="aluno_plano_id" value={(matriculaAtiva as any).id} />
+                  <button class="text-xs text-red-500 hover:text-red-400" onclick="return confirm('Cancelar matrícula?')">
+                    Cancelar matrícula
+                  </button>
+                </form>
+              )}
+            </div>
+          ) : (
+            <p class="text-zinc-500 text-sm">Sem plano ativo</p>
+          )}
+        </div>
+      </div>
+
+      <!-- Coluna direita -->
+      <div class="lg:col-span-2 space-y-6">
+
+        <!-- Pagamentos -->
+        <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+          <h2 class="text-sm font-semibold text-zinc-300">Mensalidades</h2>
+          {!pagamentos?.length ? (
+            <p class="text-zinc-500 text-sm">Nenhum pagamento registrado.</p>
+          ) : (
+            <div class="space-y-2">
+              {pagamentos.map((p: any) => (
+                <div class="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                  <div>
+                    <p class="text-sm text-white">
+                      Venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                    </p>
+                    <p class="text-xs text-zinc-500">R$ {Number(p.valor).toFixed(2).replace('.', ',')}</p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class={`text-xs px-2 py-0.5 rounded-full ${statusPagCores[p.status]}`}>
+                      {p.status}
+                    </span>
+                    {(p.status === 'pendente' || p.status === 'vencido') && canEdit && (
+                      <form method="POST">
+                        <input type="hidden" name="action" value="registrar_pagamento" />
+                        <input type="hidden" name="pagamento_id" value={p.id} />
+                        <button class="text-xs text-green-400 hover:text-green-300 border border-green-800 px-2 py-0.5 rounded">
+                          Marcar pago
+                        </button>
+                      </form>
+                    )}
+                    {p.link_pagamento && (
+                      <a href={p.link_pagamento} target="_blank"
+                        class="text-xs text-blue-400 hover:text-blue-300 border border-blue-900 px-2 py-0.5 rounded">
+                        Pagar
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <!-- Histórico de checkins -->
+        <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+          <h2 class="text-sm font-semibold text-zinc-300">
+            Histórico de Aulas
+            <span class="ml-2 text-xs text-zinc-600 font-normal">{checkins?.length ?? 0} checkins</span>
+          </h2>
+          {!checkins?.length ? (
+            <p class="text-zinc-500 text-sm">Nenhum checkin registrado.</p>
+          ) : (
+            <div class="space-y-2">
+              {checkins.map((c: any) => {
+                const aula = c.aulas_agenda;
+                return (
+                  <div class="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                    <div>
+                      <p class="text-sm text-white">
+                        {aula ? new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                        {aula?.horario_inicio && ` · ${aula.horario_inicio.slice(0,5)}`}
+                      </p>
+                      <p class="text-xs text-zinc-500">
+                        {aula?.modalidade ?? '—'}
+                        {aula?.wods?.nome && ` · WOD: ${aula.wods.nome}`}
+                      </p>
+                    </div>
+                    {aula && (
+                      <a href={`/dashboard/agenda/${aula.id}`}
+                        class="text-xs text-zinc-400 hover:text-white border border-zinc-700 px-2 py-0.5 rounded">
+                        Ver aula
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Editar Aluno -->
+  <div id="modal-editar" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-lg my-4 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-bold text-white">Editar Aluno</h3>
+        <button onclick="document.getElementById('modal-editar').classList.add('hidden')" class="text-zinc-400 hover:text-white text-xl">×</button>
+      </div>
+      <form method="POST" class="space-y-3">
+        <input type="hidden" name="action" value="editar_aluno" />
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Nome *</label>
+          <input name="nome" value={aluno.nome} required
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">E-mail *</label>
+            <input name="email" type="email" value={aluno.email} required
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Telefone *</label>
+            <input name="telefone" value={aluno.telefone} required
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Categoria</label>
+            <select name="categoria_id"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm">
+              <option value="">Sem categoria</option>
+              {categorias?.map((c: any) => (
+                <option value={c.id} selected={c.id === aluno.categoria_id}>{c.nome}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Status</label>
+            <select name="status"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm">
+              <option value="ativo" selected={aluno.status === 'ativo'}>Ativo</option>
+              <option value="pendente" selected={aluno.status === 'pendente'}>Pendente</option>
+              <option value="inativo" selected={aluno.status === 'inativo'}>Inativo</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">CEP</label>
+            <input name="endereco_cep" value={aluno.endereco_cep ?? ''}
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Estado</label>
+            <input name="endereco_estado" value={aluno.endereco_estado ?? ''} maxlength="2"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Rua</label>
+          <input name="endereco_rua" value={aluno.endereco_rua ?? ''}
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Número</label>
+            <input name="endereco_numero" value={aluno.endereco_numero ?? ''}
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Bairro</label>
+            <input name="endereco_bairro" value={aluno.endereco_bairro ?? ''}
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Cidade</label>
+          <input name="endereco_cidade" value={aluno.endereco_cidade ?? ''}
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+        </div>
+        <input type="hidden" name="endereco_complemento" value={aluno.endereco_complemento ?? ''} />
+        <div class="flex gap-2 pt-2">
+          <button type="button" onclick="document.getElementById('modal-editar').classList.add('hidden')"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Trocar Plano -->
+  <div id="modal-plano" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-bold text-white">Trocar Plano</h3>
+        <button onclick="document.getElementById('modal-plano').classList.add('hidden')" class="text-zinc-400 hover:text-white text-xl">×</button>
+      </div>
+      <form method="POST" class="space-y-3">
+        <input type="hidden" name="action" value="adicionar_plano" />
+        <select name="plano_id" required
+          class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm">
+          <option value="">Selecione um plano...</option>
+          {planos?.map((p: any) => (
+            <option value={p.id}>{p.nome} — R$ {Number(p.valor).toFixed(2).replace('.', ',')}</option>
+          ))}
+        </select>
+        <div class="flex gap-2 pt-1">
+          <button type="button" onclick="document.getElementById('modal-plano').classList.add('hidden')"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Confirmar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</DashboardLayout>

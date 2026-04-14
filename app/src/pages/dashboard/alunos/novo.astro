@@ -1,0 +1,298 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+import { criarClienteAsaas } from '@/lib/asaas';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || (profile.role !== 'dono' && profile.role !== 'professor' && profile.role !== 'saas_admin'))
+  return Astro.redirect('/dashboard');
+
+let formError = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const nome        = (form.get('nome') as string)?.trim();
+  const email       = (form.get('email') as string)?.trim().toLowerCase();
+  const telefone    = (form.get('telefone') as string)?.trim();
+  const cpf         = (form.get('cpf') as string)?.replace(/\D/g, '');
+  const categoria_id = form.get('categoria_id') as string || null;
+  const plano_id    = form.get('plano_id') as string || null;
+
+  const endereco_cep         = (form.get('endereco_cep') as string)?.trim() || null;
+  const endereco_rua         = (form.get('endereco_rua') as string)?.trim() || null;
+  const endereco_numero      = (form.get('endereco_numero') as string)?.trim() || null;
+  const endereco_complemento = (form.get('endereco_complemento') as string)?.trim() || null;
+  const endereco_bairro      = (form.get('endereco_bairro') as string)?.trim() || null;
+  const endereco_cidade      = (form.get('endereco_cidade') as string)?.trim() || null;
+  const endereco_estado      = (form.get('endereco_estado') as string)?.trim() || null;
+
+  if (!nome || !email || !telefone || !cpf) {
+    formError = 'Preencha todos os campos obrigatórios.';
+  } else if (cpf.length !== 11) {
+    formError = 'CPF deve ter 11 dígitos.';
+  } else {
+    // Verifica duplicidade de CPF e email na academia
+    const { data: dup } = await supabase.from('alunos')
+      .select('id, cpf, email')
+      .eq('academia_id', profile.academia_id!)
+      .or(`cpf.eq.${cpf},email.eq.${email}`)
+      .limit(1)
+      .single();
+
+    if (dup) {
+      formError = dup.cpf === cpf ? 'CPF já cadastrado nesta academia.' : 'E-mail já cadastrado nesta academia.';
+    } else {
+      // Cria o aluno
+      const { data: aluno, error: insErr } = await supabase.from('alunos').insert({
+        academia_id: profile.academia_id,
+        nome, email, telefone, cpf,
+        categoria_id: categoria_id || null,
+        endereco_cep, endereco_rua, endereco_numero,
+        endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado,
+        status: 'pendente',
+      }).select('id').single();
+
+      if (insErr) {
+        formError = insErr.message;
+      } else {
+        // Tenta criar cliente no Asaas (retorna null se não configurado)
+        try {
+          const asaasId = await criarClienteAsaas({
+            nome, email, cpf: cpf, telefone,
+            endereco_cep, endereco_rua, endereco_numero,
+            endereco_bairro, endereco_cidade, endereco_estado,
+          });
+          if (asaasId) {
+            await supabase.from('alunos').update({ asaas_customer_id: asaasId }).eq('id', aluno!.id);
+          }
+        } catch (_) {}
+
+        // Vincula ao plano se selecionado
+        if (plano_id && aluno) {
+          await supabase.from('aluno_planos').insert({
+            academia_id: profile.academia_id,
+            aluno_id: aluno.id,
+            plano_id,
+          });
+        }
+
+        // Envia email de convite via Supabase Auth (magic link / confirmação)
+        try {
+          const { error: inviteErr } = await supabase.auth.admin
+            ? (await import('@/lib/supabase').then(m => m.createSupabaseAdminClient()))
+                .auth.inviteUserByEmail(email, {
+                  redirectTo: `${import.meta.env.SITE ?? process.env.SITE ?? 'https://unafit.com.br'}/portal/setup`,
+                  data: { aluno_id: aluno!.id, academia_id: profile.academia_id },
+                })
+            : { error: null };
+        } catch (_) {}
+
+        return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1`);
+      }
+    }
+  }
+}
+
+const [{ data: categorias }, { data: planos }] = await Promise.all([
+  supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
+  supabase.from('planos').select('id, nome, valor').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
+]);
+---
+
+<DashboardLayout title="Novo Aluno">
+  <div class="p-6 max-w-2xl mx-auto">
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/dashboard/alunos" class="text-zinc-400 hover:text-white text-sm">← Alunos</a>
+      <span class="text-zinc-700">/</span>
+      <h1 class="text-xl font-bold text-white">Novo Aluno</h1>
+    </div>
+
+    {formError && (
+      <div class="bg-red-900/40 border border-red-600 text-red-300 px-4 py-3 rounded-lg text-sm mb-4">
+        {formError}
+      </div>
+    )}
+
+    <form method="POST" class="space-y-6">
+      <!-- Dados pessoais -->
+      <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Dados Pessoais</h2>
+
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Nome completo *</label>
+          <input name="nome" required autocomplete="off"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">E-mail *</label>
+            <input name="email" type="email" required autocomplete="off"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Celular *</label>
+            <input name="telefone" id="campo-telefone" required placeholder="(99) 99999-9999"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">CPF *</label>
+          <input name="cpf" id="campo-cpf" required placeholder="000.000.000-00" maxlength="14"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+        </div>
+      </section>
+
+      <!-- Endereço -->
+      <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Endereço</h2>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">CEP</label>
+            <input name="endereco_cep" id="campo-cep" placeholder="00000-000" maxlength="9"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Estado</label>
+            <input name="endereco_estado" id="campo-estado" maxlength="2" placeholder="SP"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Rua / Logradouro</label>
+          <input name="endereco_rua" id="campo-rua"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Número</label>
+            <input name="endereco_numero"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Complemento</label>
+            <input name="endereco_complemento"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Bairro</label>
+            <input name="endereco_bairro" id="campo-bairro"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Cidade</label>
+            <input name="endereco_cidade" id="campo-cidade"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+        </div>
+      </section>
+
+      <!-- Classificação -->
+      <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Classificação</h2>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Categoria</label>
+            <select name="categoria_id"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none">
+              <option value="">Sem categoria</option>
+              {categorias?.map((c: any) => (
+                <option value={c.id}>{c.nome}</option>
+              ))}
+            </select>
+            <a href="/dashboard/planos" class="text-xs text-zinc-500 hover:text-zinc-300 mt-1 block">
+              + Gerenciar categorias
+            </a>
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Plano inicial</label>
+            <select name="plano_id"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none">
+              <option value="">Sem plano</option>
+              {planos?.map((p: any) => (
+                <option value={p.id}>{p.nome} — R$ {Number(p.valor).toFixed(2).replace('.', ',')}</option>
+              ))}
+            </select>
+            <a href="/dashboard/planos" class="text-xs text-zinc-500 hover:text-zinc-300 mt-1 block">
+              + Gerenciar planos
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <div class="flex gap-3">
+        <a href="/dashboard/alunos"
+          class="flex-1 text-center py-2.5 border border-zinc-600 text-zinc-300 rounded-lg text-sm hover:border-zinc-400">
+          Cancelar
+        </a>
+        <button type="submit"
+          class="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">
+          Cadastrar Aluno
+        </button>
+      </div>
+
+      <p class="text-xs text-zinc-500 text-center">
+        O aluno receberá um e-mail para confirmar o cadastro e criar sua senha de acesso.
+      </p>
+    </form>
+  </div>
+</DashboardLayout>
+
+<script>
+// Máscara CPF
+document.getElementById('campo-cpf')?.addEventListener('input', (e) => {
+  let v = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 11);
+  v = v.replace(/(\d{3})(\d)/, '$1.$2');
+  v = v.replace(/(\d{3})(\d)/, '$1.$2');
+  v = v.replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+  (e.target as HTMLInputElement).value = v;
+});
+
+// Máscara Telefone
+document.getElementById('campo-telefone')?.addEventListener('input', (e) => {
+  let v = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 11);
+  if (v.length <= 10) v = v.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3');
+  else v = v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+  (e.target as HTMLInputElement).value = v;
+});
+
+// Máscara CEP + auto-preenchimento via ViaCEP
+document.getElementById('campo-cep')?.addEventListener('blur', async (e) => {
+  const cep = (e.target as HTMLInputElement).value.replace(/\D/g, '');
+  if (cep.length !== 8) return;
+  try {
+    const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const d = await res.json();
+    if (!d.erro) {
+      (document.getElementById('campo-rua') as HTMLInputElement).value = d.logradouro || '';
+      (document.getElementById('campo-bairro') as HTMLInputElement).value = d.bairro || '';
+      (document.getElementById('campo-cidade') as HTMLInputElement).value = d.localidade || '';
+      (document.getElementById('campo-estado') as HTMLInputElement).value = d.uf || '';
+    }
+  } catch (_) {}
+});
+
+document.getElementById('campo-cep')?.addEventListener('input', (e) => {
+  let v = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 8);
+  v = v.replace(/(\d{5})(\d)/, '$1-$2');
+  (e.target as HTMLInputElement).value = v;
+});
+</script>

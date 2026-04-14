@@ -1,0 +1,148 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+
+const url = new URL(Astro.request.url);
+const busca = url.searchParams.get('q') || '';
+const filtroPlano = url.searchParams.get('plano') || '';
+const filtroCategoria = url.searchParams.get('categoria') || '';
+const filtroStatus = url.searchParams.get('status') || '';
+
+let query = supabase
+  .from('alunos')
+  .select(`
+    id, nome, email, telefone, cpf, status, created_at,
+    categorias_alunos(id, nome, cor),
+    aluno_planos(id, status, planos(id, nome))
+  `)
+  .eq('academia_id', profile.academia_id!)
+  .order('nome');
+
+if (busca) query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
+if (filtroStatus) query = query.eq('status', filtroStatus);
+
+const { data: alunos } = await query;
+const { data: planos } = await supabase.from('planos').select('id, nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome');
+const { data: categorias } = await supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome');
+
+const statusCores: Record<string, string> = {
+  ativo:    'bg-green-900/50 text-green-400',
+  inativo:  'bg-zinc-800 text-zinc-500',
+  pendente: 'bg-yellow-900/50 text-yellow-400',
+};
+
+const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+---
+
+<DashboardLayout title="Alunos">
+  <div class="p-6 max-w-7xl mx-auto space-y-6">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-white">Alunos</h1>
+        <p class="text-zinc-400 text-sm mt-1">{alunos?.length ?? 0} aluno{alunos?.length !== 1 ? 's' : ''} encontrado{alunos?.length !== 1 ? 's' : ''}</p>
+      </div>
+      {canEdit && (
+        <a href="/dashboard/alunos/novo"
+          class="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg">
+          + Novo Aluno
+        </a>
+      )}
+    </div>
+
+    <!-- Filtros -->
+    <form method="GET" class="flex flex-wrap gap-3">
+      <input name="q" value={busca} placeholder="Buscar por nome, email ou CPF..."
+        class="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm placeholder-zinc-500" />
+      <select name="status" class="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300">
+        <option value="">Todos os status</option>
+        <option value="ativo" selected={filtroStatus === 'ativo'}>Ativo</option>
+        <option value="pendente" selected={filtroStatus === 'pendente'}>Pendente</option>
+        <option value="inativo" selected={filtroStatus === 'inativo'}>Inativo</option>
+      </select>
+      <button type="submit" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg">Filtrar</button>
+      {(busca || filtroStatus) && (
+        <a href="/dashboard/alunos" class="px-4 py-2 border border-zinc-700 text-zinc-400 text-sm rounded-lg hover:text-white">Limpar</a>
+      )}
+    </form>
+
+    <!-- Lista -->
+    {!alunos?.length ? (
+      <div class="border border-zinc-700 rounded-xl p-12 text-center">
+        <p class="text-zinc-400 text-lg mb-2">Nenhum aluno encontrado</p>
+        {canEdit && (
+          <a href="/dashboard/alunos/novo" class="text-red-400 hover:text-red-300 text-sm">Cadastrar primeiro aluno →</a>
+        )}
+      </div>
+    ) : (
+      <div class="border border-zinc-700 rounded-xl overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-zinc-700 bg-zinc-800/50">
+              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Aluno</th>
+              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider hidden sm:table-cell">Plano</th>
+              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider hidden md:table-cell">Categoria</th>
+              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Status</th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {alunos.map((a: any) => {
+              const planoAtivo = a.aluno_planos?.find((ap: any) => ap.status === 'ativo');
+              const cat = a.categorias_alunos;
+              return (
+                <tr class="hover:bg-zinc-800/40 transition-colors">
+                  <td class="px-4 py-3">
+                    <div class="font-medium text-white text-sm">{a.nome}</div>
+                    <div class="text-zinc-500 text-xs">{a.email}</div>
+                  </td>
+                  <td class="px-4 py-3 hidden sm:table-cell">
+                    {planoAtivo ? (
+                      <span class="text-sm text-zinc-300">{planoAtivo.planos?.nome}</span>
+                    ) : (
+                      <span class="text-xs text-zinc-600">Sem plano</span>
+                    )}
+                  </td>
+                  <td class="px-4 py-3 hidden md:table-cell">
+                    {cat ? (
+                      <span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-zinc-800">
+                        <span class="w-2 h-2 rounded-full" style={`background:${cat.cor}`}></span>
+                        {cat.nome}
+                      </span>
+                    ) : (
+                      <span class="text-xs text-zinc-600">—</span>
+                    )}
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class={`text-xs px-2 py-0.5 rounded-full font-medium ${statusCores[a.status] ?? ''}`}>
+                      {a.status}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    <a href={`/dashboard/alunos/${a.id}`}
+                      class="text-xs text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 px-3 py-1 rounded-lg">
+                      Ver
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+</DashboardLayout>
