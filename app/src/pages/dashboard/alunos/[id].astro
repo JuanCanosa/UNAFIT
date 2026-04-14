@@ -1,6 +1,7 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { enviarEmailResetSenha, emailConfigurado } from '@/lib/email';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -121,12 +122,43 @@ if (Astro.request.method === 'POST') {
       if (!authUser) {
         formError = 'Este aluno ainda não tem conta de acesso. Defina uma senha primeiro.';
       } else {
+        // Gera link de recuperação com token válido por 24h
         const siteUrl = import.meta.env.SITE ?? process.env.SITE ?? 'https://unafit.com.br';
-        const { error } = await adminClient.auth.resetPasswordForEmail(alunoAcesso.email, {
-          redirectTo: `${siteUrl}/portal/reset-password`,
+        const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
+          type: 'recovery',
+          email: alunoAcesso.email,
+          options: { redirectTo: `${siteUrl}/login` },
         });
-        if (error) formError = error.message;
-        else return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1`);
+
+        if (linkErr || !linkData?.properties?.action_link) {
+          formError = linkErr?.message ?? 'Erro ao gerar link de redefinição.';
+        } else {
+          // Busca dados da academia para o email branded
+          const { data: acad } = await adminClient
+            .from('academias')
+            .select('nome, logo_url')
+            .eq('id', profile.academia_id!)
+            .single();
+
+          if (!emailConfigurado()) {
+            // Fallback: envia pelo Supabase padrão se Resend não configurado
+            await adminClient.auth.resetPasswordForEmail(alunoAcesso.email, {
+              redirectTo: `${siteUrl}/login`,
+            });
+            return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1`);
+          }
+
+          const resultado = await enviarEmailResetSenha({
+            email:         alunoAcesso.email,
+            nomeAluno:     alunoAcesso.nome,
+            nomeAcademia:  acad?.nome ?? 'Academia',
+            logoUrl:       acad?.logo_url ?? null,
+            linkReset:     linkData.properties.action_link,
+          });
+
+          if (!resultado.ok) formError = resultado.erro ?? 'Erro ao enviar e-mail.';
+          else return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1`);
+        }
       }
     }
   }

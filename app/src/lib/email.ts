@@ -1,0 +1,150 @@
+/**
+ * Envio de emails transacionais via Resend.
+ * Requer RESEND_API_KEY no ambiente.
+ * Requer domínio verificado no Resend (unafit.com.br).
+ */
+
+import { Resend } from 'resend';
+
+const RESEND_KEY = import.meta.env.RESEND_API_KEY ?? process.env.RESEND_API_KEY ?? null;
+const FROM_EMAIL = import.meta.env.FROM_EMAIL ?? process.env.FROM_EMAIL ?? 'noreply@unafit.com.br';
+
+export function emailConfigurado(): boolean {
+  return !!RESEND_KEY;
+}
+
+function getResend() {
+  if (!RESEND_KEY) throw new Error('RESEND_API_KEY não configurado.');
+  return new Resend(RESEND_KEY);
+}
+
+// ─── Template base ────────────────────────────────────────────────────────────
+
+function templateBase(params: {
+  nomeAcademia: string;
+  logoUrl: string | null;
+  titulo: string;
+  corpo: string;
+  rodape?: string;
+}): string {
+  const { nomeAcademia, logoUrl, titulo, corpo, rodape } = params;
+
+  const logoHtml = logoUrl
+    ? `<img src="${logoUrl}" alt="${nomeAcademia}" style="max-height:60px;max-width:200px;object-fit:contain;" />`
+    : `<span style="font-size:22px;font-weight:700;color:#ffffff;">${nomeAcademia}</span>`;
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${titulo}</title>
+</head>
+<body style="margin:0;padding:0;background:#0f0f0f;font-family:'Inter',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f0f;padding:40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
+
+          <!-- Header com logo -->
+          <tr>
+            <td align="center" style="background:#18181b;border-radius:12px 12px 0 0;padding:28px 32px 20px;border-bottom:1px solid #27272a;">
+              ${logoHtml}
+            </td>
+          </tr>
+
+          <!-- Corpo -->
+          <tr>
+            <td style="background:#18181b;padding:32px 32px 24px;border-radius:0 0 12px 12px;">
+              <h1 style="margin:0 0 16px;font-size:20px;font-weight:700;color:#ffffff;">${titulo}</h1>
+              ${corpo}
+            </td>
+          </tr>
+
+          <!-- Rodapé -->
+          <tr>
+            <td align="center" style="padding:20px 0 0;">
+              <p style="margin:0;font-size:12px;color:#52525b;">
+                ${rodape ?? `Este e-mail foi enviado por <strong>${nomeAcademia}</strong> através da plataforma UNAFIT.`}
+              </p>
+              <p style="margin:6px 0 0;font-size:11px;color:#3f3f46;">Se você não solicitou este e-mail, ignore-o.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ─── Email de redefinição de senha ───────────────────────────────────────────
+
+export async function enviarEmailResetSenha(params: {
+  email: string;
+  nomeAluno: string;
+  nomeAcademia: string;
+  logoUrl: string | null;
+  linkReset: string;
+}): Promise<{ ok: boolean; erro?: string }> {
+  const { email, nomeAluno, nomeAcademia, logoUrl, linkReset } = params;
+
+  const corpo = `
+    <p style="margin:0 0 12px;font-size:15px;color:#a1a1aa;">
+      Olá, <strong style="color:#ffffff;">${nomeAluno}</strong>!
+    </p>
+    <p style="margin:0 0 24px;font-size:15px;color:#a1a1aa;line-height:1.6;">
+      Você recebeu este e-mail porque sua academia <strong style="color:#ffffff;">${nomeAcademia}</strong>
+      solicita que você crie ou redefina sua senha de acesso ao sistema.
+    </p>
+
+    <!-- Botão CTA -->
+    <table cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+      <tr>
+        <td style="background:#dc2626;border-radius:8px;">
+          <a href="${linkReset}"
+             style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">
+            Criar minha senha →
+          </a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin:0 0 8px;font-size:13px;color:#52525b;">
+      Se o botão não funcionar, copie e cole este link no seu navegador:
+    </p>
+    <p style="margin:0;font-size:12px;color:#71717a;word-break:break-all;">
+      <a href="${linkReset}" style="color:#dc2626;">${linkReset}</a>
+    </p>
+
+    <hr style="margin:24px 0;border:none;border-top:1px solid #27272a;" />
+    <p style="margin:0;font-size:12px;color:#52525b;">
+      Este link expira em <strong style="color:#a1a1aa;">24 horas</strong>.
+      Após criar sua senha, acesse o sistema em
+      <a href="https://unafit.com.br/login" style="color:#dc2626;">unafit.com.br/login</a>
+      com seu e-mail e a senha escolhida.
+    </p>
+  `;
+
+  const html = templateBase({
+    nomeAcademia,
+    logoUrl,
+    titulo: `Crie sua senha — ${nomeAcademia}`,
+    corpo,
+  });
+
+  try {
+    const resend = getResend();
+    const { error } = await resend.emails.send({
+      from: `${nomeAcademia} <${FROM_EMAIL}>`,
+      to: email,
+      subject: `${nomeAcademia} — Crie sua senha de acesso`,
+      html,
+    });
+    if (error) return { ok: false, erro: error.message };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, erro: e.message };
+  }
+}
