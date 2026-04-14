@@ -28,6 +28,7 @@ if (Astro.request.method === 'POST') {
   const categoria_id = form.get('categoria_id') as string || null;
   const plano_id    = form.get('plano_id') as string || null;
 
+  const data_nascimento = (form.get('data_nascimento') as string) || null;
   const endereco_cep         = (form.get('endereco_cep') as string)?.trim() || null;
   const endereco_rua         = (form.get('endereco_rua') as string)?.trim() || null;
   const endereco_numero      = (form.get('endereco_numero') as string)?.trim() || null;
@@ -56,6 +57,7 @@ if (Astro.request.method === 'POST') {
       const { data: aluno, error: insErr } = await supabase.from('alunos').insert({
         academia_id: profile.academia_id,
         nome, email, telefone, cpf,
+        data_nascimento: data_nascimento || null,
         categoria_id: categoria_id || null,
         endereco_cep, endereco_rua, endereco_numero,
         endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado,
@@ -147,10 +149,17 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
           </div>
         </div>
 
-        <div>
-          <label class="block text-sm text-zinc-400 mb-1">CPF *</label>
-          <input name="cpf" id="campo-cpf" required placeholder="000.000.000-00" maxlength="14"
-            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">CPF *</label>
+            <input name="cpf" id="campo-cpf" required placeholder="000.000.000-00" maxlength="14"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Data de nascimento</label>
+            <input name="data_nascimento" type="date"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
         </div>
       </section>
 

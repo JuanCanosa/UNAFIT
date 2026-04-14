@@ -20,6 +20,7 @@ const hojeISO = new Date().toISOString().split('T')[0];
 // Stats rápidas (apenas para dono/professor)
 let totalAulasHoje = 0;
 let totalCheckins  = 0;
+let aniversariantes: { id: string; nome: string }[] = [];
 
 if (profile?.role !== 'aluno') {
   const { count: aulas } = await supabase
@@ -35,6 +36,19 @@ if (profile?.role !== 'aluno') {
     .eq('academia_id', profile!.academia_id!)
     .gte('feito_em', `${hojeISO}T00:00:00`);
   totalCheckins = checkins ?? 0;
+
+  // Aniversariantes do dia (compara mês e dia ignorando o ano)
+  const hoje = new Date();
+  const mes  = String(hoje.getMonth() + 1).padStart(2, '0');
+  const dia  = String(hoje.getDate()).padStart(2, '0');
+  const { data: anivData } = await supabase
+    .from('alunos')
+    .select('id, nome, data_nascimento')
+    .eq('academia_id', profile!.academia_id!)
+    .eq('status', 'ativo')
+    .not('data_nascimento', 'is', null)
+    .filter('data_nascimento', 'like', `%-${mes}-${dia}`);
+  aniversariantes = anivData ?? [];
 }
 
 const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
@@ -48,6 +62,26 @@ const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
       Olá, <span class="text-primary">{firstName}</span> 👋
     </h1>
   </div>
+
+  <!-- Alerta de aniversariantes -->
+  {aniversariantes.length > 0 && (
+    <div class="mb-6 bg-amber-900/30 border border-amber-600/50 rounded-xl px-5 py-4 flex items-start gap-4">
+      <span class="text-2xl shrink-0">🎂</span>
+      <div class="min-w-0">
+        <p class="text-amber-300 font-semibold text-sm">
+          {aniversariantes.length === 1 ? 'Aniversário hoje!' : `${aniversariantes.length} aniversários hoje!`}
+        </p>
+        <p class="text-amber-200/80 text-sm mt-0.5">
+          {aniversariantes.map((a, i) => (
+            <>
+              <a href={`/dashboard/alunos/${a.id}`} class="hover:text-amber-100 underline underline-offset-2">{a.nome}</a>
+              {i < aniversariantes.length - 1 ? ', ' : ''}
+            </>
+          ))}
+        </p>
+      </div>
+    </div>
+  )}
 
   <!-- Cards de stats (dono/professor) -->
   {profile?.role !== 'aluno' && (

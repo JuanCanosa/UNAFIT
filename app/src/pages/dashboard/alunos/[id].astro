@@ -28,6 +28,7 @@ if (Astro.request.method === 'POST') {
       nome:                 (form.get('nome') as string)?.trim(),
       email:                (form.get('email') as string)?.trim().toLowerCase(),
       telefone:             (form.get('telefone') as string)?.trim(),
+      data_nascimento:      (form.get('data_nascimento') as string) || null,
       categoria_id:         form.get('categoria_id') || null,
       status:               form.get('status') as string,
       endereco_cep:         form.get('endereco_cep') || null,
@@ -152,6 +153,12 @@ const statusPagCores: Record<string, string> = {
           <div class="space-y-1.5 text-sm text-zinc-400 border-t border-zinc-800 pt-3">
             <p><span class="text-zinc-600">Tel:</span> {aluno.telefone}</p>
             <p><span class="text-zinc-600">CPF:</span> {aluno.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')}</p>
+            {aluno.data_nascimento && (
+              <p>
+                <span class="text-zinc-600">Nasc.:</span>{' '}
+                {new Date(aluno.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+              </p>
+            )}
             {aluno.categorias_alunos && (
               <p class="flex items-center gap-1.5">
                 <span class="w-2 h-2 rounded-full" style={`background:${aluno.categorias_alunos.cor}`}></span>
@@ -316,6 +323,11 @@ const statusPagCores: Record<string, string> = {
             <input name="telefone" value={aluno.telefone} required
               class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
           </div>
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Data de nascimento</label>
+          <input name="data_nascimento" type="date" value={aluno.data_nascimento ?? ''}
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
