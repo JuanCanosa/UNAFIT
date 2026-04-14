@@ -1,6 +1,6 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { criarClienteAsaas } from '@/lib/asaas';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
@@ -23,6 +23,7 @@ if (Astro.request.method === 'POST') {
 
   const nome        = (form.get('nome') as string)?.trim();
   const email       = (form.get('email') as string)?.trim().toLowerCase();
+  const senha       = (form.get('senha') as string)?.trim();
   const telefone    = (form.get('telefone') as string)?.trim();
   const cpf         = (form.get('cpf') as string)?.replace(/\D/g, '');
   const categoria_id = form.get('categoria_id') as string || null;
@@ -37,8 +38,10 @@ if (Astro.request.method === 'POST') {
   const endereco_cidade      = (form.get('endereco_cidade') as string)?.trim() || null;
   const endereco_estado      = (form.get('endereco_estado') as string)?.trim() || null;
 
-  if (!nome || !email || !telefone || !cpf) {
-    formError = 'Preencha todos os campos obrigatórios.';
+  if (!nome || !email || !senha || !telefone || !cpf) {
+    formError = 'Preencha todos os campos obrigatórios (incluindo a senha).';
+  } else if (senha.length < 6) {
+    formError = 'A senha deve ter pelo menos 6 caracteres.';
   } else if (cpf.length !== 11) {
     formError = 'CPF deve ter 11 dígitos.';
   } else {
@@ -88,15 +91,26 @@ if (Astro.request.method === 'POST') {
           });
         }
 
-        // Envia email de convite via Supabase Auth (magic link / confirmação)
+        // Cria conta de acesso no Supabase Auth com senha definida pelo gestor
         try {
-          const { error: inviteErr } = await supabase.auth.admin
-            ? (await import('@/lib/supabase').then(m => m.createSupabaseAdminClient()))
-                .auth.inviteUserByEmail(email, {
-                  redirectTo: `${import.meta.env.SITE ?? process.env.SITE ?? 'https://unafit.com.br'}/portal/setup`,
-                  data: { aluno_id: aluno!.id, academia_id: profile.academia_id },
-                })
-            : { error: null };
+          const adminClient = createSupabaseAdminClient();
+          const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
+            email,
+            password: senha,
+            email_confirm: true,
+            user_metadata: { nome_completo: nome },
+          });
+          if (!authErr && authData?.user) {
+            // Cria/atualiza o perfil do aluno para acesso ao dashboard
+            await adminClient.from('profiles').upsert({
+              id: authData.user.id,
+              nome_completo: nome,
+              telefone,
+              role: 'aluno',
+              academia_id: profile.academia_id,
+              ativo: true,
+            }, { onConflict: 'id' });
+          }
         } catch (_) {}
 
         return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1`);
@@ -146,6 +160,16 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
             <label class="block text-sm text-zinc-400 mb-1">Celular *</label>
             <input name="telefone" id="campo-telefone" required placeholder="(99) 99999-9999"
               class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Senha de acesso *</label>
+            <input name="senha" type="password" required minlength="6" autocomplete="new-password"
+              placeholder="Mínimo 6 caracteres"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+            <p class="text-xs text-zinc-500 mt-1">O aluno usará esta senha para entrar no sistema.</p>
           </div>
         </div>
 
@@ -259,7 +283,7 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
       </div>
 
       <p class="text-xs text-zinc-500 text-center">
-        O aluno receberá um e-mail para confirmar o cadastro e criar sua senha de acesso.
+        O aluno poderá entrar em <strong class="text-zinc-400">unafit.com.br/login</strong> com o e-mail e senha cadastrados acima.
       </p>
     </form>
   </div>
