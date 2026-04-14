@@ -16,16 +16,15 @@ if (!profile || (profile.role !== 'dono' && profile.role !== 'saas_admin'))
   return Astro.redirect('/dashboard');
 
 let formError = '';
-let successMsg = '';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = form.get('action') as string;
 
   if (action === 'criar_plano' || action === 'editar_plano') {
-    const nome = (form.get('nome') as string)?.trim();
-    const descricao = (form.get('descricao') as string)?.trim();
-    const valor = parseFloat(form.get('valor') as string);
+    const nome          = (form.get('nome') as string)?.trim();
+    const descricao     = (form.get('descricao') as string)?.trim();
+    const valor         = parseFloat(form.get('valor') as string);
     const vencimento_dia = parseInt(form.get('vencimento_dia') as string);
 
     if (!nome || isNaN(valor) || isNaN(vencimento_dia)) {
@@ -47,17 +46,33 @@ if (Astro.request.method === 'POST') {
   }
 
   if (action === 'toggle_plano') {
-    const id = form.get('plano_id') as string;
+    const id   = form.get('plano_id') as string;
     const ativo = form.get('ativo') === 'true';
     await supabase.from('planos').update({ ativo: !ativo }).eq('id', id).eq('academia_id', profile.academia_id!);
     return Astro.redirect('/dashboard/planos');
   }
 
+  if (action === 'excluir_plano') {
+    const id = form.get('plano_id') as string;
+    // Verifica se há alunos ativos neste plano
+    const { count } = await supabase.from('aluno_planos')
+      .select('id', { count: 'exact', head: true })
+      .eq('plano_id', id).eq('status', 'ativo');
+    if ((count ?? 0) > 0) {
+      formError = `Não é possível excluir: ${count} aluno(s) ativo(s) neste plano.`;
+    } else {
+      const { error } = await supabase.from('planos').delete().eq('id', id).eq('academia_id', profile.academia_id!);
+      if (error) formError = error.message;
+      else return Astro.redirect('/dashboard/planos');
+    }
+  }
+
   if (action === 'criar_categoria' || action === 'editar_categoria') {
     const nome = (form.get('cat_nome') as string)?.trim();
-    const cor = (form.get('cat_cor') as string) || '#6366f1';
-    if (!nome) { formError = 'Nome da categoria é obrigatório.'; }
-    else if (action === 'criar_categoria') {
+    const cor  = (form.get('cat_cor') as string) || '#6366f1';
+    if (!nome) {
+      formError = 'Nome da categoria é obrigatório.';
+    } else if (action === 'criar_categoria') {
       const { error } = await supabase.from('categorias_alunos').insert({ academia_id: profile.academia_id, nome, cor });
       if (error) formError = error.message;
       else return Astro.redirect('/dashboard/planos?saved=1');
@@ -99,49 +114,72 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
       </div>
     )}
 
-    <!-- PLANOS -->
+    <!-- ── PLANOS ────────────────────────────────────────────────────────── -->
     <section>
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-xl font-bold text-white">Planos</h2>
-        <button onclick="document.getElementById('modal-plano').classList.remove('hidden')"
+        <div>
+          <h2 class="text-xl font-bold text-white">Planos</h2>
+          <p class="text-zinc-500 text-xs mt-0.5">{planos?.length ?? 0} plano{planos?.length !== 1 ? 's' : ''} cadastrado{planos?.length !== 1 ? 's' : ''}</p>
+        </div>
+        <button id="btn-novo-plano"
           class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg">
           + Novo Plano
         </button>
       </div>
 
       {!planos?.length ? (
-        <div class="border border-zinc-700 rounded-xl p-8 text-center text-zinc-500">
+        <div class="border border-zinc-700 rounded-xl p-10 text-center text-zinc-500">
           Nenhum plano cadastrado ainda.
         </div>
       ) : (
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {planos.map((p) => (
-            <div class={`border rounded-xl p-4 space-y-2 ${p.ativo ? 'border-zinc-700 bg-zinc-900' : 'border-zinc-800 bg-zinc-900/50 opacity-60'}`}>
+            <div class={`border rounded-xl p-4 space-y-3 ${p.ativo ? 'border-zinc-700 bg-zinc-900' : 'border-zinc-800 bg-zinc-900/40 opacity-70'}`}>
+              <!-- Header -->
               <div class="flex items-start justify-between gap-2">
-                <div>
-                  <p class="font-semibold text-white">{p.nome}</p>
-                  {p.descricao && <p class="text-xs text-zinc-400 mt-0.5">{p.descricao}</p>}
+                <div class="min-w-0">
+                  <p class="font-semibold text-white truncate">{p.nome}</p>
+                  {p.descricao && <p class="text-xs text-zinc-400 mt-0.5 line-clamp-2">{p.descricao}</p>}
                 </div>
-                <span class={`text-xs px-2 py-0.5 rounded-full ${p.ativo ? 'bg-green-900/50 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}>
+                <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full ${p.ativo ? 'bg-green-900/50 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}>
                   {p.ativo ? 'Ativo' : 'Inativo'}
                 </span>
               </div>
-              <div class="flex items-center justify-between text-sm">
-                <span class="text-green-400 font-bold">R$ {Number(p.valor).toFixed(2).replace('.', ',')}</span>
-                <span class="text-zinc-500">Vence dia {p.vencimento_dia}</span>
+
+              <!-- Valor / vencimento -->
+              <div class="flex items-center justify-between text-sm border-t border-zinc-800 pt-2">
+                <span class="text-green-400 font-bold text-base">
+                  R$ {Number(p.valor).toFixed(2).replace('.', ',')}
+                </span>
+                <span class="text-zinc-500 text-xs">Vence dia {p.vencimento_dia}</span>
               </div>
+
+              <!-- Ações -->
               <div class="flex gap-2 pt-1">
                 <button
-                  onclick={`abrirEditarPlano(${JSON.stringify(p)})`}
-                  class="flex-1 text-xs py-1 border border-zinc-600 hover:border-zinc-400 text-zinc-300 rounded-lg">
+                  class="btn-editar-plano flex-1 text-xs py-1.5 border border-zinc-600 hover:border-zinc-400 text-zinc-300 hover:text-white rounded-lg transition-colors"
+                  data-id={p.id}
+                  data-nome={p.nome}
+                  data-descricao={p.descricao ?? ''}
+                  data-valor={String(p.valor)}
+                  data-vencimento={String(p.vencimento_dia)}>
                   Editar
                 </button>
-                <form method="POST">
+                <form method="POST" class="contents">
                   <input type="hidden" name="action" value="toggle_plano" />
                   <input type="hidden" name="plano_id" value={p.id} />
                   <input type="hidden" name="ativo" value={String(p.ativo)} />
-                  <button class="text-xs py-1 px-3 border border-zinc-600 hover:border-zinc-400 text-zinc-400 rounded-lg">
+                  <button type="submit"
+                    class={`text-xs py-1.5 px-3 border rounded-lg transition-colors ${p.ativo ? 'border-yellow-800 text-yellow-500 hover:border-yellow-600' : 'border-zinc-600 text-zinc-400 hover:border-zinc-400'}`}>
                     {p.ativo ? 'Desativar' : 'Ativar'}
+                  </button>
+                </form>
+                <form method="POST" class="contents" onsubmit="return confirm('Excluir este plano? Esta ação não pode ser desfeita.')">
+                  <input type="hidden" name="action" value="excluir_plano" />
+                  <input type="hidden" name="plano_id" value={p.id} />
+                  <button type="submit"
+                    class="text-xs py-1.5 px-2 border border-red-900 text-red-500 hover:border-red-600 hover:text-red-400 rounded-lg transition-colors">
+                    Excluir
                   </button>
                 </form>
               </div>
@@ -151,35 +189,43 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
       )}
     </section>
 
-    <!-- CATEGORIAS -->
+    <!-- ── CATEGORIAS ────────────────────────────────────────────────────── -->
     <section>
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-xl font-bold text-white">Categorias de Alunos</h2>
-        <button onclick="document.getElementById('modal-categoria').classList.remove('hidden')"
+        <div>
+          <h2 class="text-xl font-bold text-white">Categorias de Alunos</h2>
+          <p class="text-zinc-500 text-xs mt-0.5">{categorias?.length ?? 0} categoria{categorias?.length !== 1 ? 's' : ''}</p>
+        </div>
+        <button id="btn-nova-categoria"
           class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg">
           + Nova Categoria
         </button>
       </div>
 
       {!categorias?.length ? (
-        <div class="border border-zinc-700 rounded-xl p-8 text-center text-zinc-500">
+        <div class="border border-zinc-700 rounded-xl p-10 text-center text-zinc-500">
           Nenhuma categoria cadastrada ainda.
         </div>
       ) : (
         <div class="flex flex-wrap gap-3">
           {categorias.map((c) => (
-            <div class="flex items-center gap-3 border border-zinc-700 bg-zinc-900 rounded-xl px-4 py-2">
-              <span class="w-3 h-3 rounded-full flex-shrink-0" style={`background:${c.cor}`}></span>
+            <div class="flex items-center gap-3 border border-zinc-700 bg-zinc-900 rounded-xl px-4 py-2.5">
+              <span class="w-3 h-3 rounded-full shrink-0" style={`background:${c.cor}`}></span>
               <span class="text-white text-sm font-medium">{c.nome}</span>
-              <div class="flex gap-1 ml-2">
-                <button onclick={`abrirEditarCategoria(${JSON.stringify(c)})`}
-                  class="text-xs text-zinc-400 hover:text-white px-2 py-0.5 border border-zinc-700 rounded">
+              <div class="flex gap-1 ml-1">
+                <button
+                  class="btn-editar-categoria text-xs text-zinc-400 hover:text-white px-2 py-0.5 border border-zinc-700 hover:border-zinc-500 rounded transition-colors"
+                  data-id={c.id}
+                  data-nome={c.nome}
+                  data-cor={c.cor ?? '#6366f1'}>
                   Editar
                 </button>
-                <form method="POST" onsubmit="return confirm('Excluir categoria?')">
+                <form method="POST" class="contents" onsubmit="return confirm('Excluir esta categoria?')">
                   <input type="hidden" name="action" value="excluir_categoria" />
                   <input type="hidden" name="cat_id" value={c.id} />
-                  <button class="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 border border-zinc-700 rounded">×</button>
+                  <button type="submit" class="text-xs text-red-500 hover:text-red-400 px-2 py-0.5 border border-zinc-700 hover:border-red-900 rounded transition-colors">
+                    ×
+                  </button>
                 </form>
               </div>
             </div>
@@ -189,41 +235,41 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
     </section>
   </div>
 
-  <!-- Modal Plano -->
+  <!-- ── Modal Plano ──────────────────────────────────────────────────────── -->
   <div id="modal-plano" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-md space-y-4">
       <div class="flex items-center justify-between">
         <h3 id="modal-plano-titulo" class="text-lg font-bold text-white">Novo Plano</h3>
-        <button onclick="fecharModalPlano()" class="text-zinc-400 hover:text-white text-xl">×</button>
+        <button id="btn-fechar-plano" type="button" class="text-zinc-400 hover:text-white text-2xl leading-none">×</button>
       </div>
       <form method="POST" class="space-y-3">
-        <input id="plano-action" type="hidden" name="action" value="criar_plano" />
-        <input id="plano-id" type="hidden" name="plano_id" />
+        <input id="plano-action"    type="hidden" name="action"       value="criar_plano" />
+        <input id="plano-id"        type="hidden" name="plano_id"     value="" />
         <div>
           <label class="block text-sm text-zinc-400 mb-1">Nome *</label>
-          <input id="plano-nome" name="nome" required
-            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          <input id="plano-nome" name="nome" required autocomplete="off"
+            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
         </div>
         <div>
           <label class="block text-sm text-zinc-400 mb-1">Descrição</label>
-          <input id="plano-descricao" name="descricao"
-            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          <input id="plano-descricao" name="descricao" autocomplete="off"
+            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-sm text-zinc-400 mb-1">Valor (R$) *</label>
             <input id="plano-valor" name="valor" type="number" min="0" step="0.01" required
-              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+              class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
           </div>
           <div>
             <label class="block text-sm text-zinc-400 mb-1">Dia vencimento *</label>
             <input id="plano-vencimento" name="vencimento_dia" type="number" min="1" max="28" required
-              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+              class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
           </div>
         </div>
         <div class="flex gap-2 pt-2">
-          <button type="button" onclick="fecharModalPlano()"
-            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button id="btn-cancelar-plano" type="button"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 hover:border-zinc-400 rounded-lg text-sm">Cancelar</button>
           <button type="submit"
             class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Salvar</button>
         </div>
@@ -231,29 +277,32 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
     </div>
   </div>
 
-  <!-- Modal Categoria -->
+  <!-- ── Modal Categoria ─────────────────────────────────────────────────── -->
   <div id="modal-categoria" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
       <div class="flex items-center justify-between">
         <h3 id="modal-cat-titulo" class="text-lg font-bold text-white">Nova Categoria</h3>
-        <button onclick="fecharModalCategoria()" class="text-zinc-400 hover:text-white text-xl">×</button>
+        <button id="btn-fechar-cat" type="button" class="text-zinc-400 hover:text-white text-2xl leading-none">×</button>
       </div>
       <form method="POST" class="space-y-3">
         <input id="cat-action" type="hidden" name="action" value="criar_categoria" />
-        <input id="cat-id" type="hidden" name="cat_id" />
+        <input id="cat-id"     type="hidden" name="cat_id" value="" />
         <div>
           <label class="block text-sm text-zinc-400 mb-1">Nome *</label>
-          <input id="cat-nome" name="cat_nome" required
-            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          <input id="cat-nome" name="cat_nome" required autocomplete="off"
+            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
         </div>
         <div>
           <label class="block text-sm text-zinc-400 mb-1">Cor</label>
-          <input id="cat-cor" name="cat_cor" type="color" value="#6366f1"
-            class="w-full h-10 bg-zinc-800 border border-zinc-700 rounded-lg px-2 cursor-pointer" />
+          <div class="flex items-center gap-3">
+            <input id="cat-cor" name="cat_cor" type="color" value="#6366f1"
+              class="w-12 h-10 bg-zinc-800 border border-zinc-700 rounded-lg px-1 cursor-pointer" />
+            <span class="text-zinc-400 text-sm">Clique para escolher a cor</span>
+          </div>
         </div>
         <div class="flex gap-2 pt-2">
-          <button type="button" onclick="fecharModalCategoria()"
-            class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
+          <button id="btn-cancelar-cat" type="button"
+            class="flex-1 py-2 border border-zinc-600 text-zinc-300 hover:border-zinc-400 rounded-lg text-sm">Cancelar</button>
           <button type="submit"
             class="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Salvar</button>
         </div>
@@ -263,39 +312,74 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
 </DashboardLayout>
 
 <script>
-function fecharModalPlano() {
-  document.getElementById('modal-plano')!.classList.add('hidden');
-  (document.getElementById('plano-action') as HTMLInputElement).value = 'criar_plano';
-  (document.getElementById('plano-id') as HTMLInputElement).value = '';
-  (document.getElementById('plano-nome') as HTMLInputElement).value = '';
-  (document.getElementById('plano-descricao') as HTMLInputElement).value = '';
-  (document.getElementById('plano-valor') as HTMLInputElement).value = '';
-  (document.getElementById('plano-vencimento') as HTMLInputElement).value = '';
-  document.getElementById('modal-plano-titulo')!.textContent = 'Novo Plano';
-}
-function abrirEditarPlano(p: any) {
-  (document.getElementById('plano-action') as HTMLInputElement).value = 'editar_plano';
-  (document.getElementById('plano-id') as HTMLInputElement).value = p.id;
-  (document.getElementById('plano-nome') as HTMLInputElement).value = p.nome;
-  (document.getElementById('plano-descricao') as HTMLInputElement).value = p.descricao || '';
-  (document.getElementById('plano-valor') as HTMLInputElement).value = p.valor;
-  (document.getElementById('plano-vencimento') as HTMLInputElement).value = p.vencimento_dia;
-  document.getElementById('modal-plano-titulo')!.textContent = 'Editar Plano';
-  document.getElementById('modal-plano')!.classList.remove('hidden');
-}
-function fecharModalCategoria() {
-  document.getElementById('modal-categoria')!.classList.add('hidden');
-  (document.getElementById('cat-action') as HTMLInputElement).value = 'criar_categoria';
-  (document.getElementById('cat-id') as HTMLInputElement).value = '';
-  (document.getElementById('cat-nome') as HTMLInputElement).value = '';
-  document.getElementById('modal-cat-titulo')!.textContent = 'Nova Categoria';
-}
-function abrirEditarCategoria(c: any) {
-  (document.getElementById('cat-action') as HTMLInputElement).value = 'editar_categoria';
-  (document.getElementById('cat-id') as HTMLInputElement).value = c.id;
-  (document.getElementById('cat-nome') as HTMLInputElement).value = c.nome;
-  (document.getElementById('cat-cor') as HTMLInputElement).value = c.cor || '#6366f1';
-  document.getElementById('modal-cat-titulo')!.textContent = 'Editar Categoria';
-  document.getElementById('modal-categoria')!.classList.remove('hidden');
-}
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function el<T extends HTMLElement>(id: string) { return document.getElementById(id) as T; }
+  function val(id: string, v: string) { (el<HTMLInputElement>(id)).value = v; }
+
+  // ── Modal Plano ──────────────────────────────────────────────────────────
+  function abrirModalPlano() { el('modal-plano').classList.remove('hidden'); }
+  function fecharModalPlano() {
+    el('modal-plano').classList.add('hidden');
+    val('plano-action', 'criar_plano');
+    val('plano-id', '');
+    val('plano-nome', '');
+    val('plano-descricao', '');
+    val('plano-valor', '');
+    val('plano-vencimento', '');
+    el('modal-plano-titulo').textContent = 'Novo Plano';
+  }
+
+  el('btn-novo-plano').addEventListener('click', abrirModalPlano);
+  el('btn-fechar-plano').addEventListener('click', fecharModalPlano);
+  el('btn-cancelar-plano').addEventListener('click', fecharModalPlano);
+
+  document.querySelectorAll('.btn-editar-plano').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const b = btn as HTMLButtonElement;
+      val('plano-action',    'editar_plano');
+      val('plano-id',        b.dataset.id!);
+      val('plano-nome',      b.dataset.nome!);
+      val('plano-descricao', b.dataset.descricao!);
+      val('plano-valor',     b.dataset.valor!);
+      val('plano-vencimento', b.dataset.vencimento!);
+      el('modal-plano-titulo').textContent = 'Editar Plano';
+      abrirModalPlano();
+    });
+  });
+
+  // ── Modal Categoria ──────────────────────────────────────────────────────
+  function abrirModalCategoria() { el('modal-categoria').classList.remove('hidden'); }
+  function fecharModalCategoria() {
+    el('modal-categoria').classList.add('hidden');
+    val('cat-action', 'criar_categoria');
+    val('cat-id', '');
+    val('cat-nome', '');
+    (el<HTMLInputElement>('cat-cor')).value = '#6366f1';
+    el('modal-cat-titulo').textContent = 'Nova Categoria';
+  }
+
+  el('btn-nova-categoria').addEventListener('click', abrirModalCategoria);
+  el('btn-fechar-cat').addEventListener('click', fecharModalCategoria);
+  el('btn-cancelar-cat').addEventListener('click', fecharModalCategoria);
+
+  document.querySelectorAll('.btn-editar-categoria').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const b = btn as HTMLButtonElement;
+      val('cat-action', 'editar_categoria');
+      val('cat-id',     b.dataset.id!);
+      val('cat-nome',   b.dataset.nome!);
+      (el<HTMLInputElement>('cat-cor')).value = b.dataset.cor || '#6366f1';
+      el('modal-cat-titulo').textContent = 'Editar Categoria';
+      abrirModalCategoria();
+    });
+  });
+
+  // Fecha ao clicar fora
+  ['modal-plano', 'modal-categoria'].forEach((id) => {
+    el(id).addEventListener('click', (e) => {
+      if (e.target === el(id)) {
+        id === 'modal-plano' ? fecharModalPlano() : fecharModalCategoria();
+      }
+    });
+  });
 </script>
