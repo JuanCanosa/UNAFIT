@@ -97,17 +97,22 @@ if (Astro.request.method === 'POST') {
           .from('academy-assets')
           .getPublicUrl(path);
 
-        await supabase.from('academias').update({ logo_url: publicUrl }).eq('id', profile.academia_id!);
-        academia!.logo_url = publicUrl;
-        sucesso = true;
+        const { error: dbErr } = await adminClient.from('academias').update({ logo_url: publicUrl }).eq('id', profile.academia_id!);
+        if (dbErr) {
+          erro = dbErr.message;
+        } else {
+          academia!.logo_url = publicUrl;
+          sucesso = true;
+        }
       }
     }
   }
 
   if (action === 'remover_logo' && isDono) {
-    await supabase.from('academias').update({ logo_url: null }).eq('id', profile.academia_id!);
-    academia!.logo_url = null;
-    sucesso = true;
+    const adminClient = createSupabaseAdminClient();
+    const { error: rmErr } = await adminClient.from('academias').update({ logo_url: null }).eq('id', profile.academia_id!);
+    if (rmErr) erro = rmErr.message;
+    else { academia!.logo_url = null; sucesso = true; }
   }
 }
 
