@@ -27,6 +27,12 @@ if (!profile || !profile.ativo) {
   return Astro.redirect('/login');
 }
 
+const { data: academia } = await supabase
+  .from('academias')
+  .select('nome, logo_url')
+  .eq('id', profile.academia_id!)
+  .single();
+
 const currentPath = new URL(Astro.request.url).pathname;
 ---
 
@@ -50,6 +56,8 @@ const currentPath = new URL(Astro.request.url).pathname;
       role={profile.role as UserRole}
       nomeCompleto={profile.nome_completo}
       currentPath={currentPath}
+      academiaLogoUrl={academia?.logo_url ?? null}
+      academiaNome={academia?.nome ?? 'UNAFIT'}
     />
 
     <!-- Layout principal (offset pelo sidebar no desktop) -->
@@ -68,7 +76,10 @@ const currentPath = new URL(Astro.request.url).pathname;
           </svg>
         </button>
         <!-- Logo mobile -->
-        <img src="/logo-unafit.png" alt="UNAFIT" class="h-7 w-auto" />
+        {academia?.logo_url
+          ? <img src={academia.logo_url} alt={academia.nome} class="h-7 w-auto max-w-[140px] object-contain" />
+          : <img src="/logo-unafit.png" alt="UNAFIT" class="h-7 w-auto" />
+        }
       </header>
 
       <!-- Conteúdo da página -->

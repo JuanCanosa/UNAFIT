@@ -5,9 +5,11 @@ interface Props {
   role: UserRole;
   nomeCompleto: string;
   currentPath: string;
+  academiaLogoUrl?: string | null;
+  academiaNome?: string;
 }
 
-const { role, nomeCompleto, currentPath } = Astro.props;
+const { role, nomeCompleto, currentPath, academiaLogoUrl, academiaNome = 'UNAFIT' } = Astro.props;
 
 // Primeiro nome para saudação
 const firstName = nomeCompleto.split(' ')[0];
@@ -134,9 +136,12 @@ const roleLabels: Record<UserRole, string> = {
          bg-[hsl(var(--sidebar-bg))] border-r border-[hsl(var(--sidebar-border))]
          transition-transform duration-300 lg:translate-x-0 -translate-x-full"
 >
-  <!-- Logo -->
+  <!-- Logo (white label) -->
   <div class="px-4 py-4 border-b border-[hsl(var(--sidebar-border))]">
-    <img src="/logo-unafit.png" alt="UNAFIT" class="w-full h-auto" />
+    {academiaLogoUrl
+      ? <img src={academiaLogoUrl} alt={academiaNome} class="w-full h-auto max-h-16 object-contain" />
+      : <img src="/logo-unafit.png" alt="UNAFIT" class="w-full h-auto" />
+    }
   </div>
 
   <!-- Nav -->
