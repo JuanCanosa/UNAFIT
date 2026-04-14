@@ -31,3 +31,14 @@ jobs:
           context: ./app
           push: true
           tags: ghcr.io/juancanosa/unafit:latest
+
+      - name: Deploy no VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 187.127.2.24
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /root
+            docker compose pull unafit
+            docker compose up -d unafit
