@@ -1,6 +1,6 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -71,10 +71,70 @@ if (Astro.request.method === 'POST') {
       .eq('id', pagamento_id).eq('academia_id', profile.academia_id!);
     return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
   }
+
+  // Busca aluno para as ações de acesso (precisa do email)
+  const { data: alunoAcesso } = await supabase
+    .from('alunos').select('nome, email, telefone').eq('id', alunoId!).eq('academia_id', profile.academia_id!).single();
+
+  if ((action === 'definir_senha' || action === 'enviar_reset') && alunoAcesso && (profile.role === 'dono' || profile.role === 'saas_admin')) {
+    const adminClient = createSupabaseAdminClient();
+
+    // Encontra auth user pelo email
+    const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
+    const authUser = users.find(u => u.email?.toLowerCase() === alunoAcesso.email.toLowerCase());
+
+    if (action === 'definir_senha') {
+      const nova_senha = (form.get('nova_senha') as string)?.trim();
+      if (!nova_senha || nova_senha.length < 6) {
+        formError = 'A senha deve ter pelo menos 6 caracteres.';
+      } else if (authUser) {
+        // Usuário existe — atualiza senha
+        const { error } = await adminClient.auth.admin.updateUserById(authUser.id, { password: nova_senha });
+        if (error) formError = error.message;
+        else return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+      } else {
+        // Usuário não existe ainda — cria com senha
+        const { data: newUser, error: cErr } = await adminClient.auth.admin.createUser({
+          email: alunoAcesso.email,
+          password: nova_senha,
+          email_confirm: true,
+          user_metadata: { nome_completo: alunoAcesso.nome },
+        });
+        if (cErr) { formError = cErr.message; }
+        else if (newUser?.user) {
+          await adminClient.from('profiles').upsert({
+            id: newUser.user.id,
+            nome_completo: alunoAcesso.nome,
+            telefone: alunoAcesso.telefone,
+            role: 'aluno',
+            academia_id: profile.academia_id,
+            ativo: true,
+          }, { onConflict: 'id' });
+          // Ativa o aluno
+          await supabase.from('alunos').update({ status: 'ativo' }).eq('id', alunoId!);
+          return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+        }
+      }
+    }
+
+    if (action === 'enviar_reset') {
+      if (!authUser) {
+        formError = 'Este aluno ainda não tem conta de acesso. Defina uma senha primeiro.';
+      } else {
+        const siteUrl = import.meta.env.SITE ?? process.env.SITE ?? 'https://unafit.com.br';
+        const { error } = await adminClient.auth.resetPasswordForEmail(alunoAcesso.email, {
+          redirectTo: `${siteUrl}/portal/reset-password`,
+        });
+        if (error) formError = error.message;
+        else return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1`);
+      }
+    }
+  }
 }
 
-const savedParam = new URL(Astro.request.url).searchParams.get('saved');
-const novoParam  = new URL(Astro.request.url).searchParams.get('novo');
+const savedParam      = new URL(Astro.request.url).searchParams.get('saved');
+const novoParam       = new URL(Astro.request.url).searchParams.get('novo');
+const resetEnviadoParam = new URL(Astro.request.url).searchParams.get('reset_enviado');
 
 // Busca dados do aluno
 const { data: aluno } = await supabase
@@ -125,7 +185,12 @@ const statusPagCores: Record<string, string> = {
 
     {(savedParam || novoParam) && (
       <div class="bg-green-900/40 border border-green-600 text-green-300 px-4 py-3 rounded-lg text-sm">
-        {novoParam ? 'Aluno cadastrado! E-mail de confirmação enviado.' : 'Alterações salvas com sucesso!'}
+        {novoParam ? 'Aluno cadastrado com sucesso!' : 'Alterações salvas com sucesso!'}
+      </div>
+    )}
+    {resetEnviadoParam && (
+      <div class="bg-blue-900/40 border border-blue-600 text-blue-300 px-4 py-3 rounded-lg text-sm">
+        ✉ E-mail de redefinição de senha enviado para {aluno.email}.
       </div>
     )}
     {formError && (
@@ -182,6 +247,41 @@ const statusPagCores: Record<string, string> = {
             </button>
           )}
         </div>
+
+        <!-- Acesso ao sistema (só dono) -->
+        {(profile.role === 'dono' || profile.role === 'saas_admin') && (
+          <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+            <h2 class="text-sm font-semibold text-zinc-300">Acesso ao Sistema</h2>
+
+            <!-- Definir/redefinir senha -->
+            <form method="POST" class="space-y-2">
+              <input type="hidden" name="action" value="definir_senha" />
+              <label class="block text-xs text-zinc-400">Definir senha do aluno</label>
+              <div class="flex gap-2">
+                <input name="nova_senha" type="password" minlength="6" required
+                  placeholder="Nova senha (mín. 6 car.)"
+                  class="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+                <button type="submit"
+                  class="px-3 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium rounded-lg whitespace-nowrap">
+                  Salvar
+                </button>
+              </div>
+              <p class="text-xs text-zinc-600">O aluno entra em unafit.com.br/login com este e-mail e senha.</p>
+            </form>
+
+            <!-- Enviar email de redefinição -->
+            <div class="border-t border-zinc-800 pt-3">
+              <p class="text-xs text-zinc-400 mb-2">Ou envie um link para o aluno criar a própria senha:</p>
+              <form method="POST">
+                <input type="hidden" name="action" value="enviar_reset" />
+                <button type="submit"
+                  class="w-full py-2 border border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-200 text-xs rounded-lg transition-colors">
+                  ✉ Enviar e-mail de redefinição para {aluno.email}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
 
         <!-- Plano atual -->
         <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
