@@ -97,7 +97,7 @@ const scoreLabels: Record<string, string> = {
   rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
 };
 
-const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 
 // Agrupa exercícios por grupo
 const exsByGrupo: Record<string, any[]> = {};

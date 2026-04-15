@@ -146,7 +146,7 @@ const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
       </>
     )}
 
-    {(profile?.role === 'professor' || profile?.role === 'dono') && (
+    {(profile?.role === 'colaborador' || profile?.role === 'dono') && (
       <>
         <a href="/dashboard/wods" class="group block">
           <Card class="hover:border-primary/40 transition-colors cursor-pointer">

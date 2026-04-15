@@ -18,7 +18,7 @@ const { data: profile } = await supabase
 
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
-const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 
 const url = new URL(Astro.request.url);
 const mesParam = url.searchParams.get('mes');

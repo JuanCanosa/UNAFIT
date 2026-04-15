@@ -70,7 +70,7 @@ const { data: wods } = await supabase
 
 const wod      = aula.wods as any;
 const checkins = Array.isArray(aula.checkins) ? aula.checkins.length : 0;
-const canEdit    = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const canEdit    = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 const hojeISO    = new Date().toISOString().split('T')[0];
 const isHoje     = aula.data_aula === hojeISO;
 const savedParam = new URL(Astro.request.url).searchParams.get('saved');

@@ -13,7 +13,7 @@ const { data: profile } = await supabase
   .eq('id', user.id)
   .single();
 
-if (!profile || (profile.role !== 'dono' && profile.role !== 'professor' && profile.role !== 'saas_admin'))
+if (!profile || (profile.role !== 'dono' && profile.role !== 'colaborador' && profile.role !== 'saas_admin'))
   return Astro.redirect('/dashboard');
 
 let formError = '';

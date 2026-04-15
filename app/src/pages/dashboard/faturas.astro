@@ -1,0 +1,133 @@
+---
+/**
+ * /dashboard/faturas — Faturas do aluno (visão do próprio aluno).
+ * Diferente de /dashboard/financeiro/faturas que é para dono/saas_admin.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+// Busca o registro do aluno pelo user id (via email match ou profile)
+const { data: aluno } = await supabase
+  .from('alunos')
+  .select('id, nome, email')
+  .eq('academia_id', profile.academia_id!)
+  .eq('email', user.email!)
+  .maybeSingle();
+
+// Busca faturas do aluno
+const { data: pagamentos } = aluno
+  ? await supabase
+      .from('pagamentos')
+      .select('id, valor, status, data_vencimento, data_pagamento, descricao, link_pagamento, mes_referencia')
+      .eq('aluno_id', aluno.id)
+      .order('data_vencimento', { ascending: false })
+      .limit(24)
+  : { data: [] };
+
+const statusConfig: Record<string, { label: string; variant: 'success' | 'warning' | 'destructive' | 'muted' }> = {
+  pago:      { label: 'Pago',      variant: 'success' },
+  pendente:  { label: 'Pendente',  variant: 'warning' },
+  vencido:   { label: 'Vencido',   variant: 'destructive' },
+  cancelado: { label: 'Cancelado', variant: 'muted' },
+};
+
+const totalDevido = pagamentos?.filter(p => p.status === 'pendente' || p.status === 'vencido')
+  .reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
+const totalPago = pagamentos?.filter(p => p.status === 'pago')
+  .reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
+---
+
+<DashboardLayout title="Minhas Faturas">
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-foreground">Minhas Faturas</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Histórico de pagamentos e cobranças</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="grid grid-cols-2 gap-4 mb-6">
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Em aberto</p>
+      <p class="mt-1 text-2xl font-bold text-destructive">
+        {totalDevido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+      </p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total pago</p>
+      <p class="mt-1 text-2xl font-bold text-primary">
+        {totalPago.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+      </p>
+    </Card>
+  </div>
+
+  <Card>
+    {!pagamentos || pagamentos.length === 0 ? (
+      <p class="py-10 text-center text-sm text-muted-foreground">
+        Nenhuma fatura encontrada.
+      </p>
+    ) : (
+      <div class="overflow-x-auto -mx-5">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Descrição</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Vencimento</th>
+              <th class="px-5 pb-3 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Valor</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagamentos.map((p: any) => {
+              const cfg = statusConfig[p.status] ?? { label: p.status, variant: 'muted' as const };
+              return (
+                <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                  <td class="px-5 py-3 text-foreground">
+                    {p.descricao ?? (p.mes_referencia
+                      ? `Mensalidade ${new Date(p.mes_referencia + '-01T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}`
+                      : 'Mensalidade')}
+                  </td>
+                  <td class="px-5 py-3 text-muted-foreground hidden sm:table-cell">
+                    {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                  </td>
+                  <td class="px-5 py-3 text-right font-semibold text-foreground">
+                    {Number(p.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </td>
+                  <td class="px-5 py-3">
+                    <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                  </td>
+                  <td class="px-5 py-3">
+                    {p.link_pagamento && p.status !== 'pago' && (
+                      <a href={p.link_pagamento} target="_blank" rel="noopener noreferrer"
+                        class="text-xs font-semibold text-primary hover:text-primary/80">
+                        Pagar →
+                      </a>
+                    )}
+                    {p.data_pagamento && (
+                      <span class="text-xs text-muted-foreground">
+                        Pago em {new Date(p.data_pagamento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </Card>
+</DashboardLayout>

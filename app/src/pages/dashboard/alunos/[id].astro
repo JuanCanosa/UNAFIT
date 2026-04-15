@@ -16,7 +16,7 @@ const { data: profile } = await supabase
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
 const { id: alunoId } = Astro.params;
-const canEdit = profile.role === 'dono' || profile.role === 'professor' || profile.role === 'saas_admin';
+const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 
 let formError = '';
 

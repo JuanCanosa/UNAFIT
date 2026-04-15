@@ -1,7 +1,7 @@
 // Tipos gerados manualmente — rode `supabase gen types typescript` para atualizar
 // após aplicar a migration no Supabase.
 
-export type UserRole = 'saas_admin' | 'dono' | 'professor' | 'aluno';
+export type UserRole = 'saas_admin' | 'dono' | 'colaborador' | 'aluno';
 export type FaturaStatus = 'pendente' | 'paga' | 'vencida' | 'cancelada';
 export type ScoreType = 'tempo' | 'reps' | 'carga' | 'rounds_reps' | 'pass_fail';
 

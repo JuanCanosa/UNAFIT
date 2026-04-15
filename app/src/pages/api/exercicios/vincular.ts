@@ -18,7 +18,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     .eq('id', user.id)
     .single();
 
-  if (!profile || (profile.role !== 'dono' && profile.role !== 'professor' && profile.role !== 'saas_admin')) {
+  if (!profile || (profile.role !== 'dono' && profile.role !== 'colaborador' && profile.role !== 'saas_admin')) {
     return new Response(JSON.stringify({ error: 'Sem permissão' }), { status: 403 });
   }
 

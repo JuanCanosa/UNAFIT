@@ -1,0 +1,144 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, nome_completo')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+// Busca checkins do aluno com dados da aula e WOD
+const { data: checkins } = await supabase
+  .from('checkins')
+  .select(`
+    id, created_at,
+    aulas_agenda(id, data_aula, horario_inicio, modalidade,
+      wods(id, nome)
+    )
+  `)
+  .eq('aluno_id', user.id)
+  .order('created_at', { ascending: false })
+  .limit(50);
+
+// Busca resultados/scores registrados
+const { data: resultados } = await supabase
+  .from('resultados_performance')
+  .select(`
+    id, resultado, observacao, created_at,
+    aulas_agenda(id, data_aula, modalidade,
+      wods(id, nome)
+    )
+  `)
+  .eq('aluno_id', user.id)
+  .order('created_at', { ascending: false })
+  .limit(50);
+
+const totalCheckins = checkins?.length ?? 0;
+const totalResultados = resultados?.length ?? 0;
+
+// Frequência: checkins nos últimos 30 dias
+const trinta = new Date();
+trinta.setDate(trinta.getDate() - 30);
+const checkinsRecentes = checkins?.filter(c => new Date(c.created_at) >= trinta).length ?? 0;
+---
+
+<DashboardLayout title="Meus Resultados">
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-foreground">Meus Resultados</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Histórico de treinos e performance</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Check-ins totais</p>
+      <p class="mt-1 text-3xl font-bold text-primary">{totalCheckins}</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Últimos 30 dias</p>
+      <p class="mt-1 text-3xl font-bold text-foreground">{checkinsRecentes}</p>
+    </Card>
+    <Card class="col-span-2 sm:col-span-1">
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Scores registrados</p>
+      <p class="mt-1 text-3xl font-bold text-foreground">{totalResultados}</p>
+    </Card>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+
+    <!-- Histórico de Check-ins -->
+    <Card>
+      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Histórico de Treinos</h2>
+      {!checkins || checkins.length === 0 ? (
+        <p class="py-6 text-center text-sm text-muted-foreground">Nenhum treino registrado ainda.</p>
+      ) : (
+        <div class="space-y-3">
+          {checkins.slice(0, 20).map((c: any) => {
+            const aula = c.aulas_agenda;
+            const wod  = aula?.wods;
+            return (
+              <div class="flex items-start gap-3 border-b border-border/50 pb-3 last:border-0 last:pb-0">
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs font-bold">
+                  {aula ? new Date(aula.data_aula + 'T12:00:00').getDate() : '—'}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-foreground truncate">
+                    {wod?.nome ?? aula?.modalidade ?? 'Aula'}
+                  </p>
+                  <p class="text-xs text-muted-foreground">
+                    {aula
+                      ? new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })
+                      : new Date(c.created_at).toLocaleDateString('pt-BR')}
+                    {aula?.horario_inicio ? ` · ${aula.horario_inicio.slice(0,5)}` : ''}
+                  </p>
+                </div>
+                <span class="text-xs text-green-400 font-medium shrink-0">✓</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+
+    <!-- Scores / Performance -->
+    <Card>
+      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Scores Registrados</h2>
+      {!resultados || resultados.length === 0 ? (
+        <p class="py-6 text-center text-sm text-muted-foreground">Nenhum score registrado ainda.</p>
+      ) : (
+        <div class="space-y-3">
+          {resultados.slice(0, 20).map((r: any) => {
+            const aula = r.aulas_agenda;
+            const wod  = aula?.wods;
+            return (
+              <div class="flex items-start gap-3 border-b border-border/50 pb-3 last:border-0 last:pb-0">
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground text-xs font-bold">
+                  {aula ? new Date(aula.data_aula + 'T12:00:00').getDate() : '—'}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-foreground truncate">
+                    {wod?.nome ?? aula?.modalidade ?? 'WOD'}
+                  </p>
+                  <p class="text-xs text-primary font-semibold">{r.resultado}</p>
+                  {r.observacao && <p class="text-xs text-muted-foreground truncate">{r.observacao}</p>}
+                </div>
+                <span class="text-xs text-muted-foreground shrink-0">
+                  {new Date(r.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+
+  </div>
+</DashboardLayout>
