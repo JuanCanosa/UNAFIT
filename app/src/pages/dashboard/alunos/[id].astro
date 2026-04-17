@@ -123,11 +123,11 @@ if (Astro.request.method === 'POST') {
         formError = 'Este aluno ainda não tem conta de acesso. Defina uma senha primeiro.';
       } else {
         // Gera link de recuperação com token válido por 24h
-        const siteUrl = import.meta.env.SITE ?? process.env.SITE ?? 'https://unafit.com.br';
+        const siteUrl = (process.env.SITE ?? 'https://unafit.com.br').replace(/\/$/, '');
         const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
           type: 'recovery',
           email: alunoAcesso.email,
-          options: { redirectTo: `${siteUrl}/login` },
+          options: { redirectTo: `${siteUrl}/portal/reset-password` },
         });
 
         if (linkErr || !linkData?.properties?.action_link) {
