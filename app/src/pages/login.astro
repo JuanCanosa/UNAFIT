@@ -12,11 +12,17 @@ let errorMessage = '';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const email    = form.get('email')?.toString().trim()    ?? '';
-  const password = form.get('password')?.toString()        ?? '';
+  const rawInput = form.get('email')?.toString().trim() ?? '';
+  const password  = form.get('password')?.toString() ?? '';
 
-  if (!email || !password) {
-    errorMessage = 'Preencha e-mail e senha.';
+  // Detecta se é CPF (só dígitos, 11 caracteres) e converte para email fictício
+  const cpfDigits = rawInput.replace(/\D/g, '');
+  const email = cpfDigits.length === 11 && /^\d+$/.test(cpfDigits)
+    ? `${cpfDigits}@aluno.unafit.com.br`
+    : rawInput;
+
+  if (!rawInput || !password) {
+    errorMessage = 'Preencha e-mail (ou CPF) e senha.';
   } else {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -81,7 +87,7 @@ if (Astro.request.method === 'POST') {
           <!-- E-mail -->
           <div class="space-y-1.5">
             <label for="email" class="text-sm font-medium text-foreground">
-              E-mail
+              E-mail ou CPF
             </label>
             <div class="relative">
               <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -92,10 +98,10 @@ if (Astro.request.method === 'POST') {
               <input
                 id="email"
                 name="email"
-                type="email"
+                type="text"
                 autocomplete="email"
                 required
-                placeholder="seu@email.com"
+                placeholder="seu@email.com ou 000.000.000-00"
                 class="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground
                        focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-colors"
               />

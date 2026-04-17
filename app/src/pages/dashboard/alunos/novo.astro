@@ -38,18 +38,22 @@ if (Astro.request.method === 'POST') {
   const endereco_cidade      = (form.get('endereco_cidade') as string)?.trim() || null;
   const endereco_estado      = (form.get('endereco_estado') as string)?.trim() || null;
 
-  if (!nome || !email || !senha || !telefone || !cpf) {
-    formError = 'Preencha todos os campos obrigatórios (incluindo a senha).';
+  // Email é opcional — se vazio, usa CPF como identificador de login
+  const authEmail = email || `${cpf}@aluno.unafit.com.br`;
+
+  if (!nome || !senha || !telefone || !cpf) {
+    formError = 'Preencha todos os campos obrigatórios.';
   } else if (senha.length < 6) {
     formError = 'A senha deve ter pelo menos 6 caracteres.';
   } else if (cpf.length !== 11) {
     formError = 'CPF deve ter 11 dígitos.';
   } else {
-    // Verifica duplicidade de CPF e email na academia
+    // Verifica duplicidade de CPF (e email se informado)
+    const orFilter = email ? `cpf.eq.${cpf},email.eq.${email}` : `cpf.eq.${cpf}`;
     const { data: dup } = await supabase.from('alunos')
       .select('id, cpf, email')
       .eq('academia_id', profile.academia_id!)
-      .or(`cpf.eq.${cpf},email.eq.${email}`)
+      .or(orFilter)
       .limit(1)
       .single();
 
@@ -95,7 +99,7 @@ if (Astro.request.method === 'POST') {
         try {
           const adminClient = createSupabaseAdminClient();
           const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
-            email,
+            email: authEmail,
             password: senha,
             email_confirm: true,
             user_metadata: { nome_completo: nome },
@@ -152,9 +156,10 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm text-zinc-400 mb-1">E-mail *</label>
-            <input name="email" type="email" required autocomplete="off"
+            <label class="block text-sm text-zinc-400 mb-1">E-mail <span class="text-zinc-600">(opcional)</span></label>
+            <input name="email" type="email" autocomplete="off" placeholder="aluno@email.com"
               class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none" />
+            <p class="text-xs text-zinc-600 mt-1">Sem e-mail, o aluno entra com CPF.</p>
           </div>
           <div>
             <label class="block text-sm text-zinc-400 mb-1">Celular *</label>
@@ -283,7 +288,7 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
       </div>
 
       <p class="text-xs text-zinc-500 text-center">
-        O aluno poderá entrar em <strong class="text-zinc-400">unafit.com.br/login</strong> com o e-mail e senha cadastrados acima.
+        O aluno acessa em <strong class="text-zinc-400">unafit.com.br/login</strong> com e-mail (ou CPF) + senha.
       </p>
     </form>
   </div>
