@@ -9,6 +9,9 @@ if (user) return Astro.redirect('/dashboard');
 
 // ── Processa POST do formulário ────────────────────────────────────────────────
 let errorMessage = '';
+const successMessage = Astro.url.searchParams.get('msg') === 'senha_alterada'
+  ? 'Senha alterada com sucesso! Entre com a nova senha.'
+  : '';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -70,6 +73,16 @@ if (Astro.request.method === 'POST') {
 
       <!-- Formulário -->
       <div class="rounded-2xl border border-border bg-card p-6 shadow-xl card-shine">
+
+        <!-- Sucesso -->
+        {successMessage && (
+          <div class="mb-4 flex items-center gap-2.5 rounded-lg border border-green-600/40 bg-green-900/20 px-3.5 py-3 text-sm text-green-400">
+            <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            {successMessage}
+          </div>
+        )}
 
         <!-- Erro -->
         {errorMessage && (

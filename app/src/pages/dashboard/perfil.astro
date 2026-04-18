@@ -165,8 +165,12 @@ if (Astro.request.method === 'POST') {
         erro = 'Senha atual incorreta.';
       } else {
         const { error: updErr } = await adminClient.auth.admin.updateUserById(user.id, { password: nova_senha });
-        if (updErr) erro = updErr.message;
-        else sucesso = 'Senha alterada com sucesso!';
+        if (updErr) {
+          erro = updErr.message;
+        } else {
+          // Senha alterada invalida a sessão — redireciona para login com aviso
+          return Astro.redirect('/login?msg=senha_alterada');
+        }
       }
     }
   }
