@@ -114,7 +114,7 @@ if (Astro.request.method === 'POST') {
                 type="text"
                 autocomplete="email"
                 required
-                placeholder="seu@email.com ou 000.000.000-00"
+                placeholder="seu@email.com ou CPF"
                 class="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground
                        focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-colors"
               />
@@ -212,6 +212,23 @@ if (Astro.request.method === 'POST') {
 </html>
 
 <script>
+  // Máscara CPF no campo de email/CPF
+  const emailInput = document.getElementById('email') as HTMLInputElement;
+  emailInput.addEventListener('input', () => {
+    const val = emailInput.value;
+    const digits = val.replace(/\D/g, '');
+    // Só aplica máscara se parecer CPF (só dígitos, sem @)
+    if (!val.includes('@') && digits.length > 0 && /^\d+$/.test(val.replace(/[.\-]/g, ''))) {
+      if (digits.length <= 11) {
+        let masked = digits;
+        if (digits.length > 9) masked = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+        else if (digits.length > 6) masked = digits.replace(/(\d{3})(\d{3})(\d{1,3})/, '$1.$2.$3');
+        else if (digits.length > 3) masked = digits.replace(/(\d{3})(\d{1,3})/, '$1.$2');
+        emailInput.value = masked;
+      }
+    }
+  });
+
   // Toggle mostrar/ocultar senha
   const toggleBtn  = document.getElementById('toggle-password')!;
   const passwordInput = document.getElementById('password') as HTMLInputElement;
