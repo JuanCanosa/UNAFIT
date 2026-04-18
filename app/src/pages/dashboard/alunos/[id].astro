@@ -1,7 +1,7 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
-import { enviarEmailResetSenha, emailConfigurado } from '@/lib/email';
+import { enviarEmailResetSenha, enviarEmailAtualizacaoCadastro, emailConfigurado } from '@/lib/email';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -25,25 +25,95 @@ if (Astro.request.method === 'POST') {
   const action = form.get('action') as string;
 
   if (action === 'editar_aluno') {
-    const campos: Record<string, any> = {
-      nome:                 (form.get('nome') as string)?.trim(),
-      email:                (form.get('email') as string)?.trim().toLowerCase(),
-      telefone:             (form.get('telefone') as string)?.trim(),
-      data_nascimento:      (form.get('data_nascimento') as string) || null,
-      categoria_id:         form.get('categoria_id') || null,
-      status:               form.get('status') as string,
-      endereco_cep:         form.get('endereco_cep') || null,
-      endereco_rua:         form.get('endereco_rua') || null,
-      endereco_numero:      form.get('endereco_numero') || null,
-      endereco_complemento: form.get('endereco_complemento') || null,
-      endereco_bairro:      form.get('endereco_bairro') || null,
-      endereco_cidade:      form.get('endereco_cidade') || null,
-      endereco_estado:      form.get('endereco_estado') || null,
-    };
-    const { error } = await supabase.from('alunos').update(campos)
-      .eq('id', alunoId!).eq('academia_id', profile.academia_id!);
-    if (error) formError = error.message;
-    else return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+    const adminClient = createSupabaseAdminClient();
+
+    // Busca dados atuais ANTES de atualizar (para detectar o que mudou)
+    const { data: alunoAtual } = await adminClient.from('alunos')
+      .select('nome, email, cpf, academia_id')
+      .eq('id', alunoId!).eq('academia_id', profile.academia_id!)
+      .single();
+
+    const { data: academiaAtual } = await adminClient.from('academias')
+      .select('nome, logo_url').eq('id', profile.academia_id!).single();
+
+    const novoNome   = (form.get('nome') as string)?.trim();
+    const novoEmail  = (form.get('email') as string)?.trim().toLowerCase() || null;
+    const novoCpfRaw = (form.get('cpf') as string)?.replace(/\D/g, '') ?? alunoAtual?.cpf ?? '';
+    const novoCpf    = novoCpfRaw.length === 11 ? novoCpfRaw : (alunoAtual?.cpf ?? '');
+
+    if (novoCpfRaw && novoCpfRaw.length !== 11) {
+      formError = 'CPF inválido — deve ter 11 dígitos.';
+    } else {
+      const campos: Record<string, any> = {
+        nome:                 novoNome,
+        email:                novoEmail,
+        cpf:                  novoCpf,
+        telefone:             (form.get('telefone') as string)?.trim(),
+        data_nascimento:      (form.get('data_nascimento') as string) || null,
+        categoria_id:         form.get('categoria_id') || null,
+        status:               form.get('status') as string,
+        endereco_cep:         form.get('endereco_cep') || null,
+        endereco_rua:         form.get('endereco_rua') || null,
+        endereco_numero:      form.get('endereco_numero') || null,
+        endereco_complemento: form.get('endereco_complemento') || null,
+        endereco_bairro:      form.get('endereco_bairro') || null,
+        endereco_cidade:      form.get('endereco_cidade') || null,
+        endereco_estado:      form.get('endereco_estado') || null,
+      };
+
+      const { error } = await supabase.from('alunos').update(campos)
+        .eq('id', alunoId!).eq('academia_id', profile.academia_id!);
+
+      if (error) {
+        formError = error.message;
+      } else {
+        // ── Detecta mudanças em CPF e e-mail ──────────────────────────────────
+        const emailMudou = novoEmail !== alunoAtual?.email;
+        const cpfMudou   = novoCpf   !== alunoAtual?.cpf;
+        const alteracoes: { campo: string; novoValor: string }[] = [];
+
+        if (cpfMudou) alteracoes.push({
+          campo: 'CPF',
+          novoValor: novoCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4'),
+        });
+        if (emailMudou && novoEmail) alteracoes.push({ campo: 'E-mail', novoValor: novoEmail });
+
+        if ((cpfMudou || emailMudou) && alunoAtual) {
+          // Busca o profile_id do aluno para atualizar o auth
+          const { data: vinculo } = await adminClient.from('aluno_academias')
+            .select('profile_id').eq('aluno_id', alunoId!).maybeSingle();
+          const profileId = vinculo?.profile_id;
+
+          if (profileId) {
+            if (emailMudou && novoEmail) {
+              // Atualiza o email de autenticação
+              await adminClient.auth.admin.updateUserById(profileId, {
+                email: novoEmail, email_confirm: true,
+              });
+            } else if (cpfMudou && !alunoAtual.email) {
+              // Aluno usa CPF como login — atualiza o email fictício
+              await adminClient.auth.admin.updateUserById(profileId, {
+                email: `${novoCpf}@aluno.unafit.com.br`, email_confirm: true,
+              });
+            }
+          }
+
+          // ── Envia notificação por e-mail se houver email real ────────────────
+          const emailNotificacao = novoEmail || alunoAtual.email;
+          if (emailNotificacao && alteracoes.length > 0 && emailConfigurado()) {
+            await enviarEmailAtualizacaoCadastro({
+              email: emailNotificacao,
+              nomeAluno: novoNome,
+              nomeAcademia: academiaAtual?.nome ?? 'Academia',
+              logoUrl: academiaAtual?.logo_url ?? null,
+              alteracoes,
+            });
+          }
+        }
+
+        return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+      }
+    }
   }
 
   if (action === 'adicionar_plano') {
@@ -475,8 +545,9 @@ const statusPagCores: Record<string, string> = {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-sm text-zinc-400 mb-1">CPF</label>
-            <input type="text" value={cpfMascarado} disabled
-              class="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-400 text-sm cursor-not-allowed" />
+            <input id="modal-cpf" name="cpf" type="text" value={cpfMascarado}
+              maxlength="14" placeholder="000.000.000-00"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
           </div>
           <div>
             <label class="block text-sm text-zinc-400 mb-1">Telefone *</label>
@@ -593,3 +664,16 @@ const statusPagCores: Record<string, string> = {
     </div>
   </div>
 </DashboardLayout>
+
+<script>
+  // Máscara CPF no modal de edição
+  const cpfInput = document.getElementById('modal-cpf') as HTMLInputElement | null;
+  cpfInput?.addEventListener('input', () => {
+    const digits = cpfInput.value.replace(/\D/g, '').slice(0, 11);
+    let masked = digits;
+    if (digits.length > 9) masked = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+    else if (digits.length > 6) masked = digits.replace(/(\d{3})(\d{3})(\d{1,3})/, '$1.$2.$3');
+    else if (digits.length > 3) masked = digits.replace(/(\d{3})(\d{1,3})/, '$1.$2');
+    cpfInput.value = masked;
+  });
+</script>

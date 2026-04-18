@@ -148,3 +148,69 @@ export async function enviarEmailResetSenha(params: {
     return { ok: false, erro: e.message };
   }
 }
+
+// ─── Email de atualização de cadastro ─────────────────────────────────────────
+
+export async function enviarEmailAtualizacaoCadastro(params: {
+  email: string;
+  nomeAluno: string;
+  nomeAcademia: string;
+  logoUrl: string | null;
+  alteracoes: { campo: string; novoValor: string }[];
+}): Promise<{ ok: boolean; erro?: string }> {
+  const { email, nomeAluno, nomeAcademia, logoUrl, alteracoes } = params;
+
+  const linhasAlteracoes = alteracoes.map(a => `
+    <tr>
+      <td style="padding:8px 12px;font-size:13px;color:#a1a1aa;border-bottom:1px solid #27272a;">${a.campo}</td>
+      <td style="padding:8px 12px;font-size:13px;color:#ffffff;font-weight:600;border-bottom:1px solid #27272a;">${a.novoValor}</td>
+    </tr>
+  `).join('');
+
+  const corpo = `
+    <p style="margin:0 0 12px;font-size:15px;color:#a1a1aa;">
+      Olá, <strong style="color:#ffffff;">${nomeAluno}</strong>!
+    </p>
+    <p style="margin:0 0 20px;font-size:15px;color:#a1a1aa;line-height:1.6;">
+      Informamos que os dados do seu cadastro na academia
+      <strong style="color:#ffffff;">${nomeAcademia}</strong> foram atualizados:
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #27272a;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+      <thead>
+        <tr style="background:#27272a;">
+          <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Campo</th>
+          <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Novo valor</th>
+        </tr>
+      </thead>
+      <tbody>${linhasAlteracoes}</tbody>
+    </table>
+
+    <p style="margin:0;font-size:13px;color:#52525b;line-height:1.6;">
+      Se você não reconhece esta alteração ou acredita que houve um erro,
+      entre em contato com a academia <strong style="color:#a1a1aa;">${nomeAcademia}</strong> imediatamente.
+    </p>
+  `;
+
+  const html = templateBase({
+    nomeAcademia,
+    logoUrl,
+    titulo: 'Atualização de cadastro',
+    corpo,
+  });
+
+  try {
+    const resend = getResend();
+    const { error } = await resend.emails.send({
+      from: `${nomeAcademia} <${FROM_EMAIL}>`,
+      to: email,
+      subject: `${nomeAcademia} — Seus dados foram atualizados`,
+      html,
+    });
+    if (error) return { ok: false, erro: error.message };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, erro: e.message };
+  }
+}
