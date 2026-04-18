@@ -10,11 +10,13 @@ if (!user) return Astro.redirect('/login');
 
 const { data: profile } = await supabase
   .from('profiles')
-  .select('id, role, nome_completo, telefone, ativo, criado_em, academia_id')
+  .select('id, role, nome_completo, telefone, ativo, criado_em, academia_id, avatar_url')
   .eq('id', user.id)
   .single();
 
 if (!profile) return Astro.redirect('/login');
+
+const adminClient = createSupabaseAdminClient();
 
 const { data: academia } = await supabase
   .from('academias')
@@ -22,15 +24,26 @@ const { data: academia } = await supabase
   .eq('id', profile.academia_id!)
   .single();
 
-let sucesso = false;
-let erro = '';
+const isDono  = profile.role === 'dono' || profile.role === 'saas_admin';
+const isAluno = profile.role === 'aluno';
 
-const isDono = profile.role === 'dono' || profile.role === 'saas_admin';
+// ── Dados do aluno (CPF + endereço) ────────────────────────────────────────
+let alunoData: any = null;
+if (isAluno) {
+  const isCpfLogin = user.email?.endsWith('@aluno.unafit.com.br');
+  let q = adminClient.from('alunos')
+    .select('id, cpf, endereco_cep, endereco_rua, endereco_numero, endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado')
+    .eq('academia_id', profile.academia_id!);
+  q = isCpfLogin
+    ? q.eq('cpf', user.email!.split('@')[0])
+    : q.eq('email', user.email!.toLowerCase());
+  const { data } = await q.maybeSingle();
+  alunoData = data;
+}
 
-// Busca assinatura SaaS e faturas da academia (apenas para dono)
+// ── SaaS (dono) ─────────────────────────────────────────────────────────────
 let saasAssinatura: any = null;
 let saasFaturas: any[] = [];
-
 if (isDono) {
   const { data: ass } = await supabase
     .from('saas_assinaturas')
@@ -38,7 +51,6 @@ if (isDono) {
     .eq('academia_id', profile.academia_id!)
     .single();
   saasAssinatura = ass;
-
   const { data: fat } = await supabase
     .from('saas_faturas')
     .select('id, descricao, valor, data_vencimento, data_pagamento, status, link_pagamento')
@@ -48,14 +60,19 @@ if (isDono) {
   saasFaturas = fat ?? [];
 }
 
+let sucesso = '';
+let erro    = '';
+
+// ── POST ────────────────────────────────────────────────────────────────────
 if (Astro.request.method === 'POST') {
-  const form = await Astro.request.formData();
+  const form   = await Astro.request.formData();
   const action = (form.get('action') as string) ?? 'perfil';
 
+  // Dados pessoais (todos os roles)
   if (action === 'perfil') {
-    const nome_completo  = (form.get('nome_completo') as string)?.trim();
-    const telefone       = (form.get('telefone') as string)?.trim() || null;
-    const nome_academia  = (form.get('nome_academia') as string)?.trim();
+    const nome_completo = (form.get('nome_completo') as string)?.trim();
+    const telefone      = (form.get('telefone') as string)?.trim() || null;
+    const nome_academia = (form.get('nome_academia') as string)?.trim();
 
     if (!nome_completo) {
       erro = 'O nome é obrigatório.';
@@ -65,71 +82,123 @@ if (Astro.request.method === 'POST') {
         erro = error.message;
       } else {
         profile.nome_completo = nome_completo;
-        profile.telefone = telefone;
+        profile.telefone      = telefone;
 
-        // Atualiza nome da academia se for dono e campo preenchido
         if (isDono && nome_academia && academia) {
-          const adminClient = createSupabaseAdminClient();
           await adminClient.from('academias').update({ nome: nome_academia }).eq('id', profile.academia_id!);
           academia.nome = nome_academia;
         }
-        sucesso = true;
+
+        // Atualiza endereço do aluno na tabela alunos
+        if (isAluno && alunoData) {
+          const cep         = (form.get('endereco_cep') as string)?.trim() || null;
+          const rua         = (form.get('endereco_rua') as string)?.trim() || null;
+          const numero      = (form.get('endereco_numero') as string)?.trim() || null;
+          const complemento = (form.get('endereco_complemento') as string)?.trim() || null;
+          const bairro      = (form.get('endereco_bairro') as string)?.trim() || null;
+          const cidade      = (form.get('endereco_cidade') as string)?.trim() || null;
+          const estado      = (form.get('endereco_estado') as string)?.trim() || null;
+
+          const { data: updated } = await adminClient.from('alunos').update({
+            telefone, endereco_cep: cep, endereco_rua: rua, endereco_numero: numero,
+            endereco_complemento: complemento, endereco_bairro: bairro,
+            endereco_cidade: cidade, endereco_estado: estado,
+          }).eq('id', alunoData.id).select().single();
+          if (updated) alunoData = { ...alunoData, ...updated };
+        }
+
+        sucesso = 'Dados atualizados com sucesso!';
       }
     }
   }
 
-  if (action === 'logo' && isDono) {
-    const arquivo = form.get('logo') as File | null;
-    if (!arquivo || arquivo.size === 0) {
-      erro = 'Selecione um arquivo de imagem.';
-    } else if (!arquivo.type.startsWith('image/')) {
-      erro = 'O arquivo deve ser uma imagem (PNG, JPG, SVG…).';
-    } else if (arquivo.size > 2 * 1024 * 1024) {
-      erro = 'A imagem deve ter no máximo 2 MB.';
-    } else {
-      const adminClient = createSupabaseAdminClient();
-      const ext = arquivo.name.split('.').pop() ?? 'png';
-      const path = `academias/${profile.academia_id}/logo.${ext}`;
+  // Upload foto (aluno)
+  if (action === 'foto' && isAluno) {
+    const arquivo = form.get('foto') as File | null;
+    if (!arquivo || arquivo.size === 0)               erro = 'Selecione uma imagem.';
+    else if (!arquivo.type.startsWith('image/'))      erro = 'O arquivo deve ser uma imagem.';
+    else if (arquivo.size > 2 * 1024 * 1024)         erro = 'A imagem deve ter no máximo 2 MB.';
+    else {
+      const ext    = arquivo.name.split('.').pop() ?? 'jpg';
+      const path   = `alunos/${user.id}/avatar.${ext}`;
       const buffer = await arquivo.arrayBuffer();
 
       const { error: upErr } = await adminClient.storage
         .from('academy-assets')
-        .upload(path, buffer, {
-          contentType: arquivo.type,
-          upsert: true,
-        });
+        .upload(path, buffer, { contentType: arquivo.type, upsert: true });
 
       if (upErr) {
         erro = upErr.message;
       } else {
-        const { data: { publicUrl } } = adminClient.storage
-          .from('academy-assets')
-          .getPublicUrl(path);
+        const { data: { publicUrl } } = adminClient.storage.from('academy-assets').getPublicUrl(path);
+        await adminClient.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
+        (profile as any).avatar_url = publicUrl;
+        sucesso = 'Foto atualizada!';
+      }
+    }
+  }
 
+  // Alterar senha
+  if (action === 'senha') {
+    const senha_atual = (form.get('senha_atual') as string)?.trim();
+    const nova_senha  = (form.get('nova_senha') as string)?.trim();
+    const confirmar   = (form.get('confirmar') as string)?.trim();
+
+    if (!senha_atual || !nova_senha || !confirmar) {
+      erro = 'Preencha todos os campos.';
+    } else if (nova_senha.length < 6) {
+      erro = 'A nova senha deve ter pelo menos 6 caracteres.';
+    } else if (nova_senha !== confirmar) {
+      erro = 'As senhas não coincidem.';
+    } else {
+      const { error: loginErr } = await supabase.auth.signInWithPassword({
+        email: user.email!, password: senha_atual,
+      });
+      if (loginErr) {
+        erro = 'Senha atual incorreta.';
+      } else {
+        const { error: updErr } = await supabase.auth.updateUser({ password: nova_senha });
+        if (updErr) erro = updErr.message;
+        else sucesso = 'Senha alterada com sucesso!';
+      }
+    }
+  }
+
+  // Logo academia (dono)
+  if (action === 'logo' && isDono) {
+    const arquivo = form.get('logo') as File | null;
+    if (!arquivo || arquivo.size === 0)               erro = 'Selecione um arquivo de imagem.';
+    else if (!arquivo.type.startsWith('image/'))      erro = 'O arquivo deve ser uma imagem.';
+    else if (arquivo.size > 2 * 1024 * 1024)         erro = 'A imagem deve ter no máximo 2 MB.';
+    else {
+      const ext    = arquivo.name.split('.').pop() ?? 'png';
+      const path   = `academias/${profile.academia_id}/logo.${ext}`;
+      const buffer = await arquivo.arrayBuffer();
+
+      const { error: upErr } = await adminClient.storage
+        .from('academy-assets')
+        .upload(path, buffer, { contentType: arquivo.type, upsert: true });
+
+      if (upErr) {
+        erro = upErr.message;
+      } else {
+        const { data: { publicUrl } } = adminClient.storage.from('academy-assets').getPublicUrl(path);
         const { error: dbErr } = await adminClient.from('academias').update({ logo_url: publicUrl }).eq('id', profile.academia_id!);
-        if (dbErr) {
-          erro = dbErr.message;
-        } else {
-          academia!.logo_url = publicUrl;
-          sucesso = true;
-        }
+        if (dbErr) erro = dbErr.message;
+        else { academia!.logo_url = publicUrl; sucesso = 'Logo atualizada!'; }
       }
     }
   }
 
   if (action === 'remover_logo' && isDono) {
-    const adminClient = createSupabaseAdminClient();
     const { error: rmErr } = await adminClient.from('academias').update({ logo_url: null }).eq('id', profile.academia_id!);
     if (rmErr) erro = rmErr.message;
-    else { academia!.logo_url = null; sucesso = true; }
+    else { academia!.logo_url = null; sucesso = 'Logo removida.'; }
   }
 }
 
 const roleLabels: Record<string, string> = {
-  saas_admin: 'SaaS Admin',
-  dono:       'Dono',
-  colaborador:  'Colaborador',
-  aluno:      'Aluno',
+  saas_admin: 'SaaS Admin', dono: 'Dono', colaborador: 'Colaborador', aluno: 'Aluno',
 };
 
 const saasStatusMap: Record<string, { label: string; cls: string }> = {
@@ -142,6 +211,10 @@ const saasStatusMap: Record<string, { label: string; cls: string }> = {
 const saasAssinaturaStatusLabels: Record<string, string> = {
   ativa: 'Ativa', trial: 'Trial', suspensa: 'Suspensa', cancelada: 'Cancelada',
 };
+
+const avatarUrl = (profile as any).avatar_url as string | null;
+const inputCls  = 'w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary';
+const labelCls  = 'block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5';
 ---
 
 <DashboardLayout title="Meu Perfil">
@@ -151,38 +224,31 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
   </div>
 
   {sucesso && (
-    <div class="mb-5 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">
-      ✓ Alterações salvas com sucesso.
-    </div>
+    <div class="mb-5 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">✓ {sucesso}</div>
   )}
   {erro && (
-    <div class="mb-5 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
-      {erro}
-    </div>
+    <div class="mb-5 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">{erro}</div>
   )}
 
   <div class="grid gap-6 lg:grid-cols-3">
 
-    <!-- Coluna esquerda: identidade + logo -->
+    <!-- ── Coluna esquerda ────────────────────────────────────────────── -->
     <div class="lg:col-span-1 space-y-6">
 
       <!-- Card identidade -->
       <Card class="flex flex-col items-center text-center py-8">
-        <!-- Logo da academia OU avatar inicial -->
-        {academia?.logo_url
-          ? (
-            <div class="mb-4 w-full px-4 flex justify-center">
-              <img src={academia.logo_url} alt={academia?.nome ?? 'Logo'} class="max-h-20 max-w-full object-contain" />
-            </div>
-          )
-          : (
-            <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/15 border-2 border-primary/30 text-primary text-3xl font-bold mb-4">
-              {profile.nome_completo.charAt(0).toUpperCase()}
-            </div>
-          )
-        }
+        {(() => {
+          if (isAluno) {
+            return avatarUrl
+              ? <img src={avatarUrl} alt={profile.nome_completo} class="mb-4 h-24 w-24 rounded-full object-cover border-2 border-primary/30" />
+              : <div class="flex h-24 w-24 items-center justify-center rounded-full bg-primary/15 border-2 border-primary/30 text-primary text-4xl font-bold mb-4">{profile.nome_completo.charAt(0).toUpperCase()}</div>;
+          }
+          return academia?.logo_url
+            ? <div class="mb-4 w-full px-4 flex justify-center"><img src={academia.logo_url} alt={academia?.nome ?? 'Logo'} class="max-h-20 max-w-full object-contain" /></div>
+            : <div class="flex h-20 w-20 items-center justify-center rounded-full bg-primary/15 border-2 border-primary/30 text-primary text-3xl font-bold mb-4">{profile.nome_completo.charAt(0).toUpperCase()}</div>;
+        })()}
         <h2 class="text-lg font-bold text-foreground">{profile.nome_completo}</h2>
-        <p class="text-sm text-muted-foreground mb-3">{user.email}</p>
+        <p class="text-sm text-muted-foreground mb-3">{isAluno && user.email?.endsWith('@aluno.unafit.com.br') ? `CPF: ${alunoData?.cpf ?? ''}` : user.email}</p>
         <Badge variant="primary">{roleLabels[profile.role]}</Badge>
         {academia && <p class="mt-3 text-xs font-medium text-muted-foreground">{academia.nome}</p>}
         <p class="mt-2 text-xs text-muted-foreground">
@@ -190,13 +256,34 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
         </p>
       </Card>
 
-      <!-- Logo da academia (apenas dono) -->
+      <!-- Upload foto (aluno) -->
+      {isAluno && (
+        <Card>
+          <h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Minha Foto</h2>
+          <p class="text-xs text-zinc-500 mb-4">Aparece no seu perfil. PNG, JPG · máx. 2 MB.</p>
+          <div class="mb-4 rounded-lg border border-zinc-700 bg-zinc-900 flex items-center justify-center h-24 overflow-hidden">
+            {avatarUrl
+              ? <img id="foto-preview" src={avatarUrl} alt="Minha foto" class="h-full w-full object-cover" />
+              : <img id="foto-preview" src="" alt="" class="h-full w-full object-cover hidden" />
+            }
+            {!avatarUrl && <span class="text-zinc-600 text-sm">Sem foto</span>}
+          </div>
+          <form method="POST" enctype="multipart/form-data" class="space-y-3">
+            <input type="hidden" name="action" value="foto" />
+            <input id="input-foto" name="foto" type="file" accept="image/*" required
+              class="w-full text-sm text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-zinc-600 file:text-xs file:text-zinc-300 file:bg-zinc-800 hover:file:bg-zinc-700 cursor-pointer" />
+            <button type="submit" class="w-full px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg">
+              Enviar foto
+            </button>
+          </form>
+        </Card>
+      )}
+
+      <!-- Logo academia (dono) -->
       {isDono && (
         <Card>
           <h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Logo da Academia</h2>
           <p class="text-xs text-zinc-500 mb-4">Aparece na barra lateral para todos os usuários.</p>
-
-          <!-- Preview atual -->
           <div class="mb-4 rounded-lg border border-zinc-700 bg-zinc-900 flex items-center justify-center p-3 h-20 overflow-hidden">
             {academia?.logo_url
               ? <img id="logo-preview" src={academia.logo_url} alt="Logo atual" class="max-w-full max-h-full object-contain" />
@@ -206,22 +293,18 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
           <p class="text-xs text-zinc-400 mb-3">
             {academia?.logo_url ? 'Logo personalizada ativa' : 'Usando logo padrão UNAFIT'} · PNG, JPG ou SVG · máx. 2 MB
           </p>
-
-          <!-- Upload -->
           <form method="POST" enctype="multipart/form-data" class="space-y-3">
             <input type="hidden" name="action" value="logo" />
             <input id="input-logo" name="logo" type="file" accept="image/*" required
               class="w-full text-sm text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-zinc-600 file:text-xs file:text-zinc-300 file:bg-zinc-800 hover:file:bg-zinc-700 cursor-pointer" />
-            <button type="submit"
-              class="w-full px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg">
+            <button type="submit" class="w-full px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg">
               Enviar logo
             </button>
           </form>
-
           {academia?.logo_url && (
             <form method="POST" class="mt-3 text-center">
               <input type="hidden" name="action" value="remover_logo" />
-              <button type="submit" onclick="return confirm('Remover logo personalizada e voltar para o padrão UNAFIT?')"
+              <button type="submit" onclick="return confirm('Remover logo personalizada?')"
                 class="text-xs text-red-500 hover:text-red-400">
                 Remover logo personalizada
               </button>
@@ -232,42 +315,95 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
 
     </div>
 
-    <!-- Formulários -->
+    <!-- ── Coluna direita ─────────────────────────────────────────────── -->
     <div class="lg:col-span-2 space-y-6">
 
-      <!-- Dados pessoais -->
+      <!-- Dados pessoais + endereço -->
       <Card>
         <h2 class="mb-5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Dados Pessoais</h2>
-        <form method="POST" class="space-y-5">
+        <form method="POST" class="space-y-5" id="form-perfil">
           <input type="hidden" name="action" value="perfil" />
+
           <div>
-            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome Completo</label>
-            <input name="nome_completo" type="text" required value={profile.nome_completo}
-              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary" />
+            <label class={labelCls}>Nome Completo</label>
+            <input name="nome_completo" type="text" required value={profile.nome_completo} class={inputCls} />
           </div>
-          <div>
-            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">E-mail</label>
-            <input type="email" value={user.email} disabled
-              class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
-            <p class="mt-1 text-xs text-muted-foreground">O e-mail não pode ser alterado aqui.</p>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Telefone</label>
-            <input name="telefone" type="tel" value={profile.telefone ?? ''} placeholder="(11) 99999-9999"
-              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary" />
-          </div>
-          <div>
-            <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Cargo</label>
-            <input type="text" value={roleLabels[profile.role]} disabled
-              class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
-          </div>
-          {isDono && (
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome da Academia</label>
-              <input name="nome_academia" type="text" value={academia?.nome ?? ''} placeholder="Nome da sua academia"
-                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary" />
+              <label class={labelCls}>E-mail</label>
+              <input type="text" value={isAluno && user.email?.endsWith('@aluno.unafit.com.br') ? '—' : user.email} disabled
+                class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
+              {!(isAluno && user.email?.endsWith('@aluno.unafit.com.br')) && (
+                <p class="mt-1 text-xs text-muted-foreground">O e-mail não pode ser alterado aqui.</p>
+              )}
+            </div>
+            <div>
+              <label class={labelCls}>Telefone</label>
+              <input id="campo-tel" name="telefone" type="tel" value={profile.telefone ?? ''} placeholder="(11) 99999-9999" class={inputCls} />
+            </div>
+          </div>
+
+          {isAluno && alunoData && (
+            <div>
+              <label class={labelCls}>CPF</label>
+              <input id="campo-cpf-display" type="text" value={alunoData.cpf ?? ''} disabled
+                class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
             </div>
           )}
+
+          {isDono && (
+            <div>
+              <label class={labelCls}>Nome da Academia</label>
+              <input name="nome_academia" type="text" value={academia?.nome ?? ''} placeholder="Nome da sua academia" class={inputCls} />
+            </div>
+          )}
+
+          {isAluno && (
+            <div class="pt-2 border-t border-border">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">Endereço</h3>
+              <div class="space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class={labelCls}>CEP</label>
+                    <input id="campo-cep" name="endereco_cep" placeholder="00000-000" maxlength="9"
+                      value={alunoData?.endereco_cep ?? ''} class={inputCls} />
+                  </div>
+                  <div>
+                    <label class={labelCls}>Estado</label>
+                    <input id="campo-estado" name="endereco_estado" maxlength="2" placeholder="SP"
+                      value={alunoData?.endereco_estado ?? ''} class={inputCls} />
+                  </div>
+                </div>
+                <div>
+                  <label class={labelCls}>Rua / Logradouro</label>
+                  <input id="campo-rua" name="endereco_rua"
+                    value={alunoData?.endereco_rua ?? ''} class={inputCls} />
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class={labelCls}>Número</label>
+                    <input name="endereco_numero" value={alunoData?.endereco_numero ?? ''} class={inputCls} />
+                  </div>
+                  <div>
+                    <label class={labelCls}>Complemento</label>
+                    <input name="endereco_complemento" value={alunoData?.endereco_complemento ?? ''} class={inputCls} />
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class={labelCls}>Bairro</label>
+                    <input id="campo-bairro" name="endereco_bairro" value={alunoData?.endereco_bairro ?? ''} class={inputCls} />
+                  </div>
+                  <div>
+                    <label class={labelCls}>Cidade</label>
+                    <input id="campo-cidade" name="endereco_cidade" value={alunoData?.endereco_cidade ?? ''} class={inputCls} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <button type="submit"
             class="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
             Salvar Alterações
@@ -275,7 +411,33 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
         </form>
       </Card>
 
-      <!-- Assinatura UNAFIT (apenas dono) -->
+      <!-- Alterar senha -->
+      <Card>
+        <h2 class="mb-5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Alterar Senha</h2>
+        <form method="POST" class="space-y-4">
+          <input type="hidden" name="action" value="senha" />
+          <div>
+            <label class={labelCls}>Senha atual</label>
+            <input name="senha_atual" type="password" required autocomplete="current-password" placeholder="••••••••" class={inputCls} />
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class={labelCls}>Nova senha</label>
+              <input name="nova_senha" type="password" required minlength="6" autocomplete="new-password" placeholder="Mínimo 6 caracteres" class={inputCls} />
+            </div>
+            <div>
+              <label class={labelCls}>Confirmar nova senha</label>
+              <input name="confirmar" type="password" required minlength="6" autocomplete="new-password" placeholder="Repita a senha" class={inputCls} />
+            </div>
+          </div>
+          <button type="submit"
+            class="rounded-lg border border-border px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors">
+            Alterar Senha
+          </button>
+        </form>
+      </Card>
+
+      <!-- Assinatura UNAFIT (dono) -->
       {isDono && (
         <Card>
           <h2 class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Minha Assinatura UNAFIT</h2>
@@ -294,10 +456,10 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
                 <p class="text-xs text-zinc-500 uppercase tracking-wider mb-1">Status</p>
                 <span class:list={[
                   'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold',
-                  saasAssinatura.status === 'ativa'    && 'bg-green-900/30 text-green-400 border border-green-600/30',
-                  saasAssinatura.status === 'trial'    && 'bg-blue-900/30 text-blue-400 border border-blue-600/30',
-                  saasAssinatura.status === 'suspensa' && 'bg-yellow-900/30 text-yellow-400 border border-yellow-600/30',
-                  saasAssinatura.status === 'cancelada'&& 'bg-zinc-900/30 text-zinc-400 border border-zinc-600/30',
+                  saasAssinatura.status === 'ativa'     && 'bg-green-900/30 text-green-400 border border-green-600/30',
+                  saasAssinatura.status === 'trial'     && 'bg-blue-900/30 text-blue-400 border border-blue-600/30',
+                  saasAssinatura.status === 'suspensa'  && 'bg-yellow-900/30 text-yellow-400 border border-yellow-600/30',
+                  saasAssinatura.status === 'cancelada' && 'bg-zinc-900/30 text-zinc-400 border border-zinc-600/30',
                 ]}>
                   {saasAssinaturaStatusLabels[saasAssinatura.status] ?? saasAssinatura.status}
                 </span>
@@ -315,7 +477,6 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
             </div>
           )}
 
-          <!-- Faturas SaaS -->
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Faturas</h3>
           {saasFaturas.length === 0 ? (
             <p class="text-sm text-muted-foreground">Nenhuma fatura registrada.</p>
@@ -328,7 +489,7 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
                     <th class="px-5 pb-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Vencimento</th>
                     <th class="px-5 pb-2 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Valor</th>
                     <th class="px-5 pb-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                    <th class="px-5 pb-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground"></th>
+                    <th class="px-5 pb-2"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -351,9 +512,7 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
                         <td class="px-5 py-3">
                           {f.link_pagamento && f.status !== 'pago' && (
                             <a href={f.link_pagamento} target="_blank" rel="noopener noreferrer"
-                              class="text-xs text-primary hover:text-primary/80 font-medium">
-                              Pagar →
-                            </a>
+                              class="text-xs text-primary hover:text-primary/80 font-medium">Pagar →</a>
                           )}
                           {f.data_pagamento && (
                             <span class="text-xs text-muted-foreground">
@@ -376,11 +535,59 @@ const saasAssinaturaStatusLabels: Record<string, string> = {
 </DashboardLayout>
 
 <script>
-  // Preview da imagem antes de enviar
+  // Preview foto do aluno
+  document.getElementById('input-foto')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const preview = document.getElementById('foto-preview') as HTMLImageElement;
+    if (preview) { preview.src = URL.createObjectURL(file); preview.classList.remove('hidden'); }
+    const placeholder = preview?.previousElementSibling as HTMLElement;
+    if (placeholder?.tagName === 'SPAN') placeholder.style.display = 'none';
+  });
+
+  // Preview logo dono
   document.getElementById('input-logo')?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
     const preview = document.getElementById('logo-preview') as HTMLImageElement;
     if (preview) preview.src = URL.createObjectURL(file);
+  });
+
+  // Máscara telefone
+  document.getElementById('campo-tel')?.addEventListener('input', (e) => {
+    let v = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 11);
+    v = v.length <= 10
+      ? v.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3')
+      : v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+    (e.target as HTMLInputElement).value = v;
+  });
+
+  // Máscara CPF (display readonly)
+  const cpfDisplay = document.getElementById('campo-cpf-display') as HTMLInputElement;
+  if (cpfDisplay?.value) {
+    const v = cpfDisplay.value.replace(/\D/g, '');
+    cpfDisplay.value = v.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  }
+
+  // CEP auto-preenchimento
+  document.getElementById('campo-cep')?.addEventListener('blur', async (e) => {
+    const cep = (e.target as HTMLInputElement).value.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const d   = await res.json();
+      if (!d.erro) {
+        (document.getElementById('campo-rua')    as HTMLInputElement).value = d.logradouro || '';
+        (document.getElementById('campo-bairro') as HTMLInputElement).value = d.bairro     || '';
+        (document.getElementById('campo-cidade') as HTMLInputElement).value = d.localidade || '';
+        (document.getElementById('campo-estado') as HTMLInputElement).value = d.uf         || '';
+      }
+    } catch (_) {}
+  });
+
+  document.getElementById('campo-cep')?.addEventListener('input', (e) => {
+    let v = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 8);
+    v = v.replace(/(\d{5})(\d)/, '$1-$2');
+    (e.target as HTMLInputElement).value = v;
   });
 </script>
