@@ -20,7 +20,8 @@ const hojeISO = new Date().toISOString().split('T')[0];
 // Stats rápidas (apenas para dono/professor)
 let totalAulasHoje = 0;
 let totalCheckins  = 0;
-let aniversariantes: { id: string; nome: string }[] = [];
+let aniversariantesHoje: { id: string; nome: string }[] = [];
+let aniversariantesMes:  { id: string; nome: string; data_nascimento: string }[] = [];
 
 if (profile?.role !== 'aluno') {
   const { count: aulas } = await supabase
@@ -37,19 +38,36 @@ if (profile?.role !== 'aluno') {
     .gte('feito_em', `${hojeISO}T00:00:00`);
   totalCheckins = checkins ?? 0;
 
-  // Aniversariantes do dia (compara mês e dia ignorando o ano)
-  const hoje = new Date();
-  const mes  = String(hoje.getMonth() + 1).padStart(2, '0');
-  const dia  = String(hoje.getDate()).padStart(2, '0');
-  const { data: anivData } = await supabase
+  const agora = new Date();
+  const mes = String(agora.getMonth() + 1).padStart(2, '0');
+  const dia = String(agora.getDate()).padStart(2, '0');
+
+  // Aniversariantes do dia
+  const { data: anivHoje } = await supabase
     .from('alunos')
     .select('id, nome, data_nascimento')
     .eq('academia_id', profile!.academia_id!)
     .eq('status', 'ativo')
     .not('data_nascimento', 'is', null)
     .filter('data_nascimento', 'like', `%-${mes}-${dia}`);
-  aniversariantes = anivData ?? [];
+  aniversariantesHoje = anivHoje ?? [];
+
+  // Aniversariantes do mês (excluindo os de hoje)
+  const { data: anivMes } = await supabase
+    .from('alunos')
+    .select('id, nome, data_nascimento')
+    .eq('academia_id', profile!.academia_id!)
+    .eq('status', 'ativo')
+    .not('data_nascimento', 'is', null)
+    .filter('data_nascimento', 'like', `%-${mes}-%`)
+    .not('data_nascimento', 'like', `%-${mes}-${dia}`);
+  aniversariantesMes = (anivMes ?? []).sort((a, b) =>
+    Number(a.data_nascimento.slice(8, 10)) - Number(b.data_nascimento.slice(8, 10))
+  );
 }
+
+// Mantém compatibilidade com o template legado
+const aniversariantes = aniversariantesHoje;
 
 const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
 ---
@@ -63,22 +81,46 @@ const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
     </h1>
   </div>
 
-  <!-- Alerta de aniversariantes -->
-  {aniversariantes.length > 0 && (
-    <div class="mb-6 bg-amber-900/30 border border-amber-600/50 rounded-xl px-5 py-4 flex items-start gap-4">
+  <!-- Aniversariantes do dia -->
+  {aniversariantesHoje.length > 0 && (
+    <div class="mb-4 bg-amber-900/30 border border-amber-500/50 rounded-xl px-5 py-4 flex items-start gap-4">
       <span class="text-2xl shrink-0">🎂</span>
       <div class="min-w-0">
         <p class="text-amber-300 font-semibold text-sm">
-          {aniversariantes.length === 1 ? 'Aniversário hoje!' : `${aniversariantes.length} aniversários hoje!`}
+          {aniversariantesHoje.length === 1 ? 'Aniversário hoje!' : `${aniversariantesHoje.length} aniversários hoje!`}
         </p>
         <p class="text-amber-200/80 text-sm mt-0.5">
-          {aniversariantes.map((a, i) => (
+          {aniversariantesHoje.map((a, i) => (
             <>
               <a href={`/dashboard/alunos/${a.id}`} class="hover:text-amber-100 underline underline-offset-2">{a.nome}</a>
-              {i < aniversariantes.length - 1 ? ', ' : ''}
+              {i < aniversariantesHoje.length - 1 ? ', ' : ''}
             </>
           ))}
         </p>
+      </div>
+    </div>
+  )}
+
+  <!-- Aniversariantes do mês -->
+  {aniversariantesMes.length > 0 && (
+    <div class="mb-6 bg-blue-900/20 border border-blue-600/30 rounded-xl px-5 py-4">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="text-xl">🎉</span>
+        <p class="text-blue-300 font-semibold text-sm">
+          {aniversariantesMes.length} aniversariante{aniversariantesMes.length !== 1 ? 's' : ''} este mês
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {aniversariantesMes.map(a => {
+          const dia = a.data_nascimento.slice(8, 10);
+          return (
+            <a href={`/dashboard/alunos/${a.id}`}
+              class="inline-flex items-center gap-1.5 rounded-lg border border-blue-600/30 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-800/40 transition-colors">
+              <span class="font-semibold text-blue-300">dia {dia}</span>
+              {a.nome.split(' ')[0]}
+            </a>
+          );
+        })}
       </div>
     </div>
   )}
