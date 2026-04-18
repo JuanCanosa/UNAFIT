@@ -151,13 +151,20 @@ if (Astro.request.method === 'POST') {
     } else if (nova_senha !== confirmar) {
       erro = 'As senhas não coincidem.';
     } else {
-      const { error: loginErr } = await supabase.auth.signInWithPassword({
+      // Verifica senha atual com cliente sem cookies para não afetar a sessão SSR
+      const { createClient } = await import('@supabase/supabase-js');
+      const verifyClient = createClient(
+        import.meta.env.SUPABASE_URL ?? process.env.SUPABASE_URL!,
+        import.meta.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY!,
+        { auth: { persistSession: false } }
+      );
+      const { error: loginErr } = await verifyClient.auth.signInWithPassword({
         email: user.email!, password: senha_atual,
       });
       if (loginErr) {
         erro = 'Senha atual incorreta.';
       } else {
-        const { error: updErr } = await supabase.auth.updateUser({ password: nova_senha });
+        const { error: updErr } = await adminClient.auth.admin.updateUserById(user.id, { password: nova_senha });
         if (updErr) erro = updErr.message;
         else sucesso = 'Senha alterada com sucesso!';
       }
