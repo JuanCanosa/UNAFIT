@@ -32,7 +32,7 @@ let alunoData: any = null;
 if (isAluno) {
   const isCpfLogin = user.email?.endsWith('@aluno.unafit.com.br');
   let q = adminClient.from('alunos')
-    .select('id, cpf, endereco_cep, endereco_rua, endereco_numero, endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado')
+    .select('id, cpf, data_nascimento, endereco_cep, endereco_rua, endereco_numero, endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado')
     .eq('academia_id', profile.academia_id!);
   q = isCpfLogin
     ? q.eq('cpf', user.email!.split('@')[0])
@@ -91,6 +91,7 @@ if (Astro.request.method === 'POST') {
 
         // Atualiza endereço do aluno na tabela alunos
         if (isAluno && alunoData) {
+          const data_nascimento = (form.get('data_nascimento') as string) || null;
           const cep         = (form.get('endereco_cep') as string)?.trim() || null;
           const rua         = (form.get('endereco_rua') as string)?.trim() || null;
           const numero      = (form.get('endereco_numero') as string)?.trim() || null;
@@ -100,7 +101,7 @@ if (Astro.request.method === 'POST') {
           const estado      = (form.get('endereco_estado') as string)?.trim() || null;
 
           const { data: updated } = await adminClient.from('alunos').update({
-            telefone, endereco_cep: cep, endereco_rua: rua, endereco_numero: numero,
+            telefone, data_nascimento, endereco_cep: cep, endereco_rua: rua, endereco_numero: numero,
             endereco_complemento: complemento, endereco_bairro: bairro,
             endereco_cidade: cidade, endereco_estado: estado,
           }).eq('id', alunoData.id).select().single();
@@ -356,10 +357,18 @@ const labelCls  = 'block text-xs font-semibold uppercase tracking-wider text-mut
           </div>
 
           {isAluno && alunoData && (
-            <div>
-              <label class={labelCls}>CPF</label>
-              <input id="campo-cpf-display" type="text" value={alunoData.cpf ?? ''} disabled
-                class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class={labelCls}>CPF</label>
+                <input id="campo-cpf-display" type="text" value={alunoData.cpf ?? ''} disabled
+                  class="w-full rounded-lg border border-border bg-muted px-3 py-2.5 text-sm text-muted-foreground cursor-not-allowed" />
+              </div>
+              <div>
+                <label class={labelCls}>Data de Nascimento</label>
+                <input name="data_nascimento" type="date"
+                  value={alunoData.data_nascimento ?? ''}
+                  class={inputCls} />
+              </div>
             </div>
           )}
 
