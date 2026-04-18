@@ -1,6 +1,6 @@
 ---
 import '@/styles/globals.css';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 // Redireciona se já estiver logado
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
@@ -18,11 +18,19 @@ if (Astro.request.method === 'POST') {
   const rawInput = form.get('email')?.toString().trim() ?? '';
   const password  = form.get('password')?.toString() ?? '';
 
-  // Detecta se é CPF (só dígitos, 11 caracteres) e converte para email fictício
+  // Detecta CPF (11 dígitos após strip) e resolve o email real do aluno
   const cpfDigits = rawInput.replace(/\D/g, '');
-  const email = cpfDigits.length === 11 && /^\d+$/.test(cpfDigits)
-    ? `${cpfDigits}@aluno.unafit.com.br`
-    : rawInput;
+  let email = rawInput;
+  if (cpfDigits.length === 11) {
+    const adminClient = createSupabaseAdminClient();
+    const { data: alunoMatch } = await adminClient
+      .from('alunos')
+      .select('email')
+      .eq('cpf', cpfDigits)
+      .not('email', 'is', null)
+      .maybeSingle();
+    email = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
+  }
 
   if (!rawInput || !password) {
     errorMessage = 'Preencha e-mail (ou CPF) e senha.';
