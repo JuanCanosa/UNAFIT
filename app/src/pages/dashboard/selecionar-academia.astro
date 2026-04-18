@@ -1,0 +1,149 @@
+---
+import '@/styles/globals.css';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const adminClient = createSupabaseAdminClient();
+
+// Busca todas as academias do aluno
+const { data: vinculos } = await adminClient
+  .from('aluno_academias')
+  .select('academia_id, aluno_id, ativo')
+  .eq('profile_id', user.id)
+  .eq('ativo', true);
+
+if (!vinculos || vinculos.length === 0) return Astro.redirect('/dashboard');
+if (vinculos.length === 1) {
+  // Garante que profiles.academia_id está correto e redireciona
+  await adminClient.from('profiles')
+    .update({ academia_id: vinculos[0].academia_id })
+    .eq('id', user.id);
+  return Astro.redirect('/dashboard');
+}
+
+// Busca detalhes das academias
+const academiaIds = vinculos.map(v => v.academia_id);
+const { data: academias } = await adminClient
+  .from('academias')
+  .select('id, nome, logo_url, slug')
+  .in('id', academiaIds);
+
+// Academia atual do perfil
+const { data: profile } = await adminClient
+  .from('profiles')
+  .select('academia_id, nome_completo')
+  .eq('id', user.id)
+  .single();
+
+// ── POST: trocar academia ─────────────────────────────────────────────────────
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const novaAcademiaId = form.get('academia_id') as string;
+
+  // Valida que o usuário realmente pertence a essa academia
+  const pertence = vinculos.some(v => v.academia_id === novaAcademiaId);
+  if (pertence) {
+    await adminClient.from('profiles')
+      .update({ academia_id: novaAcademiaId })
+      .eq('id', user.id);
+    return Astro.redirect('/dashboard');
+  }
+}
+
+const firstName = profile?.nome_completo?.split(' ')[0] ?? 'Atleta';
+const academiaAtualId = profile?.academia_id;
+---
+
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>Selecionar Academia — UNAFIT</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+
+  <body class="min-h-screen bg-background text-foreground flex items-center justify-center p-4 antialiased">
+
+    <!-- Fundo grid -->
+    <div class="pointer-events-none fixed inset-0 bg-[linear-gradient(hsl(var(--border)/0.4)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.4)_1px,transparent_1px)] bg-[size:48px_48px]" aria-hidden="true"></div>
+    <div class="pointer-events-none fixed inset-0 flex items-center justify-center" aria-hidden="true">
+      <div class="h-[400px] w-[600px] rounded-full bg-primary/5 blur-[120px]"></div>
+    </div>
+
+    <div class="relative z-10 w-full max-w-lg animate-fade-in">
+
+      <!-- Logo UNAFIT -->
+      <div class="mb-8 text-center">
+        <img src="/logo-unafit.png" alt="UNAFIT" class="mx-auto h-12 w-auto mb-4" />
+        <h1 class="text-xl font-bold text-foreground">Olá, {firstName}!</h1>
+        <p class="mt-1 text-sm text-muted-foreground">
+          Você está inscrito em {academias?.length} academias. Qual deseja acessar?
+        </p>
+      </div>
+
+      <!-- Cards de academia -->
+      <div class="space-y-3">
+        {academias?.map(academia => {
+          const isAtual = academia.id === academiaAtualId;
+          return (
+            <form method="POST">
+              <input type="hidden" name="academia_id" value={academia.id} />
+              <button
+                type="submit"
+                class:list={[
+                  'w-full rounded-2xl border p-5 text-left transition-all duration-200 flex items-center gap-4 group',
+                  isAtual
+                    ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30'
+                    : 'border-border bg-card hover:border-primary/30 hover:bg-primary/5 card-shine'
+                ]}
+              >
+                <!-- Logo ou inicial -->
+                <div class="h-14 w-14 shrink-0 rounded-xl overflow-hidden border border-border bg-muted flex items-center justify-center">
+                  {academia.logo_url
+                    ? <img src={academia.logo_url} alt={academia.nome} class="h-full w-full object-contain p-1" />
+                    : <span class="text-2xl font-bold text-primary">{academia.nome.charAt(0).toUpperCase()}</span>
+                  }
+                </div>
+
+                <!-- Info -->
+                <div class="flex-1 min-w-0">
+                  <p class="font-semibold text-foreground truncate">{academia.nome}</p>
+                  {academia.slug && (
+                    <p class="text-xs text-muted-foreground mt-0.5">unafit.com.br/{academia.slug}</p>
+                  )}
+                  {isAtual && (
+                    <span class="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                      <span class="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"></span>
+                      Academia atual
+                    </span>
+                  )}
+                </div>
+
+                <!-- Seta -->
+                <svg class:list={['h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1', isAtual ? 'text-primary' : 'text-muted-foreground']}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </form>
+          );
+        })}
+      </div>
+
+      <!-- Logout -->
+      <div class="mt-6 text-center">
+        <a href="/logout" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+          Sair da conta
+        </a>
+      </div>
+
+    </div>
+  </body>
+</html>

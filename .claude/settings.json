@@ -8,7 +8,11 @@
       "Skill(update-config)",
       "Skill(update-config:*)",
       "Bash(curl --silent --show-error https://api.supabase.com/v1/projects/skcvbaiqeubbyhdcqjkc/config/auth -H 'Authorization: Bearer sbp_683d0ac7a58423f0c1deac8b74cd552fd55f977b')",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_5e99b9f2b67c0d3debd31c2384af5f4cc798800d npx supabase db query --linked \"SELECT email, created_at FROM auth.users WHERE email LIKE '%@aluno.unafit.com.br' LIMIT 20;\")",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_5e99b9f2b67c0d3debd31c2384af5f4cc798800d npx supabase db query --linked \"SELECT a.id, a.nome, a.email, a.cpf, p.id as profile_id FROM alunos a LEFT JOIN profiles p ON p.academia_id = a.academia_id LIMIT 20;\")",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_5e99b9f2b67c0d3debd31c2384af5f4cc798800d npx supabase db query --linked \"SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'alunos' AND indexdef LIKE '%cpf%';\")",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_5e99b9f2b67c0d3debd31c2384af5f4cc798800d npx supabase db push)"
     ],
     "additionalDirectories": [
       "C:\\Users\\juani\\.claude"

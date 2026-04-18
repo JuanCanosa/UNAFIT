@@ -96,24 +96,46 @@ if (Astro.request.method === 'POST') {
         }
 
         // Cria conta de acesso no Supabase Auth com senha definida pelo gestor
+        // Se o aluno já tem conta em outra academia, vincula sem criar novo usuário
         try {
           const adminClient = createSupabaseAdminClient();
+          let profileId: string | null = null;
+
           const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
             email: authEmail,
             password: senha,
             email_confirm: true,
             user_metadata: { nome_completo: nome },
           });
+
           if (!authErr && authData?.user) {
-            // Cria/atualiza o perfil do aluno para acesso ao dashboard
+            // Novo usuário — cria perfil
+            profileId = authData.user.id;
             await adminClient.from('profiles').upsert({
-              id: authData.user.id,
+              id: profileId,
               nome_completo: nome,
               telefone,
               role: 'aluno',
               academia_id: profile.academia_id,
               ativo: true,
             }, { onConflict: 'id' });
+          } else {
+            // Usuário já existe (mesma conta em outra academia) — localiza pelo email
+            const { data: linkData } = await adminClient.auth.admin.generateLink({
+              type: 'recovery',
+              email: authEmail,
+            });
+            profileId = linkData?.user?.id ?? null;
+          }
+
+          // Registra vínculo aluno ↔ academia (multi-academia)
+          if (profileId) {
+            await adminClient.from('aluno_academias').upsert({
+              profile_id: profileId,
+              academia_id: profile.academia_id!,
+              aluno_id: aluno!.id,
+              ativo: true,
+            }, { onConflict: 'profile_id,academia_id' });
           }
         } catch (_) {}
 

@@ -1,7 +1,7 @@
 ---
 import '@/styles/globals.css';
 import Sidebar from '@/components/Sidebar.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import type { UserRole } from '@/types/database';
 
 interface Props {
@@ -34,6 +34,18 @@ const { data: academia } = await supabase
   .single();
 
 const currentPath = new URL(Astro.request.url).pathname;
+
+// Verifica se o aluno pertence a múltiplas academias (para exibir o switcher)
+let isMultiAcademia = false;
+if (profile.role === 'aluno') {
+  const adminClient = createSupabaseAdminClient();
+  const { count } = await adminClient
+    .from('aluno_academias')
+    .select('id', { count: 'exact', head: true })
+    .eq('profile_id', user.id)
+    .eq('ativo', true);
+  isMultiAcademia = (count ?? 0) > 1;
+}
 ---
 
 <!DOCTYPE html>
@@ -58,6 +70,7 @@ const currentPath = new URL(Astro.request.url).pathname;
       currentPath={currentPath}
       academiaLogoUrl={academia?.logo_url ?? null}
       academiaNome={academia?.nome ?? 'UNAFIT'}
+      isMultiAcademia={isMultiAcademia}
     />
 
     <!-- Layout principal (offset pelo sidebar no desktop) -->
