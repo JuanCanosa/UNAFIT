@@ -470,9 +470,9 @@ const statusPagCores: Record<string, string> = {
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-sm text-zinc-400 mb-1">E-mail *</label>
-            <input name="email" type="email" value={aluno.email} required
-              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+            <label class="block text-sm text-zinc-400 mb-1">CPF</label>
+            <input type="text" value={aluno.cpf ? aluno.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : '—'} disabled
+              class="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-400 text-sm cursor-not-allowed" />
           </div>
           <div>
             <label class="block text-sm text-zinc-400 mb-1">Telefone *</label>
@@ -481,9 +481,22 @@ const statusPagCores: Record<string, string> = {
           </div>
         </div>
         <div>
-          <label class="block text-sm text-zinc-400 mb-1">Data de nascimento</label>
-          <input name="data_nascimento" type="date" value={aluno.data_nascimento ?? ''}
-            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          <label class="block text-sm text-zinc-400 mb-1">E-mail <span class="text-zinc-600">(opcional)</span></label>
+          <input name="email" type="email" value={aluno.email ?? ''}
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
+            placeholder="Sem e-mail, aluno entra com CPF" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Data de nascimento</label>
+            <input name="data_nascimento" type="date" value={aluno.data_nascimento ?? ''}
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Complemento</label>
+            <input name="endereco_complemento" value={aluno.endereco_complemento ?? ''}
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -540,7 +553,6 @@ const statusPagCores: Record<string, string> = {
           <input name="endereco_cidade" value={aluno.endereco_cidade ?? ''}
             class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm" />
         </div>
-        <input type="hidden" name="endereco_complemento" value={aluno.endereco_complemento ?? ''} />
         <div class="flex gap-2 pt-2">
           <button type="button" onclick="document.getElementById('modal-editar').classList.add('hidden')"
             class="flex-1 py-2 border border-zinc-600 text-zinc-300 rounded-lg text-sm">Cancelar</button>
