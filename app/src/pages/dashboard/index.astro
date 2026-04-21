@@ -140,6 +140,10 @@ const statusFaturaStyle: Record<string, string> = {
   vencido:  'border-red-600/30 text-red-400 bg-red-600/10',
   cancelado:'border-zinc-700 text-zinc-500 bg-zinc-800/50',
 };
+
+const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const mrrFmt = brl(saasStats.mrr);
+const isSaasAdmin = profile?.role === 'saas_admin';
 ---
 
 <DashboardLayout title="Dashboard">
@@ -151,10 +155,9 @@ const statusFaturaStyle: Record<string, string> = {
     </h1>
   </div>
 
-  {/* ── DASHBOARD SAAS ADMIN ──────────────────────────────────────────── */}
-  {profile?.role === 'saas_admin' && (
+  <!-- DASHBOARD SAAS ADMIN -->
+  {isSaasAdmin && (
     <div>
-      {/* KPIs principais */}
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div class="rounded-xl border border-border bg-card p-5">
           <p class="text-xs text-muted-foreground mb-1">Academias Ativas</p>
@@ -168,9 +171,7 @@ const statusFaturaStyle: Record<string, string> = {
         </div>
         <div class="rounded-xl border border-primary/30 bg-primary/5 p-5">
           <p class="text-xs text-muted-foreground mb-1">MRR</p>
-          <p class="text-3xl font-bold text-primary">
-            {saasStats.mrr.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-          </p>
+          <p class="text-3xl font-bold text-primary">{mrrFmt}</p>
           <p class="text-xs text-muted-foreground mt-1">receita recorrente mensal</p>
         </div>
         <div class={`rounded-xl border p-5 ${saasStats.inadimplentes > 0 ? 'border-red-600/30 bg-red-900/10' : 'border-border bg-card'}`}>
@@ -178,45 +179,43 @@ const statusFaturaStyle: Record<string, string> = {
           <p class={`text-3xl font-bold ${saasStats.inadimplentes > 0 ? 'text-red-400' : 'text-foreground'}`}>
             {saasStats.inadimplentes}
           </p>
-          <p class="text-xs text-muted-foreground mt-1">academias sem assinatura ativa</p>
+          <p class="text-xs text-muted-foreground mt-1">academias sem plano ativo</p>
         </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-
-        {/* Academias por plano */}
         <div class="rounded-xl border border-border bg-card p-5">
           <h2 class="text-sm font-semibold text-foreground mb-4">Distribuição por Plano</h2>
           {saasStats.academiasPorPlano.length === 0 ? (
             <p class="text-sm text-muted-foreground text-center py-4">Nenhuma assinatura ativa.</p>
           ) : (
             <div class="space-y-3">
-              {saasStats.academiasPorPlano.map(p => (
-                <div>
-                  <div class="flex justify-between text-sm mb-1">
-                    <span class="font-medium text-foreground">{p.nome}</span>
-                    <span class="text-muted-foreground">{p.count} academia{p.count !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div class="flex items-center gap-3">
-                    <div class="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
-                      <div class="h-full rounded-full bg-primary"
-                        style={`width: ${saasStats.totalAtivas > 0 ? Math.round((p.count / saasStats.totalAtivas) * 100) : 0}%`}></div>
+              {saasStats.academiasPorPlano.map(p => {
+                const pct = saasStats.totalAtivas > 0 ? Math.round((p.count / saasStats.totalAtivas) * 100) : 0;
+                const pFmt = brl(p.valor);
+                return (
+                  <div>
+                    <div class="flex justify-between text-sm mb-1">
+                      <span class="font-medium text-foreground">{p.nome}</span>
+                      <span class="text-muted-foreground">{p.count} academia{p.count !== 1 ? 's' : ''}</span>
                     </div>
-                    <span class="text-xs text-primary font-medium shrink-0">
-                      {p.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês
-                    </span>
+                    <div class="flex items-center gap-3">
+                      <div class="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
+                        <div class="h-full rounded-full bg-primary" style={`width: ${pct}%`}></div>
+                      </div>
+                      <span class="text-xs text-primary font-medium shrink-0">{pFmt}/mês</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <div class="pt-2 border-t border-border flex justify-between text-sm">
                 <span class="text-muted-foreground">MRR total</span>
-                <span class="font-bold text-primary">{saasStats.mrr.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                <span class="font-bold text-primary">{mrrFmt}</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Lista de academias */}
         <div class="lg:col-span-2 rounded-xl border border-border bg-card p-5">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-semibold text-foreground">Academias</h2>
@@ -239,7 +238,7 @@ const statusFaturaStyle: Record<string, string> = {
                     {a.assin?.saas_planos?.nome ? ` · ${a.assin.saas_planos.nome}` : ' · Sem plano'}
                   </p>
                 </div>
-                <div class="shrink-0 flex items-center gap-2">
+                <div class="shrink-0">
                   {a.assin?.status === 'ativa' ? (
                     <span class="text-xs px-2 py-0.5 rounded-full border border-green-600/30 text-green-400 bg-green-600/10">ativa</span>
                   ) : a.ativo ? (
@@ -252,183 +251,171 @@ const statusFaturaStyle: Record<string, string> = {
             ))}
           </div>
         </div>
-
       </div>
 
-      {/* Faturas recentes */}
       {saasStats.faturasRecentes.length > 0 && (
         <div class="mt-5 rounded-xl border border-border bg-card p-5">
           <h2 class="text-sm font-semibold text-foreground mb-4">Faturas Recentes</h2>
           <div class="space-y-2">
-            {saasStats.faturasRecentes.map((f: any) => (
-              <div class="flex items-center gap-3 text-sm">
-                <div class="flex-1 min-w-0">
-                  <p class="text-foreground truncate">{f.descricao}</p>
-                  <p class="text-xs text-muted-foreground">Vence: {new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+            {saasStats.faturasRecentes.map((f: any) => {
+              const fVencimento = new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR');
+              const fValor = brl(Number(f.valor));
+              const fStyle = statusFaturaStyle[f.status] ?? 'border-border text-muted-foreground';
+              return (
+                <div class="flex items-center gap-3 text-sm">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-foreground truncate">{f.descricao}</p>
+                    <p class="text-xs text-muted-foreground">Vence: {fVencimento}</p>
+                  </div>
+                  <span class="font-semibold text-foreground shrink-0">{fValor}</span>
+                  <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${fStyle}`}>{f.status}</span>
                 </div>
-                <span class="font-semibold text-foreground shrink-0">
-                  {Number(f.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </span>
-                <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${statusFaturaStyle[f.status] ?? 'border-border text-muted-foreground'}`}>
-                  {f.status}
-                </span>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )}
+
+  <!-- DASHBOARD ACADEMIA (dono / colaborador / aluno) -->
+  {!isSaasAdmin && (
+    <div>
+      {aniversariantesHoje.length > 0 && (
+        <div class="mb-4 bg-amber-900/30 border border-amber-500/50 rounded-xl px-5 py-4 flex items-start gap-4">
+          <span class="text-2xl shrink-0">🎂</span>
+          <div class="min-w-0">
+            <p class="text-amber-300 font-semibold text-sm">
+              {aniversariantesHoje.length === 1 ? 'Aniversário hoje!' : `${aniversariantesHoje.length} aniversários hoje!`}
+            </p>
+            <p class="text-amber-200/80 text-sm mt-0.5">
+              {aniversariantesHoje.map((a, i) => (
+                <>
+                  <a href={`/dashboard/alunos/${a.id}`} class="hover:text-amber-100 underline underline-offset-2">{a.nome}</a>
+                  {i < aniversariantesHoje.length - 1 ? ', ' : ''}
+                </>
+              ))}
+            </p>
           </div>
         </div>
       )}
 
-    </div>
-  )}
-
-  {/* ── DASHBOARD ACADEMIA (dono / colaborador / aluno) ─────────────── */}
-  {profile?.role !== 'saas_admin' && (
-    <div>
-
-  <!-- Aniversariantes do dia -->
-  {aniversariantesHoje.length > 0 && (
-    <div class="mb-4 bg-amber-900/30 border border-amber-500/50 rounded-xl px-5 py-4 flex items-start gap-4">
-      <span class="text-2xl shrink-0">🎂</span>
-      <div class="min-w-0">
-        <p class="text-amber-300 font-semibold text-sm">
-          {aniversariantesHoje.length === 1 ? 'Aniversário hoje!' : `${aniversariantesHoje.length} aniversários hoje!`}
-        </p>
-        <p class="text-amber-200/80 text-sm mt-0.5">
-          {aniversariantesHoje.map((a, i) => (
-            <>
-              <a href={`/dashboard/alunos/${a.id}`} class="hover:text-amber-100 underline underline-offset-2">{a.nome}</a>
-              {i < aniversariantesHoje.length - 1 ? ', ' : ''}
-            </>
-          ))}
-        </p>
-      </div>
-    </div>
-  )}
-
-  <!-- Aniversariantes do mês -->
-  {aniversariantesMes.length > 0 && (
-    <div class="mb-6 bg-blue-900/20 border border-blue-600/30 rounded-xl px-5 py-4">
-      <div class="flex items-center gap-3 mb-3">
-        <span class="text-xl">🎉</span>
-        <p class="text-blue-300 font-semibold text-sm">
-          {aniversariantesMes.length} aniversariante{aniversariantesMes.length !== 1 ? 's' : ''} este mês
-        </p>
-      </div>
-      <div class="flex flex-wrap gap-2">
-        {aniversariantesMes.map(a => {
-          const dia = a.data_nascimento.slice(8, 10);
-          return (
-            <a href={`/dashboard/alunos/${a.id}`}
-              class="inline-flex items-center gap-1.5 rounded-lg border border-blue-600/30 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-800/40 transition-colors">
-              <span class="font-semibold text-blue-300">dia {dia}</span>
-              {a.nome.split(' ')[0]}
-            </a>
-          );
-        })}
-      </div>
-    </div>
-  )}
-
-  <!-- Cards de stats (dono/professor) -->
-  {profile?.role !== 'aluno' && (
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-7">
-      <Card>
-        <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Aulas Hoje</p>
-        <p class="mt-2 text-3xl font-bold text-foreground">{totalAulasHoje}</p>
-        <p class="mt-1 text-xs text-muted-foreground">turmas agendadas</p>
-      </Card>
-      <Card>
-        <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Check-ins Hoje</p>
-        <p class="mt-2 text-3xl font-bold text-primary">{totalCheckins}</p>
-        <p class="mt-1 text-xs text-muted-foreground">presenças confirmadas</p>
-      </Card>
-      <Card>
-        <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</p>
-        <div class="mt-2">
-          <Badge variant="success">Sistema Online</Badge>
+      {aniversariantesMes.length > 0 && (
+        <div class="mb-6 bg-blue-900/20 border border-blue-600/30 rounded-xl px-5 py-4">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-xl">🎉</span>
+            <p class="text-blue-300 font-semibold text-sm">
+              {aniversariantesMes.length} aniversariante{aniversariantesMes.length !== 1 ? 's' : ''} este mês
+            </p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            {aniversariantesMes.map(a => {
+              const diaAniv = a.data_nascimento.slice(8, 10);
+              return (
+                <a href={`/dashboard/alunos/${a.id}`}
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-blue-600/30 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-800/40 transition-colors">
+                  <span class="font-semibold text-blue-300">dia {diaAniv}</span>
+                  {a.nome.split(' ')[0]}
+                </a>
+              );
+            })}
+          </div>
         </div>
-        <p class="mt-1 text-xs text-muted-foreground">todos os serviços ativos</p>
-      </Card>
+      )}
+
+      {profile?.role !== 'aluno' && (
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-7">
+          <Card>
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Aulas Hoje</p>
+            <p class="mt-2 text-3xl font-bold text-foreground">{totalAulasHoje}</p>
+            <p class="mt-1 text-xs text-muted-foreground">turmas agendadas</p>
+          </Card>
+          <Card>
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Check-ins Hoje</p>
+            <p class="mt-2 text-3xl font-bold text-primary">{totalCheckins}</p>
+            <p class="mt-1 text-xs text-muted-foreground">presenças confirmadas</p>
+          </Card>
+          <Card>
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</p>
+            <div class="mt-2">
+              <Badge variant="success">Sistema Online</Badge>
+            </div>
+            <p class="mt-1 text-xs text-muted-foreground">todos os serviços ativos</p>
+          </Card>
+        </div>
+      )}
+
+      <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Acesso rápido</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {profile?.role === 'aluno' && (
+          <>
+            <a href="/dashboard/checkin" class="group block">
+              <Card class="hover:border-primary/40 transition-colors cursor-pointer">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
+                    <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-foreground">Fazer Check-in</p>
+                    <p class="text-xs text-muted-foreground">Aulas de hoje</p>
+                  </div>
+                </div>
+              </Card>
+            </a>
+            <a href="/dashboard/resultados" class="group block">
+              <Card class="hover:border-primary/40 transition-colors cursor-pointer">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
+                    <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-foreground">Meus Resultados</p>
+                    <p class="text-xs text-muted-foreground">Histórico de performance</p>
+                  </div>
+                </div>
+              </Card>
+            </a>
+          </>
+        )}
+        {(profile?.role === 'colaborador' || profile?.role === 'dono') && (
+          <>
+            <a href="/dashboard/wods" class="group block">
+              <Card class="hover:border-primary/40 transition-colors cursor-pointer">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
+                    <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-foreground">Criar WOD</p>
+                    <p class="text-xs text-muted-foreground">Programar treino</p>
+                  </div>
+                </div>
+              </Card>
+            </a>
+            <a href="/dashboard/agenda" class="group block">
+              <Card class="hover:border-primary/40 transition-colors cursor-pointer">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
+                    <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-foreground">Agenda</p>
+                    <p class="text-xs text-muted-foreground">{totalAulasHoje} aula{totalAulasHoje !== 1 ? 's' : ''} hoje</p>
+                  </div>
+                </div>
+              </Card>
+            </a>
+          </>
+        )}
+      </div>
     </div>
   )}
-
-  <!-- Atalhos por role -->
-  <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Acesso rápido</h2>
-  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
-    {profile?.role === 'aluno' && (
-      <>
-        <a href="/dashboard/checkin" class="group block">
-          <Card class="hover:border-primary/40 transition-colors cursor-pointer">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
-                <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <p class="font-semibold text-foreground">Fazer Check-in</p>
-                <p class="text-xs text-muted-foreground">Aulas de hoje</p>
-              </div>
-            </div>
-          </Card>
-        </a>
-
-        <a href="/dashboard/resultados" class="group block">
-          <Card class="hover:border-primary/40 transition-colors cursor-pointer">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
-                <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                </svg>
-              </div>
-              <div>
-                <p class="font-semibold text-foreground">Meus Resultados</p>
-                <p class="text-xs text-muted-foreground">Histórico de performance</p>
-              </div>
-            </div>
-          </Card>
-        </a>
-      </>
-    )}
-
-    {(profile?.role === 'colaborador' || profile?.role === 'dono') && (
-      <>
-        <a href="/dashboard/wods" class="group block">
-          <Card class="hover:border-primary/40 transition-colors cursor-pointer">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
-                <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              <div>
-                <p class="font-semibold text-foreground">Criar WOD</p>
-                <p class="text-xs text-muted-foreground">Programar treino</p>
-              </div>
-            </div>
-          </Card>
-        </a>
-
-        <a href="/dashboard/agenda" class="group block">
-          <Card class="hover:border-primary/40 transition-colors cursor-pointer">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 group-hover:bg-primary/20 transition-colors">
-                <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <div>
-                <p class="font-semibold text-foreground">Agenda</p>
-                <p class="text-xs text-muted-foreground">{totalAulasHoje} aula{totalAulasHoje !== 1 ? 's' : ''} hoje</p>
-              </div>
-            </div>
-          </Card>
-        </a>
-      </>
-    )}
-
-  </div>
-  )} {/* fim role !== saas_admin */}
-
 </DashboardLayout>
