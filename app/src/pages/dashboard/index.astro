@@ -2,7 +2,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Card from '@/components/ui/Card.astro';
 import Badge from '@/components/ui/Badge.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -13,17 +13,92 @@ const { data: profile } = await supabase
   .eq('id', user!.id)
   .single();
 
-// Data de hoje para stats
 const hoje = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 const hojeISO = new Date().toISOString().split('T')[0];
+const firstName = profile?.nome_completo.split(' ')[0] ?? 'Admin';
 
-// Stats rápidas (apenas para dono/professor)
+// ── SaaS Admin: stats globais ─────────────────────────────────────────────────
+let saasStats = {
+  totalAcademias: 0,
+  totalAtivas: 0,
+  totalAlunos: 0,
+  mrr: 0,
+  inadimplentes: 0,
+  academiasPorPlano: [] as { nome: string; valor: number; count: number }[],
+  faturasRecentes: [] as any[],
+  academiasLista: [] as any[],
+};
+
+if (profile?.role === 'saas_admin') {
+  const adminClient = createSupabaseAdminClient();
+
+  const { data: academias } = await adminClient
+    .from('academias')
+    .select('id, nome, slug, ativo, logo_url, saas_assinaturas(status, saas_planos(nome, valor))')
+    .order('criado_em', { ascending: false });
+
+  const { data: contagens } = await adminClient
+    .from('profiles')
+    .select('academia_id, role')
+    .eq('role', 'aluno');
+
+  const contagemAlunos: Record<string, number> = (contagens ?? []).reduce((acc: Record<string, number>, p: any) => {
+    if (p.academia_id) acc[p.academia_id] = (acc[p.academia_id] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  saasStats.totalAcademias = academias?.length ?? 0;
+  saasStats.totalAtivas    = academias?.filter((a: any) => a.ativo).length ?? 0;
+  saasStats.totalAlunos    = (contagens ?? []).length;
+
+  saasStats.mrr = (academias ?? []).reduce((sum: number, a: any) => {
+    const assin = a.saas_assinaturas?.[0];
+    if (assin?.status === 'ativa') sum += Number(assin.saas_planos?.valor ?? 0);
+    return sum;
+  }, 0);
+
+  // Inadimplentes: academias ativas SEM assinatura ativa
+  saasStats.inadimplentes = (academias ?? []).filter((a: any) => {
+    if (!a.ativo) return false;
+    const assin = a.saas_assinaturas?.[0];
+    return !assin || assin.status !== 'ativa';
+  }).length;
+
+  // Academias por plano
+  const planoMap: Record<string, { nome: string; valor: number; count: number }> = {};
+  for (const a of academias ?? []) {
+    const assin = (a as any).saas_assinaturas?.[0];
+    if (assin?.status === 'ativa' && assin.saas_planos) {
+      const k = assin.saas_planos.nome;
+      planoMap[k] = planoMap[k] ?? { nome: k, valor: Number(assin.saas_planos.valor), count: 0 };
+      planoMap[k].count++;
+    }
+  }
+  saasStats.academiasPorPlano = Object.values(planoMap).sort((a, b) => b.valor - a.valor);
+
+  // Últimas faturas
+  const { data: faturas } = await adminClient
+    .from('saas_faturas')
+    .select('id, descricao, valor, data_vencimento, status, academia_id')
+    .order('criado_em', { ascending: false })
+    .limit(5);
+  saasStats.faturasRecentes = faturas ?? [];
+
+  // Lista academias com contagem
+  saasStats.academiasLista = (academias ?? []).map((a: any) => ({
+    ...a,
+    totalAlunos: contagemAlunos[a.id] ?? 0,
+    assin: a.saas_assinaturas?.[0] ?? null,
+  }));
+}
+
+// ── Academia/colaborador: stats do dia ────────────────────────────────────────
 let totalAulasHoje = 0;
 let totalCheckins  = 0;
 let aniversariantesHoje: { id: string; nome: string }[] = [];
 let aniversariantesMes:  { id: string; nome: string; data_nascimento: string }[] = [];
 
-if (profile?.role !== 'aluno') {
+if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
   const { count: aulas } = await supabase
     .from('aulas_agenda')
     .select('id', { count: 'exact', head: true })
@@ -42,22 +117,15 @@ if (profile?.role !== 'aluno') {
   const mes = String(agora.getMonth() + 1).padStart(2, '0');
   const dia = String(agora.getDate()).padStart(2, '0');
 
-  // Aniversariantes do dia
   const { data: anivHoje } = await supabase
-    .from('alunos')
-    .select('id, nome, data_nascimento')
-    .eq('academia_id', profile!.academia_id!)
-    .eq('status', 'ativo')
-    .not('data_nascimento', 'is', null)
-    .filter('data_nascimento', 'like', `%-${mes}-${dia}`);
+    .from('alunos').select('id, nome, data_nascimento')
+    .eq('academia_id', profile!.academia_id!).eq('status', 'ativo')
+    .not('data_nascimento', 'is', null).filter('data_nascimento', 'like', `%-${mes}-${dia}`);
   aniversariantesHoje = anivHoje ?? [];
 
-  // Aniversariantes do mês (excluindo os de hoje)
   const { data: anivMes } = await supabase
-    .from('alunos')
-    .select('id, nome, data_nascimento')
-    .eq('academia_id', profile!.academia_id!)
-    .eq('status', 'ativo')
+    .from('alunos').select('id, nome, data_nascimento')
+    .eq('academia_id', profile!.academia_id!).eq('status', 'ativo')
     .not('data_nascimento', 'is', null)
     .filter('data_nascimento', 'like', `%-${mes}-%`)
     .not('data_nascimento', 'like', `%-${mes}-${dia}`);
@@ -66,10 +134,12 @@ if (profile?.role !== 'aluno') {
   );
 }
 
-// Mantém compatibilidade com o template legado
-const aniversariantes = aniversariantesHoje;
-
-const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
+const statusFaturaStyle: Record<string, string> = {
+  pendente: 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10',
+  pago:     'border-green-600/30 text-green-400 bg-green-600/10',
+  vencido:  'border-red-600/30 text-red-400 bg-red-600/10',
+  cancelado:'border-zinc-700 text-zinc-500 bg-zinc-800/50',
+};
 ---
 
 <DashboardLayout title="Dashboard">
@@ -77,9 +147,143 @@ const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
   <div class="mb-7">
     <p class="text-sm text-muted-foreground capitalize">{hoje}</p>
     <h1 class="mt-1 text-2xl font-bold text-foreground">
-      Olá, <span class="text-primary">{firstName}</span> 👋
+      Olá, <span class="text-primary">{firstName}</span>
     </h1>
   </div>
+
+  {/* ── DASHBOARD SAAS ADMIN ──────────────────────────────────────────── */}
+  {profile?.role === 'saas_admin' && (
+    <div>
+      {/* KPIs principais */}
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="rounded-xl border border-border bg-card p-5">
+          <p class="text-xs text-muted-foreground mb-1">Academias Ativas</p>
+          <p class="text-3xl font-bold text-foreground">{saasStats.totalAtivas}</p>
+          <p class="text-xs text-muted-foreground mt-1">de {saasStats.totalAcademias} cadastradas</p>
+        </div>
+        <div class="rounded-xl border border-border bg-card p-5">
+          <p class="text-xs text-muted-foreground mb-1">Total de Alunos</p>
+          <p class="text-3xl font-bold text-foreground">{saasStats.totalAlunos}</p>
+          <p class="text-xs text-muted-foreground mt-1">em todas as academias</p>
+        </div>
+        <div class="rounded-xl border border-primary/30 bg-primary/5 p-5">
+          <p class="text-xs text-muted-foreground mb-1">MRR</p>
+          <p class="text-3xl font-bold text-primary">
+            {saasStats.mrr.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </p>
+          <p class="text-xs text-muted-foreground mt-1">receita recorrente mensal</p>
+        </div>
+        <div class={`rounded-xl border p-5 ${saasStats.inadimplentes > 0 ? 'border-red-600/30 bg-red-900/10' : 'border-border bg-card'}`}>
+          <p class="text-xs text-muted-foreground mb-1">Inadimplentes</p>
+          <p class={`text-3xl font-bold ${saasStats.inadimplentes > 0 ? 'text-red-400' : 'text-foreground'}`}>
+            {saasStats.inadimplentes}
+          </p>
+          <p class="text-xs text-muted-foreground mt-1">academias sem assinatura ativa</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+        {/* Academias por plano */}
+        <div class="rounded-xl border border-border bg-card p-5">
+          <h2 class="text-sm font-semibold text-foreground mb-4">Distribuição por Plano</h2>
+          {saasStats.academiasPorPlano.length === 0 ? (
+            <p class="text-sm text-muted-foreground text-center py-4">Nenhuma assinatura ativa.</p>
+          ) : (
+            <div class="space-y-3">
+              {saasStats.academiasPorPlano.map(p => (
+                <div>
+                  <div class="flex justify-between text-sm mb-1">
+                    <span class="font-medium text-foreground">{p.nome}</span>
+                    <span class="text-muted-foreground">{p.count} academia{p.count !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
+                      <div class="h-full rounded-full bg-primary"
+                        style={`width: ${saasStats.totalAtivas > 0 ? Math.round((p.count / saasStats.totalAtivas) * 100) : 0}%`}></div>
+                    </div>
+                    <span class="text-xs text-primary font-medium shrink-0">
+                      {p.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <div class="pt-2 border-t border-border flex justify-between text-sm">
+                <span class="text-muted-foreground">MRR total</span>
+                <span class="font-bold text-primary">{saasStats.mrr.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Lista de academias */}
+        <div class="lg:col-span-2 rounded-xl border border-border bg-card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-foreground">Academias</h2>
+            <a href="/dashboard/academias" class="text-xs text-primary hover:underline">Ver todas →</a>
+          </div>
+          <div class="space-y-2">
+            {saasStats.academiasLista.slice(0, 6).map((a: any) => (
+              <a href={`/dashboard/academias/${a.id}`}
+                class="flex items-center gap-3 rounded-lg border border-transparent hover:border-border hover:bg-zinc-900/60 px-3 py-2.5 transition-colors group">
+                <div class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-sm overflow-hidden">
+                  {a.logo_url
+                    ? <img src={a.logo_url} alt={a.nome} class="w-full h-full object-contain p-0.5" />
+                    : a.nome.charAt(0).toUpperCase()
+                  }
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">{a.nome}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {a.totalAlunos} aluno{a.totalAlunos !== 1 ? 's' : ''}
+                    {a.assin?.saas_planos?.nome ? ` · ${a.assin.saas_planos.nome}` : ' · Sem plano'}
+                  </p>
+                </div>
+                <div class="shrink-0 flex items-center gap-2">
+                  {a.assin?.status === 'ativa' ? (
+                    <span class="text-xs px-2 py-0.5 rounded-full border border-green-600/30 text-green-400 bg-green-600/10">ativa</span>
+                  ) : a.ativo ? (
+                    <span class="text-xs px-2 py-0.5 rounded-full border border-red-600/30 text-red-400 bg-red-900/20">sem plano</span>
+                  ) : (
+                    <span class="text-xs px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-500">inativa</span>
+                  )}
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      {/* Faturas recentes */}
+      {saasStats.faturasRecentes.length > 0 && (
+        <div class="mt-5 rounded-xl border border-border bg-card p-5">
+          <h2 class="text-sm font-semibold text-foreground mb-4">Faturas Recentes</h2>
+          <div class="space-y-2">
+            {saasStats.faturasRecentes.map((f: any) => (
+              <div class="flex items-center gap-3 text-sm">
+                <div class="flex-1 min-w-0">
+                  <p class="text-foreground truncate">{f.descricao}</p>
+                  <p class="text-xs text-muted-foreground">Vence: {new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                </div>
+                <span class="font-semibold text-foreground shrink-0">
+                  {Number(f.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+                <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${statusFaturaStyle[f.status] ?? 'border-border text-muted-foreground'}`}>
+                  {f.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+    </div>
+  )}
+
+  {/* ── DASHBOARD ACADEMIA (dono / colaborador / aluno) ─────────────── */}
+  {profile?.role !== 'saas_admin' && (
+    <div>
 
   <!-- Aniversariantes do dia -->
   {aniversariantesHoje.length > 0 && (
@@ -225,4 +429,6 @@ const firstName = profile?.nome_completo.split(' ')[0] ?? 'Atleta';
     )}
 
   </div>
+  )} {/* fim role !== saas_admin */}
+
 </DashboardLayout>
