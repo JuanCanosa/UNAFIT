@@ -1,0 +1,12 @@
+-- ─── Campos adicionais para gestão SaaS de academias ────────────────────────
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS email         TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS telefone      TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS responsavel_nome       TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS responsavel_cpf_cnpj  TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_cep          TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_rua          TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_numero        TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_complemento  TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_bairro        TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_cidade        TEXT;
+ALTER TABLE academias ADD COLUMN IF NOT EXISTS endereco_estado        TEXT;

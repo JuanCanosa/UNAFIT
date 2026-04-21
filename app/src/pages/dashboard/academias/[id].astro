@@ -1,0 +1,567 @@
+---
+/**
+ * /dashboard/academias/[id] — Gestão completa de uma academia (saas_admin only).
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Badge from '@/components/ui/Badge.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+if (!profile || profile.role !== 'saas_admin') return Astro.redirect('/dashboard');
+
+const adminClient = createSupabaseAdminClient();
+const { id } = Astro.params;
+
+let sucesso = '';
+let erro = '';
+
+// ── POST handlers ─────────────────────────────────────────────────────────────
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'editar_academia') {
+    const patch: Record<string, any> = {
+      nome:                  (form.get('nome') as string)?.trim(),
+      slug:                  (form.get('slug') as string)?.trim().toLowerCase().replace(/\s+/g, '-'),
+      email:                 (form.get('email') as string)?.trim().toLowerCase() || null,
+      telefone:              (form.get('telefone') as string)?.trim() || null,
+      responsavel_nome:      (form.get('responsavel_nome') as string)?.trim() || null,
+      responsavel_cpf_cnpj:  (form.get('responsavel_cpf_cnpj') as string)?.trim().replace(/\D/g, '') || null,
+      endereco_cep:          (form.get('endereco_cep') as string)?.trim().replace(/\D/g, '') || null,
+      endereco_rua:          (form.get('endereco_rua') as string)?.trim() || null,
+      endereco_numero:       (form.get('endereco_numero') as string)?.trim() || null,
+      endereco_complemento:  (form.get('endereco_complemento') as string)?.trim() || null,
+      endereco_bairro:       (form.get('endereco_bairro') as string)?.trim() || null,
+      endereco_cidade:       (form.get('endereco_cidade') as string)?.trim() || null,
+      endereco_estado:       (form.get('endereco_estado') as string)?.trim().toUpperCase() || null,
+    };
+    const { error: updErr } = await adminClient.from('academias').update(patch).eq('id', id!);
+    if (updErr) erro = updErr.message;
+    else sucesso = 'Academia atualizada com sucesso!';
+  }
+
+  if (action === 'gerar_fatura') {
+    const descricao       = (form.get('descricao') as string)?.trim();
+    const valor           = parseFloat((form.get('valor') as string)?.replace(',', '.'));
+    const data_vencimento = form.get('data_vencimento') as string;
+    const assinatura_id   = form.get('assinatura_id') as string || null;
+
+    if (!descricao || isNaN(valor) || !data_vencimento) {
+      erro = 'Preencha todos os campos da fatura.';
+    } else {
+      const { error: fatErr } = await adminClient.from('saas_faturas').insert({
+        academia_id: id!,
+        saas_assinatura_id: assinatura_id,
+        descricao,
+        valor,
+        data_vencimento,
+        status: 'pendente',
+      });
+      if (fatErr) erro = fatErr.message;
+      else sucesso = 'Fatura gerada com sucesso!';
+    }
+  }
+
+  if (action === 'atualizar_assinatura') {
+    const saas_plano_id = form.get('saas_plano_id') as string;
+    const status        = form.get('status') as string;
+    const assinatura_id = form.get('assinatura_id') as string;
+
+    if (assinatura_id) {
+      await adminClient.from('saas_assinaturas').update({ saas_plano_id, status }).eq('id', assinatura_id);
+    } else {
+      await adminClient.from('saas_assinaturas').insert({
+        academia_id: id!, saas_plano_id, status, data_inicio: new Date().toISOString().split('T')[0],
+      });
+    }
+    sucesso = 'Assinatura atualizada!';
+  }
+
+  if (action === 'marcar_pago') {
+    const fatura_id = form.get('fatura_id') as string;
+    await adminClient.from('saas_faturas').update({
+      status: 'pago',
+      data_pagamento: new Date().toISOString().split('T')[0],
+    }).eq('id', fatura_id);
+    sucesso = 'Fatura marcada como paga!';
+  }
+
+  if (action === 'cancelar_fatura') {
+    const fatura_id = form.get('fatura_id') as string;
+    await adminClient.from('saas_faturas').update({ status: 'cancelado' }).eq('id', fatura_id);
+    sucesso = 'Fatura cancelada.';
+  }
+}
+
+// ── Busca dados ───────────────────────────────────────────────────────────────
+const { data: academia } = await adminClient
+  .from('academias')
+  .select(`
+    id, nome, slug, ativo, criado_em, logo_url,
+    email, telefone, responsavel_nome, responsavel_cpf_cnpj,
+    endereco_cep, endereco_rua, endereco_numero, endereco_complemento,
+    endereco_bairro, endereco_cidade, endereco_estado,
+    asaas_customer_id,
+    saas_assinaturas(id, status, data_inicio, data_fim, saas_planos(id, nome, valor, limite_alunos))
+  `)
+  .eq('id', id!)
+  .single();
+
+if (!academia) return Astro.redirect('/dashboard/academias');
+
+const { data: planos } = await adminClient.from('saas_planos').select('id, nome, valor, limite_alunos').eq('ativo', true).order('valor');
+
+const { data: faturas } = await adminClient
+  .from('saas_faturas')
+  .select('id, descricao, valor, data_vencimento, data_pagamento, status, link_pagamento')
+  .eq('academia_id', id!)
+  .order('data_vencimento', { ascending: false })
+  .limit(20);
+
+const { data: membros } = await adminClient
+  .from('profiles')
+  .select('id, nome_completo, role, ativo, criado_em')
+  .eq('academia_id', id!)
+  .neq('role', 'saas_admin')
+  .order('role')
+  .order('nome_completo');
+
+const assin = (academia as any).saas_assinaturas?.[0];
+const totalAlunos = membros?.filter((m: any) => m.role === 'aluno').length ?? 0;
+const totalColabs = membros?.filter((m: any) => m.role === 'colaborador').length ?? 0;
+const donos       = membros?.filter((m: any) => m.role === 'dono') ?? [];
+
+// CPF/CNPJ mascarado
+const docRaw = (academia as any).responsavel_cpf_cnpj ?? '';
+const docMascarado = docRaw.length === 11
+  ? docRaw.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')
+  : docRaw.length === 14
+    ? docRaw.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')
+    : docRaw;
+
+const cepMascarado = ((academia as any).endereco_cep ?? '').replace(/^(\d{5})(\d{3})$/, '$1-$2');
+
+const statusFaturaStyle: Record<string, string> = {
+  pendente:  'border-yellow-500/30 text-yellow-400 bg-yellow-500/10',
+  pago:      'border-green-600/30 text-green-400 bg-green-600/10',
+  vencido:   'border-red-600/30 text-red-400 bg-red-600/10',
+  cancelado: 'border-zinc-700 text-zinc-500 bg-zinc-800/50',
+};
+
+const hoje = new Date().toISOString().split('T')[0];
+---
+
+<DashboardLayout title={`Academia — ${academia.nome}`}>
+
+  <!-- Breadcrumb -->
+  <div class="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
+    <a href="/dashboard/academias" class="hover:text-foreground transition-colors">Academias</a>
+    <span>/</span>
+    <span class="text-foreground font-medium">{academia.nome}</span>
+  </div>
+
+  {sucesso && (
+    <div class="mb-5 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">✓ {sucesso}</div>
+  )}
+  {erro && (
+    <div class="mb-5 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">{erro}</div>
+  )}
+
+  <!-- Header -->
+  <div class="mb-6 flex items-start gap-4">
+    <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary font-bold text-2xl overflow-hidden border border-border">
+      {(academia as any).logo_url
+        ? <img src={(academia as any).logo_url} alt={academia.nome} class="w-full h-full object-contain p-1" />
+        : academia.nome.charAt(0).toUpperCase()
+      }
+    </div>
+    <div class="flex-1">
+      <div class="flex items-center gap-3 flex-wrap">
+        <h1 class="text-xl font-bold text-foreground">{academia.nome}</h1>
+        <Badge variant={(academia as any).ativo ? 'success' : 'muted'}>{(academia as any).ativo ? 'Ativa' : 'Inativa'}</Badge>
+        {assin && (
+          <span class={`text-xs px-2 py-0.5 rounded-full border ${
+            assin.status === 'ativa' ? 'border-primary/30 text-primary bg-primary/10' : 'border-border text-muted-foreground'
+          }`}>{assin.saas_planos?.nome ?? 'Sem plano'}</span>
+        )}
+      </div>
+      <p class="text-xs text-muted-foreground mt-1">/{(academia as any).slug} · Criada em {new Date((academia as any).criado_em).toLocaleDateString('pt-BR')}</p>
+    </div>
+    <!-- Stats rápidos -->
+    <div class="hidden sm:flex items-center gap-5 text-center shrink-0">
+      <div>
+        <p class="text-xl font-bold text-foreground">{totalAlunos}</p>
+        <p class="text-xs text-muted-foreground">Alunos</p>
+      </div>
+      <div>
+        <p class="text-xl font-bold text-foreground">{totalColabs}</p>
+        <p class="text-xs text-muted-foreground">Colaboradores</p>
+      </div>
+      {assin && (
+        <div>
+          <p class="text-xl font-bold text-primary">{Number(assin.saas_planos?.valor ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+          <p class="text-xs text-muted-foreground">MRR</p>
+        </div>
+      )}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+    <!-- ── Coluna principal ──────────────────────────────────────────────── -->
+    <div class="lg:col-span-2 space-y-5">
+
+      <!-- Editar dados da academia -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <h2 class="text-sm font-semibold text-foreground mb-4">Dados da Academia</h2>
+        <form method="POST" class="space-y-4">
+          <input type="hidden" name="action" value="editar_academia" />
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2 sm:col-span-1">
+              <label class="block text-xs text-muted-foreground mb-1">Nome *</label>
+              <input name="nome" required value={academia.nome}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div class="col-span-2 sm:col-span-1">
+              <label class="block text-xs text-muted-foreground mb-1">Slug (URL)</label>
+              <input name="slug" value={(academia as any).slug ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">E-mail da Academia</label>
+              <input name="email" type="email" value={(academia as any).email ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Telefone</label>
+              <input name="telefone" id="tel-edit" value={(academia as any).telefone ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+          </div>
+
+          <hr class="border-border" />
+          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Responsável</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2 sm:col-span-1">
+              <label class="block text-xs text-muted-foreground mb-1">Nome</label>
+              <input name="responsavel_nome" value={(academia as any).responsavel_nome ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div class="col-span-2 sm:col-span-1">
+              <label class="block text-xs text-muted-foreground mb-1">CPF / CNPJ</label>
+              <input name="responsavel_cpf_cnpj" id="doc-edit" value={docMascarado}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+          </div>
+
+          <hr class="border-border" />
+          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Endereço</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">CEP</label>
+              <input name="endereco_cep" id="cep-edit" value={cepMascarado} maxlength="9"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Número</label>
+              <input name="endereco_numero" value={(academia as any).endereco_numero ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs text-muted-foreground mb-1">Rua / Logradouro</label>
+              <input name="endereco_rua" id="rua-edit" value={(academia as any).endereco_rua ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Complemento</label>
+              <input name="endereco_complemento" value={(academia as any).endereco_complemento ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Bairro</label>
+              <input name="endereco_bairro" id="bairro-edit" value={(academia as any).endereco_bairro ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Cidade</label>
+              <input name="endereco_cidade" id="cidade-edit" value={(academia as any).endereco_cidade ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Estado (UF)</label>
+              <input name="endereco_estado" maxlength="2" value={(academia as any).endereco_estado ?? ''}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+          </div>
+
+          <div class="flex justify-end pt-2">
+            <button type="submit"
+              class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+              Salvar Alterações
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Faturas -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-foreground">Faturas</h2>
+          <button onclick="document.getElementById('modal-fatura').classList.remove('hidden')"
+            class="rounded-lg bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 text-xs font-medium hover:bg-primary/20">
+            + Gerar Fatura
+          </button>
+        </div>
+
+        {!faturas || faturas.length === 0 ? (
+          <p class="text-center py-6 text-sm text-muted-foreground">Nenhuma fatura gerada.</p>
+        ) : (
+          <div class="space-y-2">
+            {faturas.map((f: any) => (
+              <div class="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-sm">
+                <div class="flex-1 min-w-0">
+                  <p class="font-medium text-foreground truncate">{f.descricao}</p>
+                  <p class="text-xs text-muted-foreground mt-0.5">
+                    Vence: {new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                    {f.data_pagamento && ` · Pago: ${new Date(f.data_pagamento + 'T12:00:00').toLocaleDateString('pt-BR')}`}
+                  </p>
+                </div>
+                <span class="font-semibold text-foreground shrink-0">
+                  {Number(f.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+                <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${statusFaturaStyle[f.status] ?? 'border-border text-muted-foreground'}`}>
+                  {f.status}
+                </span>
+                {f.status === 'pendente' && (
+                  <form method="POST" class="shrink-0">
+                    <input type="hidden" name="action" value="marcar_pago" />
+                    <input type="hidden" name="fatura_id" value={f.id} />
+                    <button type="submit" class="text-xs text-green-400 hover:text-green-300">Pago</button>
+                  </form>
+                )}
+                {(f.status === 'pendente' || f.status === 'vencido') && (
+                  <form method="POST" class="shrink-0">
+                    <input type="hidden" name="action" value="cancelar_fatura" />
+                    <input type="hidden" name="fatura_id" value={f.id} />
+                    <button type="submit" class="text-xs text-red-400/70 hover:text-red-400">Cancelar</button>
+                  </form>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+    </div>
+
+    <!-- ── Sidebar direita ───────────────────────────────────────────────── -->
+    <div class="space-y-5">
+
+      <!-- Assinatura / Plano -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <h2 class="text-sm font-semibold text-foreground mb-4">Plano SaaS</h2>
+        {assin ? (
+          <div class="mb-4 space-y-1.5 text-sm">
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Plano</span>
+              <span class="font-medium text-foreground">{assin.saas_planos?.nome}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Valor</span>
+              <span class="font-medium text-primary">{Number(assin.saas_planos?.valor ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Limite alunos</span>
+              <span class="text-foreground">{assin.saas_planos?.limite_alunos ?? '∞'}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Status</span>
+              <span class={`text-xs px-2 py-0.5 rounded-full border ${
+                assin.status === 'ativa' ? 'border-green-600/30 text-green-400 bg-green-600/10' :
+                assin.status === 'trial' ? 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10' :
+                'border-red-600/30 text-red-400 bg-red-600/10'
+              }`}>{assin.status}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Início</span>
+              <span class="text-foreground text-xs">{new Date(assin.data_inicio + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
+            </div>
+          </div>
+        ) : (
+          <p class="text-sm text-muted-foreground mb-4">Sem assinatura ativa.</p>
+        )}
+        <form method="POST" class="space-y-2">
+          <input type="hidden" name="action" value="atualizar_assinatura" />
+          <input type="hidden" name="assinatura_id" value={assin?.id ?? ''} />
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Plano</label>
+            <select name="saas_plano_id"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
+              {planos?.map((p: any) => (
+                <option value={p.id} selected={p.id === assin?.saas_planos?.id}>
+                  {p.nome} — {Number(p.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Status</label>
+            <select name="status"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
+              {['ativa', 'trial', 'suspensa', 'cancelada'].map(s => (
+                <option value={s} selected={s === assin?.status}>{s}</option>
+              ))}
+            </select>
+          </div>
+          <button type="submit"
+            class="w-full rounded-lg border border-primary/30 bg-primary/10 text-primary py-2 text-xs font-medium hover:bg-primary/20">
+            Atualizar Plano
+          </button>
+        </form>
+      </div>
+
+      <!-- Membros -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <h2 class="text-sm font-semibold text-foreground mb-3">Membros</h2>
+
+        {donos.length > 0 && (
+          <div class="mb-3">
+            <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Dono(s)</p>
+            {donos.map((m: any) => (
+              <div class="flex items-center gap-2 py-1.5">
+                <div class="h-7 w-7 shrink-0 flex items-center justify-center rounded-full bg-primary/20 text-primary text-xs font-bold">
+                  {m.nome_completo.charAt(0).toUpperCase()}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-medium text-foreground truncate">{m.nome_completo}</p>
+                </div>
+                <span class={`h-2 w-2 rounded-full shrink-0 ${m.ativo ? 'bg-green-500' : 'bg-zinc-600'}`} title={m.ativo ? 'Ativo' : 'Inativo'}></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div class="flex gap-4 text-sm pt-2 border-t border-border">
+          <div class="text-center flex-1">
+            <p class="font-bold text-foreground text-lg">{totalAlunos}</p>
+            <p class="text-xs text-muted-foreground">Alunos</p>
+          </div>
+          <div class="text-center flex-1">
+            <p class="font-bold text-foreground text-lg">{totalColabs}</p>
+            <p class="text-xs text-muted-foreground">Colaboradores</p>
+          </div>
+        </div>
+
+        {assin?.saas_planos?.limite_alunos && (
+          <div class="mt-3">
+            <div class="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>Capacidade</span>
+              <span>{totalAlunos} / {assin.saas_planos.limite_alunos}</span>
+            </div>
+            <div class="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+              <div
+                class="h-full rounded-full bg-primary transition-all"
+                style={`width: ${Math.min(100, (totalAlunos / assin.saas_planos.limite_alunos) * 100).toFixed(0)}%`}
+              ></div>
+            </div>
+          </div>
+        )}
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Modal Gerar Fatura -->
+  <div id="modal-fatura" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 p-6">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-lg font-bold text-foreground">Gerar Fatura</h2>
+        <button onclick="document.getElementById('modal-fatura').classList.add('hidden')"
+          class="text-muted-foreground hover:text-foreground">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="gerar_fatura" />
+        <input type="hidden" name="assinatura_id" value={assin?.id ?? ''} />
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Descrição *</label>
+          <input name="descricao"
+            value={assin ? `Mensalidade ${assin.saas_planos?.nome} — ${new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}` : ''}
+            required
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Valor (R$) *</label>
+            <input name="valor"
+              value={assin ? String(assin.saas_planos?.valor ?? '') : ''}
+              required
+              placeholder="0,00"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Vencimento *</label>
+            <input name="data_vencimento" type="date" required value={hoje}
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+        </div>
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="document.getElementById('modal-fatura').classList.add('hidden')"
+            class="flex-1 rounded-lg border border-border py-2 text-sm text-muted-foreground hover:text-foreground">
+            Cancelar
+          </button>
+          <button type="submit"
+            class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+            Gerar Fatura
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('modal-fatura')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
+    });
+
+    // Máscara telefone (editar)
+    document.getElementById('tel-edit')?.addEventListener('input', function(this: HTMLInputElement) {
+      let v = this.value.replace(/\D/g, '').slice(0, 11);
+      if (v.length > 10) v = v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
+      else if (v.length > 6) v = v.replace(/^(\d{2})(\d{4})(\d*)$/, '($1) $2-$3');
+      else if (v.length > 2) v = v.replace(/^(\d{2})(\d*)$/, '($1) $2');
+      this.value = v;
+    });
+
+    // Máscara CPF/CNPJ (editar)
+    document.getElementById('doc-edit')?.addEventListener('input', function(this: HTMLInputElement) {
+      let v = this.value.replace(/\D/g, '').slice(0, 14);
+      if (v.length <= 11) v = v.replace(/^(\d{3})(\d{3})(\d{3})(\d{0,2})$/, (_, a, b, c, d) => d ? `${a}.${b}.${c}-${d}` : `${a}.${b}.${c}`);
+      else v = v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})$/, (_, a, b, c, d, e) => e ? `${a}.${b}.${c}/${d}-${e}` : `${a}.${b}.${c}/${d}`);
+      this.value = v;
+    });
+
+    // Busca CEP via ViaCEP (editar)
+    document.getElementById('cep-edit')?.addEventListener('blur', async function(this: HTMLInputElement) {
+      const cep = this.value.replace(/\D/g, '');
+      if (cep.length !== 8) return;
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const d = await res.json();
+        if (d.erro) return;
+        (document.getElementById('rua-edit') as HTMLInputElement).value = d.logradouro ?? '';
+        (document.getElementById('bairro-edit') as HTMLInputElement).value = d.bairro ?? '';
+        (document.getElementById('cidade-edit') as HTMLInputElement).value = d.localidade ?? '';
+      } catch {}
+    });
+  </script>
+</DashboardLayout>
