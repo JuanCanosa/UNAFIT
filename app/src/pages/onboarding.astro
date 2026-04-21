@@ -1,0 +1,307 @@
+---
+import '@/styles/globals.css';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { emailConfigurado, enviarEmailCadastroCompleto } from '@/lib/email';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const adminClient = createSupabaseAdminClient();
+
+const { data: profile } = await adminClient
+  .from('profiles')
+  .select('id, role, nome_completo, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'dono') return Astro.redirect('/dashboard');
+
+const { data: academia } = await adminClient
+  .from('academias')
+  .select('id, nome, slug, email, telefone, onboarding_completo, logo_url')
+  .eq('id', profile.academia_id!)
+  .single();
+
+if (!academia || (academia as any).onboarding_completo) return Astro.redirect('/dashboard');
+
+const appUrl = import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br';
+let erro = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const nomeResponsavel  = (form.get('responsavel_nome') as string)?.trim();
+  const cpfCnpj          = (form.get('responsavel_cpf_cnpj') as string)?.trim().replace(/\D/g, '') || null;
+  const telefone         = (form.get('telefone') as string)?.trim() || null;
+  const nomeAcademia     = (form.get('nome_academia') as string)?.trim();
+  const cep              = (form.get('endereco_cep') as string)?.trim().replace(/\D/g, '') || null;
+  const rua              = (form.get('endereco_rua') as string)?.trim() || null;
+  const numero           = (form.get('endereco_numero') as string)?.trim() || null;
+  const complemento      = (form.get('endereco_complemento') as string)?.trim() || null;
+  const bairro           = (form.get('endereco_bairro') as string)?.trim() || null;
+  const cidade           = (form.get('endereco_cidade') as string)?.trim() || null;
+  const estado           = (form.get('endereco_estado') as string)?.trim().toUpperCase() || null;
+
+  if (!nomeResponsavel || !cpfCnpj || !nomeAcademia || !rua || !cidade) {
+    erro = 'Preencha todos os campos obrigatórios: nome do responsável, CPF/CNPJ, nome da academia, endereço e cidade.';
+  } else {
+    // Atualiza academia
+    await adminClient.from('academias').update({
+      nome: nomeAcademia,
+      responsavel_nome: nomeResponsavel,
+      responsavel_cpf_cnpj: cpfCnpj,
+      telefone,
+      endereco_cep: cep,
+      endereco_rua: rua,
+      endereco_numero: numero,
+      endereco_complemento: complemento,
+      endereco_bairro: bairro,
+      endereco_cidade: cidade,
+      endereco_estado: estado,
+      onboarding_completo: true,
+    }).eq('id', academia.id);
+
+    // Atualiza nome do perfil
+    await adminClient.from('profiles').update({ nome_completo: nomeResponsavel }).eq('id', user.id);
+
+    // Envia email de confirmação
+    if (emailConfigurado() && (academia as any).email) {
+      await enviarEmailCadastroCompleto({
+        email: (academia as any).email,
+        nomeResponsavel,
+        nomeAcademia,
+        logoUrl: (academia as any).logo_url ?? null,
+        linkAcademia: `${appUrl}/${(academia as any).slug}`,
+      });
+    }
+
+    return Astro.redirect('/dashboard');
+  }
+}
+
+const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
+---
+
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <title>Complete seu cadastro — UNAFIT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="min-h-screen bg-background text-foreground antialiased">
+
+  <!-- Fundo grid -->
+  <div class="pointer-events-none fixed inset-0 bg-[linear-gradient(hsl(var(--border)/0.3)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.3)_1px,transparent_1px)] bg-[size:48px_48px]" aria-hidden="true"></div>
+
+  <div class="relative z-10 min-h-screen flex flex-col items-center justify-start py-10 px-4">
+
+    <!-- Header -->
+    <div class="w-full max-w-xl mb-8 text-center">
+      <img src="/logo-unafit.png" alt="UNAFIT" class="mx-auto h-10 w-auto mb-6" />
+      <h1 class="text-2xl font-bold text-foreground">Complete o cadastro da sua academia</h1>
+      <p class="text-sm text-muted-foreground mt-2">
+        Bem-vindo(a)! Preencha os dados abaixo para ativar o sistema da <strong class="text-foreground">{(academia as any).nome}</strong>.
+      </p>
+    </div>
+
+    <!-- Progress steps -->
+    <div class="w-full max-w-xl mb-6">
+      <div class="flex items-center justify-between">
+        {steps.map((s, i) => (
+          <div class="flex items-center flex-1">
+            <div class="flex flex-col items-center">
+              <div id={`step-dot-${i}`}
+                class={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${i === 0 ? 'border-primary bg-primary text-white' : 'border-zinc-700 bg-zinc-800 text-zinc-500'}`}>
+                {i + 1}
+              </div>
+              <span class="text-xs text-muted-foreground mt-1 whitespace-nowrap">{s}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <div id={`step-line-${i}`} class="flex-1 h-0.5 bg-zinc-700 mx-2 mt-[-14px] transition-all"></div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {erro && (
+      <div class="w-full max-w-xl mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+        {erro}
+      </div>
+    )}
+
+    <form method="POST" class="w-full max-w-xl" id="form-onboarding">
+      <!-- STEP 1: Dados pessoais -->
+      <div id="step-0" class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <h2 class="text-base font-semibold text-foreground">Dados do Responsável</h2>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Nome completo *</label>
+          <input name="responsavel_nome" required placeholder="Seu nome completo"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">CPF / CNPJ *</label>
+          <input name="responsavel_cpf_cnpj" id="doc-ob" required placeholder="000.000.000-00 ou 00.000.000/0001-00"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Telefone / WhatsApp</label>
+          <input name="telefone" id="tel-ob" placeholder="(00) 00000-0000"
+            value={(academia as any).telefone ?? ''}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+      </div>
+
+      <!-- STEP 2: Dados da academia -->
+      <div id="step-1" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
+        <h2 class="text-base font-semibold text-foreground">Dados da Academia</h2>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Nome da academia *</label>
+          <input name="nome_academia" required value={(academia as any).nome}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div class="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+          <p class="text-xs text-muted-foreground mb-1">URL de acesso da academia</p>
+          <p class="text-sm font-medium text-primary">unafit.com.br/<span id="slug-preview">{(academia as any).slug}</span></p>
+        </div>
+      </div>
+
+      <!-- STEP 3: Endereço -->
+      <div id="step-2" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
+        <h2 class="text-base font-semibold text-foreground">Endereço da Academia</h2>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">CEP</label>
+            <input name="endereco_cep" id="cep-ob" placeholder="00000-000" maxlength="9"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Número</label>
+            <input name="endereco_numero"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div class="col-span-2">
+            <label class="block text-xs text-muted-foreground mb-1">Rua / Logradouro *</label>
+            <input name="endereco_rua" id="rua-ob" required
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Complemento</label>
+            <input name="endereco_complemento"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Bairro</label>
+            <input name="endereco_bairro" id="bairro-ob"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Cidade *</label>
+            <input name="endereco_cidade" id="cidade-ob" required
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Estado (UF)</label>
+            <input name="endereco_estado" maxlength="2" placeholder="SP"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Navegação -->
+      <div class="flex gap-3 mt-5">
+        <button type="button" id="btn-prev"
+          class="hidden flex-1 rounded-lg border border-border py-3 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+          Voltar
+        </button>
+        <button type="button" id="btn-next"
+          class="flex-1 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Próximo →
+        </button>
+        <button type="submit" id="btn-submit"
+          class="hidden flex-1 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Confirmar cadastro
+        </button>
+      </div>
+    </form>
+
+    <p class="mt-6 text-xs text-muted-foreground">
+      <a href="/logout" class="hover:text-foreground transition-colors">Sair da conta</a>
+    </p>
+  </div>
+
+  <script>
+    const TOTAL_STEPS = 3;
+    let current = 0;
+
+    const steps = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-${i}`)!);
+    const dots  = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-dot-${i}`)!);
+    const lines = Array.from({ length: TOTAL_STEPS - 1 }, (_, i) => document.getElementById(`step-line-${i}`)!);
+    const btnPrev   = document.getElementById('btn-prev') as HTMLButtonElement;
+    const btnNext   = document.getElementById('btn-next') as HTMLButtonElement;
+    const btnSubmit = document.getElementById('btn-submit') as HTMLButtonElement;
+
+    function goTo(n: number) {
+      steps[current].classList.add('hidden');
+      dots[current].className = dots[current].className.replace('border-primary bg-primary text-white', 'border-zinc-700 bg-zinc-800 text-zinc-500');
+
+      current = n;
+      steps[current].classList.remove('hidden');
+      dots[current].className = dots[current].className.replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-primary bg-primary text-white');
+
+      // Mark completed steps
+      for (let i = 0; i < current; i++) {
+        dots[i].className = dots[i].className.replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-green-600 bg-green-600 text-white');
+        if (lines[i]) lines[i].className = lines[i].className.replace('bg-zinc-700', 'bg-green-600');
+      }
+
+      btnPrev.classList.toggle('hidden', current === 0);
+      btnNext.classList.toggle('hidden', current === TOTAL_STEPS - 1);
+      btnSubmit.classList.toggle('hidden', current !== TOTAL_STEPS - 1);
+    }
+
+    btnNext.addEventListener('click', () => { if (current < TOTAL_STEPS - 1) goTo(current + 1); });
+    btnPrev.addEventListener('click', () => { if (current > 0) goTo(current - 1); });
+
+    // Máscaras
+    document.getElementById('tel-ob')?.addEventListener('input', function(this: HTMLInputElement) {
+      let v = this.value.replace(/\D/g, '').slice(0, 11);
+      if (v.length > 10) v = v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
+      else if (v.length > 6) v = v.replace(/^(\d{2})(\d{4})(\d*)$/, '($1) $2-$3');
+      else if (v.length > 2) v = v.replace(/^(\d{2})(\d*)$/, '($1) $2');
+      this.value = v;
+    });
+    document.getElementById('doc-ob')?.addEventListener('input', function(this: HTMLInputElement) {
+      let v = this.value.replace(/\D/g, '').slice(0, 14);
+      if (v.length <= 11) {
+        if (v.length > 9) v = v.replace(/^(\d{3})(\d{3})(\d{3})(\d{0,2})$/, '$1.$2.$3-$4');
+        else if (v.length > 6) v = v.replace(/^(\d{3})(\d{3})(\d{0,3})$/, '$1.$2.$3');
+        else if (v.length > 3) v = v.replace(/^(\d{3})(\d{0,3})$/, '$1.$2');
+      } else {
+        v = v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})$/, '$1.$2.$3/$4-$5');
+      }
+      this.value = v;
+    });
+
+    // Busca CEP
+    document.getElementById('cep-ob')?.addEventListener('blur', async function(this: HTMLInputElement) {
+      const cep = this.value.replace(/\D/g, '');
+      if (cep.length !== 8) return;
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const d = await res.json();
+        if (d.erro) return;
+        (document.getElementById('rua-ob') as HTMLInputElement).value = d.logradouro ?? '';
+        (document.getElementById('bairro-ob') as HTMLInputElement).value = d.bairro ?? '';
+        (document.getElementById('cidade-ob') as HTMLInputElement).value = d.localidade ?? '';
+      } catch {}
+    });
+  </script>
+</body>
+</html>

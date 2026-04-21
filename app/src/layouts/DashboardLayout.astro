@@ -29,11 +29,16 @@ if (!profile || !profile.ativo) {
 
 const { data: academia } = await supabase
   .from('academias')
-  .select('nome, logo_url')
+  .select('nome, logo_url, onboarding_completo')
   .eq('id', profile.academia_id!)
   .single();
 
 const currentPath = new URL(Astro.request.url).pathname;
+
+// Redireciona dono para onboarding se não completou cadastro
+if (profile.role === 'dono' && academia && !(academia as any).onboarding_completo && currentPath !== '/onboarding') {
+  return Astro.redirect('/onboarding');
+}
 
 // Verifica se o aluno pertence a múltiplas academias (para exibir o switcher)
 let isMultiAcademia = false;

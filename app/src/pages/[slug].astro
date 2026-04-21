@@ -1,0 +1,149 @@
+---
+import '@/styles/globals.css';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const { slug } = Astro.params;
+
+const adminClient = createSupabaseAdminClient();
+
+// Busca academia pelo slug
+const { data: academia } = await adminClient
+  .from('academias')
+  .select('id, nome, slug, logo_url, ativo')
+  .eq('slug', slug!)
+  .single();
+
+// Slug não encontrado → redireciona para login padrão
+if (!academia || !(academia as any).ativo) return Astro.redirect('/login');
+
+let erro = '';
+
+// POST: fazer login
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const rawInput = (form.get('email') as string)?.trim() ?? '';
+  const senha    = (form.get('senha') as string) ?? '';
+
+  let email = rawInput;
+
+  // Suporte a login por CPF
+  const cpfDigits = rawInput.replace(/\D/g, '');
+  if (cpfDigits.length === 11) {
+    const { data: alunoMatch } = await adminClient
+      .from('alunos')
+      .select('email')
+      .eq('cpf', cpfDigits)
+      .eq('academia_id', (academia as any).id)
+      .not('email', 'is', null)
+      .maybeSingle();
+    email = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
+  }
+
+  const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+  const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password: senha });
+
+  if (authErr) {
+    erro = 'E-mail/CPF ou senha incorretos.';
+  } else if (authData.user) {
+    // Verifica se é aluno multi-academia e seleciona esta academia
+    const { data: vinculo } = await adminClient
+      .from('aluno_academias')
+      .select('id')
+      .eq('profile_id', authData.user.id)
+      .eq('academia_id', (academia as any).id)
+      .eq('ativo', true)
+      .maybeSingle();
+
+    if (vinculo) {
+      await adminClient.from('profiles')
+        .update({ academia_id: (academia as any).id })
+        .eq('id', authData.user.id);
+    }
+
+    return Astro.redirect('/dashboard');
+  }
+}
+
+const logoUrl = (academia as any).logo_url;
+const nomeAcademia = (academia as any).nome;
+---
+
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <title>{nomeAcademia} — Entrar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="min-h-screen bg-background text-foreground flex items-center justify-center p-4 antialiased">
+
+  <!-- Fundo -->
+  <div class="pointer-events-none fixed inset-0 bg-[linear-gradient(hsl(var(--border)/0.4)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.4)_1px,transparent_1px)] bg-[size:48px_48px]" aria-hidden="true"></div>
+  <div class="pointer-events-none fixed inset-0 flex items-center justify-center" aria-hidden="true">
+    <div class="h-[400px] w-[600px] rounded-full bg-primary/5 blur-[120px]"></div>
+  </div>
+
+  <div class="relative z-10 w-full max-w-sm animate-fade-in">
+
+    <!-- Logo da academia -->
+    <div class="mb-8 text-center">
+      {logoUrl ? (
+        <img src={logoUrl} alt={nomeAcademia} class="mx-auto max-h-16 max-w-[200px] object-contain mb-4" />
+      ) : (
+        <div class="mx-auto h-16 w-16 rounded-2xl bg-primary/20 flex items-center justify-center mb-4">
+          <span class="text-2xl font-bold text-primary">{nomeAcademia.charAt(0).toUpperCase()}</span>
+        </div>
+      )}
+      <h1 class="text-xl font-bold text-foreground">{nomeAcademia}</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Entre com sua conta</p>
+    </div>
+
+    {erro && (
+      <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+        {erro}
+      </div>
+    )}
+
+    <form method="POST" class="space-y-4">
+      <div>
+        <label class="block text-xs text-muted-foreground mb-1.5">E-mail ou CPF</label>
+        <input
+          name="email" type="text" required autofocus
+          placeholder="seu@email.com ou CPF"
+          class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors"
+        />
+      </div>
+      <div>
+        <label class="block text-xs text-muted-foreground mb-1.5">Senha</label>
+        <input
+          name="senha" type="password" required
+          placeholder="••••••••"
+          class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors"
+        />
+      </div>
+
+      <div class="flex justify-end">
+        <a href="/esqueci-senha" class="text-xs text-muted-foreground hover:text-primary transition-colors">
+          Esqueci minha senha
+        </a>
+      </div>
+
+      <button type="submit"
+        class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+        Entrar
+      </button>
+    </form>
+
+    <!-- Rodapé -->
+    <div class="mt-8 text-center">
+      <p class="text-xs text-muted-foreground/50">
+        Powered by <a href="/" class="hover:text-muted-foreground transition-colors">UNAFIT</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

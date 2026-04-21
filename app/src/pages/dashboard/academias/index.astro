@@ -1,22 +1,14 @@
 ---
-/**
- * /dashboard/academias — Gestão de todas as academias (saas_admin only).
- */
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import Card from '@/components/ui/Card.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 if (!user) return Astro.redirect('/login');
 
-const { data: profile } = await supabase
-  .from('profiles')
-  .select('role')
-  .eq('id', user.id)
-  .single();
-
+const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
 if (!profile || profile.role !== 'saas_admin') return Astro.redirect('/dashboard');
 
 const adminClient = createSupabaseAdminClient();
@@ -24,55 +16,40 @@ const adminClient = createSupabaseAdminClient();
 let sucesso = '';
 let erro = '';
 
+function gerarSenha(len = 10): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!';
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+const appUrl = import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br';
+
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = form.get('action') as string;
 
-  if (action === 'nova_academia') {
-    const nome               = (form.get('nome') as string)?.trim();
-    const slug               = (form.get('slug') as string)?.trim().toLowerCase().replace(/\s+/g, '-');
-    const emailAcademia      = (form.get('email_academia') as string)?.trim().toLowerCase() || null;
-    const telefone           = (form.get('telefone') as string)?.trim() || null;
-    const responsavelNome    = (form.get('responsavel_nome') as string)?.trim() || null;
-    const responsavelDoc     = (form.get('responsavel_cpf_cnpj') as string)?.trim().replace(/\D/g, '') || null;
-    const cep                = (form.get('endereco_cep') as string)?.trim().replace(/\D/g, '') || null;
-    const rua                = (form.get('endereco_rua') as string)?.trim() || null;
-    const numero             = (form.get('endereco_numero') as string)?.trim() || null;
-    const complemento        = (form.get('endereco_complemento') as string)?.trim() || null;
-    const bairro             = (form.get('endereco_bairro') as string)?.trim() || null;
-    const cidade             = (form.get('endereco_cidade') as string)?.trim() || null;
-    const estado             = (form.get('endereco_estado') as string)?.trim().toUpperCase() || null;
-    const emailDono          = (form.get('email_dono') as string)?.trim().toLowerCase();
-    const senha              = (form.get('senha') as string)?.trim();
+  if (action === 'precadastro_academia') {
+    const nome     = (form.get('nome') as string)?.trim();
+    const email    = (form.get('email') as string)?.trim().toLowerCase();
+    const telefone = (form.get('telefone') as string)?.trim() || null;
+    const slug     = nome.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '-');
 
-    if (!nome || !slug || !emailDono || !senha) {
-      erro = 'Preencha os campos obrigatórios: nome, slug, e-mail e senha do dono.';
+    if (!nome || !email) {
+      erro = 'Nome da academia e e-mail são obrigatórios.';
     } else {
+      const senhaTemp = gerarSenha();
+
       const { data: acad, error: acadErr } = await adminClient
         .from('academias')
-        .insert({
-          nome, slug,
-          email: emailAcademia,
-          telefone,
-          responsavel_nome: responsavelNome,
-          responsavel_cpf_cnpj: responsavelDoc,
-          endereco_cep: cep,
-          endereco_rua: rua,
-          endereco_numero: numero,
-          endereco_complemento: complemento,
-          endereco_bairro: bairro,
-          endereco_cidade: cidade,
-          endereco_estado: estado,
-        })
+        .insert({ nome, slug, email: email, telefone, onboarding_completo: false })
         .select('id')
         .single();
 
       if (acadErr) {
-        erro = acadErr.message;
+        erro = acadErr.code === '23505' ? 'Já existe uma academia com esse nome ou slug.' : acadErr.message;
       } else {
         const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
-          email: emailDono, password: senha, email_confirm: true,
-          user_metadata: { nome_completo: responsavelNome ?? `Dono — ${nome}` },
+          email, password: senhaTemp, email_confirm: true,
+          user_metadata: { nome_completo: `Dono — ${nome}` },
         });
 
         if (authErr) {
@@ -81,12 +58,21 @@ if (Astro.request.method === 'POST') {
         } else {
           await adminClient.from('profiles').upsert({
             id: authData.user!.id,
-            nome_completo: responsavelNome ?? `Dono — ${nome}`,
+            nome_completo: `Dono — ${nome}`,
             role: 'dono',
             academia_id: acad!.id,
             ativo: true,
           }, { onConflict: 'id' });
-          sucesso = `Academia "${nome}" criada com sucesso!`;
+
+          if (emailConfigurado()) {
+            await enviarEmailBoasVindasAcademia({
+              email,
+              nomeAcademia: nome,
+              senhaTemporaria: senhaTemp,
+              linkLogin: `${appUrl}/${slug}`,
+            });
+          }
+          sucesso = `Pré-cadastro da academia "${nome}" enviado! E-mail com acesso enviado para ${email}.`;
         }
       }
     }
@@ -259,11 +245,11 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
     })}
   </div>
 
-  <!-- Modal nova academia -->
-  <div id="modal-nova" class="hidden fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 overflow-y-auto">
-    <div class="w-full max-w-2xl rounded-xl bg-zinc-900 border border-zinc-700 p-6 my-6">
-      <div class="flex items-center justify-between mb-5">
-        <h2 class="text-lg font-bold text-foreground">Nova Academia</h2>
+  <!-- Modal pré-cadastro academia -->
+  <div id="modal-nova" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 p-6">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-bold text-foreground">Pré-cadastro de Academia</h2>
         <button type="button" onclick="document.getElementById('modal-nova').classList.add('hidden')"
           class="text-muted-foreground hover:text-foreground">
           <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -271,97 +257,27 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
           </svg>
         </button>
       </div>
-      <form method="POST" class="space-y-5">
-        <input type="hidden" name="action" value="nova_academia" />
-
-        <!-- Dados da academia -->
+      <p class="text-xs text-muted-foreground mb-5">
+        Informe os dados básicos. Uma senha temporária será gerada automaticamente e enviada por e-mail para o responsável completar o cadastro.
+      </p>
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="precadastro_academia" />
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Dados da Academia</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="col-span-2 sm:col-span-1">
-              <label class="block text-xs text-muted-foreground mb-1">Nome da Academia *</label>
-              <input name="nome" required class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div class="col-span-2 sm:col-span-1">
-              <label class="block text-xs text-muted-foreground mb-1">Slug (URL) *</label>
-              <input name="slug" required placeholder="minha-academia" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">E-mail da Academia</label>
-              <input name="email_academia" type="email" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Telefone</label>
-              <input name="telefone" id="tel-novo" placeholder="(00) 00000-0000" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
+          <label class="block text-xs text-muted-foreground mb-1">Nome da Academia *</label>
+          <input name="nome" required autofocus
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
-
-        <!-- Responsável -->
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Responsável</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="col-span-2 sm:col-span-1">
-              <label class="block text-xs text-muted-foreground mb-1">Nome do Responsável</label>
-              <input name="responsavel_nome" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div class="col-span-2 sm:col-span-1">
-              <label class="block text-xs text-muted-foreground mb-1">CPF / CNPJ</label>
-              <input name="responsavel_cpf_cnpj" id="doc-novo" placeholder="000.000.000-00 ou 00.000.000/0001-00" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
+          <label class="block text-xs text-muted-foreground mb-1">E-mail do Responsável *</label>
+          <input name="email" type="email" required placeholder="responsavel@academia.com.br"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          <p class="text-xs text-muted-foreground/70 mt-1">Será usado para login e receberá a senha temporária.</p>
         </div>
-
-        <!-- Endereço -->
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Endereço</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">CEP</label>
-              <input name="endereco_cep" id="cep-novo" placeholder="00000-000" maxlength="9" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Número</label>
-              <input name="endereco_numero" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div class="col-span-2">
-              <label class="block text-xs text-muted-foreground mb-1">Rua / Logradouro</label>
-              <input name="endereco_rua" id="rua-novo" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Complemento</label>
-              <input name="endereco_complemento" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Bairro</label>
-              <input name="endereco_bairro" id="bairro-novo" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Cidade</label>
-              <input name="endereco_cidade" id="cidade-novo" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Estado (UF)</label>
-              <input name="endereco_estado" maxlength="2" placeholder="SP" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
+          <label class="block text-xs text-muted-foreground mb-1">Telefone</label>
+          <input name="telefone" id="tel-novo" placeholder="(00) 00000-0000"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
-
-        <!-- Conta do dono -->
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Conta de Acesso do Dono *</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">E-mail *</label>
-              <input name="email_dono" type="email" required class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label class="block text-xs text-muted-foreground mb-1">Senha inicial *</label>
-              <input name="senha" type="password" required minlength="6" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-          </div>
-        </div>
-
         <div class="flex gap-3 pt-2 border-t border-border">
           <button type="button" onclick="document.getElementById('modal-nova').classList.add('hidden')"
             class="flex-1 rounded-lg border border-border py-2 text-sm text-muted-foreground hover:text-foreground">
@@ -369,7 +285,7 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
           </button>
           <button type="submit"
             class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-            Criar Academia
+            Enviar convite
           </button>
         </div>
       </form>
@@ -380,52 +296,12 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
     document.getElementById('modal-nova')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
     });
-
-    // Máscara telefone
     document.getElementById('tel-novo')?.addEventListener('input', function(this: HTMLInputElement) {
       let v = this.value.replace(/\D/g, '').slice(0, 11);
       if (v.length > 10) v = v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
       else if (v.length > 6) v = v.replace(/^(\d{2})(\d{4})(\d*)$/, '($1) $2-$3');
       else if (v.length > 2) v = v.replace(/^(\d{2})(\d*)$/, '($1) $2');
       this.value = v;
-    });
-
-    // Máscara CPF/CNPJ
-    document.getElementById('doc-novo')?.addEventListener('input', function(this: HTMLInputElement) {
-      let v = this.value.replace(/\D/g, '').slice(0, 14);
-      if (v.length <= 11) v = v.replace(/^(\d{3})(\d{3})(\d{3})(\d{0,2})$/, (_, a, b, c, d) => d ? `${a}.${b}.${c}-${d}` : `${a}.${b}.${c}`);
-      else v = v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})$/, (_, a, b, c, d, e) => e ? `${a}.${b}.${c}/${d}-${e}` : `${a}.${b}.${c}/${d}`);
-      this.value = v;
-    });
-
-    // Busca CEP via ViaCEP
-    document.getElementById('cep-novo')?.addEventListener('blur', async function(this: HTMLInputElement) {
-      const cep = this.value.replace(/\D/g, '');
-      if (cep.length !== 8) return;
-      try {
-        const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-        const d = await res.json();
-        if (d.erro) return;
-        const form = this.closest('form')!;
-        (form.querySelector('[name="endereco_rua"]') as HTMLInputElement).value = d.logradouro ?? '';
-        (form.querySelector('[name="endereco_bairro"]') as HTMLInputElement).value = d.bairro ?? '';
-        (form.querySelector('[name="endereco_cidade"]') as HTMLInputElement).value = d.localidade ?? '';
-        (form.querySelector('[name="endereco_estado"]') as HTMLInputElement).value = d.uf ?? '';
-      } catch {}
-    });
-
-    // Auto-slug a partir do nome
-    document.querySelector('[name="nome"]')?.addEventListener('input', function(this: HTMLInputElement) {
-      const slugInput = document.querySelector('[name="slug"]') as HTMLInputElement;
-      if (!slugInput.dataset.touched) {
-        slugInput.value = this.value.toLowerCase()
-          .normalize('NFD').replace(/\p{Diacritic}/gu, '')
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim().replace(/\s+/g, '-');
-      }
-    });
-    document.querySelector('[name="slug"]')?.addEventListener('input', function(this: HTMLInputElement) {
-      this.dataset.touched = 'true';
     });
   </script>
 </DashboardLayout>
