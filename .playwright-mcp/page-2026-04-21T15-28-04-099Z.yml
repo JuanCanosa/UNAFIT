@@ -1,0 +1,19 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e5]: Z
+    - heading "Zcan" [level=1] [ref=e6]
+    - paragraph [ref=e7]: Entre com sua conta
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]: E-mail ou CPF
+      - textbox "seu@email.com ou CPF" [active] [ref=e11]
+    - generic [ref=e12]:
+      - generic [ref=e13]: Senha
+      - textbox "••••••••" [ref=e14]
+    - link "Esqueci minha senha" [ref=e16] [cursor=pointer]:
+      - /url: /esqueci-senha
+    - button "Entrar" [ref=e17] [cursor=pointer]
+  - paragraph [ref=e19]:
+    - text: Powered by
+    - link "UNAFIT" [ref=e20] [cursor=pointer]:
+      - /url: /
