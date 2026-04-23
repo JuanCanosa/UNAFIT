@@ -5,6 +5,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -18,6 +19,13 @@ const { id } = Astro.params;
 
 let sucesso = '';
 let erro = '';
+
+const appUrl = import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br';
+
+function gerarSenha(len = 12): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!';
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
 
 // ── POST handlers ─────────────────────────────────────────────────────────────
 if (Astro.request.method === 'POST') {
@@ -43,6 +51,86 @@ if (Astro.request.method === 'POST') {
     const { error: updErr } = await adminClient.from('academias').update(patch).eq('id', id!);
     if (updErr) erro = updErr.message;
     else sucesso = 'Academia atualizada com sucesso!';
+  }
+
+  if (action === 'upload_logo') {
+    const logoFile = form.get('logo') as File | null;
+    if (!logoFile || logoFile.size === 0) {
+      erro = 'Nenhuma imagem selecionada.';
+    } else if (!logoFile.type.startsWith('image/')) {
+      erro = 'O arquivo deve ser uma imagem (PNG, JPG, SVG...).';
+    } else if (logoFile.size > 2 * 1024 * 1024) {
+      erro = 'A imagem deve ter no máximo 2 MB.';
+    } else {
+      // Garante que o bucket existe (ignora erro se já existir)
+      await adminClient.storage.createBucket('academia-logos', { public: true }).catch(() => {});
+
+      const ext = (logoFile.name.split('.').pop() ?? 'png').toLowerCase();
+      const path = `${id}/logo.${ext}`;
+      const buffer = await logoFile.arrayBuffer();
+
+      const { data: uploadData, error: uploadErr } = await adminClient.storage
+        .from('academia-logos')
+        .upload(path, buffer, { contentType: logoFile.type, upsert: true });
+
+      if (uploadErr) {
+        erro = uploadErr.message;
+      } else {
+        const { data: { publicUrl } } = adminClient.storage
+          .from('academia-logos')
+          .getPublicUrl(uploadData.path);
+        // Adiciona cache-buster para forçar atualização imediata
+        const urlFinal = `${publicUrl}?t=${Date.now()}`;
+        await adminClient.from('academias').update({ logo_url: urlFinal }).eq('id', id!);
+        sucesso = 'Logo atualizado com sucesso!';
+      }
+    }
+  }
+
+  if (action === 'remover_logo') {
+    await adminClient.from('academias').update({ logo_url: null }).eq('id', id!);
+    sucesso = 'Logo removido.';
+  }
+
+  if (action === 'resetar_senha') {
+    const { data: acadData } = await adminClient
+      .from('academias')
+      .select('nome, slug, email')
+      .eq('id', id!)
+      .single();
+
+    const { data: donoProfile } = await adminClient
+      .from('profiles')
+      .select('id')
+      .eq('academia_id', id!)
+      .eq('role', 'dono')
+      .limit(1)
+      .single();
+
+    if (!donoProfile) {
+      erro = 'Nenhum dono encontrado para esta academia.';
+    } else {
+      const novaSenha = gerarSenha();
+      const { error: passErr } = await adminClient.auth.admin.updateUserById(
+        donoProfile.id,
+        { password: novaSenha }
+      );
+      if (passErr) {
+        erro = passErr.message;
+      } else {
+        if (emailConfigurado() && acadData?.email) {
+          await enviarEmailBoasVindasAcademia({
+            email: acadData.email,
+            nomeAcademia: acadData.nome ?? 'Academia',
+            senhaTemporaria: novaSenha,
+            linkLogin: `${appUrl}/${acadData.slug}`,
+          });
+          sucesso = `Nova senha gerada e enviada para ${acadData.email}.`;
+        } else {
+          sucesso = `Nova senha gerada: ${novaSenha} (e-mail não configurado, anote a senha).`;
+        }
+      }
+    }
   }
 
   if (action === 'gerar_fatura') {
@@ -474,6 +562,86 @@ const hoje = new Date().toISOString().split('T')[0];
         )}
       </div>
 
+      <!-- Logo da Academia -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <h2 class="text-sm font-semibold text-foreground mb-4">Logo da Academia</h2>
+
+        <!-- Preview atual -->
+        <div class="flex items-center gap-3 mb-4">
+          <div class="h-16 w-16 rounded-xl border border-border bg-zinc-900 flex items-center justify-center overflow-hidden shrink-0">
+            {(academia as any).logo_url
+              ? <img id="logo-preview" src={(academia as any).logo_url} alt={academia.nome} class="w-full h-full object-contain p-1" />
+              : <span id="logo-preview-letter" class="text-2xl font-bold text-primary">{academia.nome.charAt(0).toUpperCase()}</span>
+            }
+          </div>
+          <div class="min-w-0">
+            <p class="text-xs text-muted-foreground">PNG, JPG ou SVG</p>
+            <p class="text-xs text-muted-foreground">Máx. 2 MB</p>
+          </div>
+        </div>
+
+        <form method="POST" enctype="multipart/form-data" class="space-y-2">
+          <input type="hidden" name="action" value="upload_logo" />
+          <label class="block">
+            <input
+              type="file"
+              name="logo"
+              id="logo-input"
+              accept="image/*"
+              required
+              class="hidden"
+            />
+            <span id="logo-label"
+              class="flex items-center justify-center gap-2 w-full rounded-lg border border-dashed border-border bg-zinc-900/50 px-3 py-3 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary cursor-pointer transition-colors">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              <span id="logo-filename">Escolher imagem</span>
+            </span>
+          </label>
+          <button type="submit"
+            class="w-full rounded-lg bg-primary/10 border border-primary/20 text-primary py-2 text-xs font-medium hover:bg-primary/20 transition-colors">
+            Salvar Logo
+          </button>
+        </form>
+
+        {(academia as any).logo_url && (
+          <form method="POST" class="mt-2">
+            <input type="hidden" name="action" value="remover_logo" />
+            <button type="submit"
+              onclick="return confirm('Remover o logo da academia?')"
+              class="w-full rounded-lg border border-red-800/40 text-red-400/70 py-1.5 text-xs hover:text-red-400 hover:border-red-700 transition-colors">
+              Remover logo
+            </button>
+          </form>
+        )}
+      </div>
+
+      <!-- Redefinir Senha -->
+      <div class="rounded-xl border border-border bg-card p-5">
+        <h2 class="text-sm font-semibold text-foreground mb-1">Redefinir Senha</h2>
+        <p class="text-xs text-muted-foreground mb-4">
+          Gera uma nova senha temporária e envia por e-mail para o responsável da academia.
+        </p>
+        {donos.length > 0 && (
+          <div class="mb-3 rounded-lg border border-border bg-zinc-900/50 px-3 py-2">
+            <p class="text-xs text-muted-foreground">Conta do dono</p>
+            <p class="text-xs font-medium text-foreground mt-0.5">{(academia as any).email ?? 'E-mail não cadastrado'}</p>
+          </div>
+        )}
+        <form method="POST"
+          onsubmit="return confirm('Gerar nova senha e enviar por e-mail para o responsável da academia?')">
+          <input type="hidden" name="action" value="resetar_senha" />
+          <button type="submit"
+            class="w-full rounded-lg border border-yellow-700/50 bg-yellow-900/20 text-yellow-400 py-2.5 text-sm font-medium hover:bg-yellow-900/40 transition-colors flex items-center justify-center gap-2">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            Gerar Nova Senha
+          </button>
+        </form>
+      </div>
+
     </div>
   </div>
 
@@ -531,6 +699,28 @@ const hoje = new Date().toISOString().split('T')[0];
   <script>
     document.getElementById('modal-fatura')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
+    });
+
+    // Logo file input — preview + label
+    const logoInput = document.getElementById('logo-input') as HTMLInputElement | null;
+    const logoLabel = document.getElementById('logo-label') as HTMLElement | null;
+    const logoFilename = document.getElementById('logo-filename') as HTMLElement | null;
+    const logoPreview = document.getElementById('logo-preview') as HTMLImageElement | null;
+    const logoLetter  = document.getElementById('logo-preview-letter') as HTMLElement | null;
+
+    document.getElementById('logo-label')?.addEventListener('click', () => logoInput?.click());
+
+    logoInput?.addEventListener('change', function(this: HTMLInputElement) {
+      const file = this.files?.[0];
+      if (!file) return;
+      logoFilename && (logoFilename.textContent = file.name.length > 22 ? file.name.slice(0,19)+'...' : file.name);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const src = e.target?.result as string;
+        if (logoPreview) { logoPreview.src = src; logoPreview.classList.remove('hidden'); }
+        if (logoLetter) logoLetter.style.display = 'none';
+      };
+      reader.readAsDataURL(file);
     });
 
     // Máscara telefone (editar)
