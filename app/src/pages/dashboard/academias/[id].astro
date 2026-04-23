@@ -55,31 +55,30 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'upload_logo') {
     const logoFile = form.get('logo') as File | null;
+    const tiposPermitidos = ['image/jpeg', 'image/png', 'image/webp'];
+
     if (!logoFile || logoFile.size === 0) {
       erro = 'Nenhuma imagem selecionada.';
-    } else if (!logoFile.type.startsWith('image/')) {
-      erro = 'O arquivo deve ser uma imagem (PNG, JPG, SVG...).';
+    } else if (!tiposPermitidos.includes(logoFile.type)) {
+      erro = 'Formato inválido. Use PNG, JPG ou WebP.';
     } else if (logoFile.size > 2 * 1024 * 1024) {
       erro = 'A imagem deve ter no máximo 2 MB.';
     } else {
-      // Garante que o bucket existe (ignora erro se já existir)
-      await adminClient.storage.createBucket('academia-logos', { public: true }).catch(() => {});
-
-      const ext = (logoFile.name.split('.').pop() ?? 'png').toLowerCase();
-      const path = `${id}/logo.${ext}`;
-      const buffer = await logoFile.arrayBuffer();
+      const ext = logoFile.type === 'image/png' ? 'png' : logoFile.type === 'image/webp' ? 'webp' : 'jpg';
+      const storagePath = `${id}/logo.${ext}`;
+      // Converte para Uint8Array (compatível com Node.js)
+      const bytes = new Uint8Array(await logoFile.arrayBuffer());
 
       const { data: uploadData, error: uploadErr } = await adminClient.storage
         .from('academia-logos')
-        .upload(path, buffer, { contentType: logoFile.type, upsert: true });
+        .upload(storagePath, bytes, { contentType: logoFile.type, upsert: true });
 
       if (uploadErr) {
-        erro = uploadErr.message;
+        erro = `Erro no upload: ${uploadErr.message}`;
       } else {
         const { data: { publicUrl } } = adminClient.storage
           .from('academia-logos')
           .getPublicUrl(uploadData.path);
-        // Adiciona cache-buster para forçar atualização imediata
         const urlFinal = `${publicUrl}?t=${Date.now()}`;
         await adminClient.from('academias').update({ logo_url: urlFinal }).eq('id', id!);
         sucesso = 'Logo atualizado com sucesso!';
@@ -575,7 +574,7 @@ const hoje = new Date().toISOString().split('T')[0];
             }
           </div>
           <div class="min-w-0">
-            <p class="text-xs text-muted-foreground">PNG, JPG ou SVG</p>
+            <p class="text-xs text-muted-foreground">PNG, JPG ou WebP</p>
             <p class="text-xs text-muted-foreground">Máx. 2 MB</p>
           </div>
         </div>
@@ -587,7 +586,7 @@ const hoje = new Date().toISOString().split('T')[0];
               type="file"
               name="logo"
               id="logo-input"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/webp"
               required
               class="hidden"
             />
