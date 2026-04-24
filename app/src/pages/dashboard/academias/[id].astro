@@ -244,6 +244,7 @@ const hoje = new Date().toISOString().split('T')[0];
 ---
 
 <DashboardLayout title={`Academia — ${academia.nome}`}>
+  <input type="hidden" name="academia_id_hidden" value={id} />
 
   <!-- Breadcrumb -->
   <div class="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
@@ -565,7 +566,7 @@ const hoje = new Date().toISOString().split('T')[0];
       <div class="rounded-xl border border-border bg-card p-5">
         <h2 class="text-sm font-semibold text-foreground mb-4">Logo da Academia</h2>
 
-        <!-- Preview atual -->
+        <!-- Preview -->
         <div class="flex items-center gap-3 mb-4">
           <div class="h-16 w-16 rounded-xl border border-border bg-zinc-900 flex items-center justify-center overflow-hidden shrink-0">
             {(academia as any).logo_url
@@ -573,36 +574,27 @@ const hoje = new Date().toISOString().split('T')[0];
               : <span id="logo-preview-letter" class="text-2xl font-bold text-primary">{academia.nome.charAt(0).toUpperCase()}</span>
             }
           </div>
-          <div class="min-w-0">
-            <p class="text-xs text-muted-foreground">PNG, JPG ou WebP</p>
-            <p class="text-xs text-muted-foreground">Máx. 2 MB</p>
+          <div class="min-w-0 flex-1">
+            <p class="text-xs text-muted-foreground">PNG ou JPG · Máx. 2 MB</p>
+            <p id="logo-msg" class="text-xs mt-1 hidden"></p>
           </div>
         </div>
 
-        <form method="POST" enctype="multipart/form-data" class="space-y-2">
-          <input type="hidden" name="action" value="upload_logo" />
-          <label class="block">
-            <input
-              type="file"
-              name="logo"
-              id="logo-input"
-              accept="image/png,image/jpeg,image/webp"
-              required
-              class="hidden"
-            />
-            <span id="logo-label"
-              class="flex items-center justify-center gap-2 w-full rounded-lg border border-dashed border-border bg-zinc-900/50 px-3 py-3 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary cursor-pointer transition-colors">
-              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              <span id="logo-filename">Escolher imagem</span>
-            </span>
-          </label>
-          <button type="submit"
-            class="w-full rounded-lg bg-primary/10 border border-primary/20 text-primary py-2 text-xs font-medium hover:bg-primary/20 transition-colors">
-            Salvar Logo
-          </button>
-        </form>
+        <!-- Input oculto real + zona clicável -->
+        <input type="file" id="logo-input" accept=".png,.jpg,.jpeg" class="hidden" />
+
+        <div id="logo-drop"
+          class="flex flex-col items-center gap-2 w-full rounded-lg border-2 border-dashed border-border bg-zinc-900/40 px-3 py-4 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary cursor-pointer transition-colors mb-2">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          <span id="logo-filename">Clique ou arraste a imagem aqui</span>
+        </div>
+
+        <button id="logo-save-btn" disabled
+          class="w-full rounded-lg bg-primary/10 border border-primary/20 text-primary py-2 text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Salvar Logo
+        </button>
 
         {(academia as any).logo_url && (
           <form method="POST" class="mt-2">
@@ -700,26 +692,84 @@ const hoje = new Date().toISOString().split('T')[0];
       if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
     });
 
-    // Logo file input — preview + label
-    const logoInput = document.getElementById('logo-input') as HTMLInputElement | null;
-    const logoLabel = document.getElementById('logo-label') as HTMLElement | null;
-    const logoFilename = document.getElementById('logo-filename') as HTMLElement | null;
-    const logoPreview = document.getElementById('logo-preview') as HTMLImageElement | null;
-    const logoLetter  = document.getElementById('logo-preview-letter') as HTMLElement | null;
+    // ── Logo upload via fetch ─────────────────────────────────────────────────
+    const logoInput    = document.getElementById('logo-input')    as HTMLInputElement;
+    const logoDrop     = document.getElementById('logo-drop')     as HTMLElement;
+    const logoFilename = document.getElementById('logo-filename') as HTMLElement;
+    const logoSaveBtn  = document.getElementById('logo-save-btn') as HTMLButtonElement;
+    const logoPreview  = document.getElementById('logo-preview')  as HTMLImageElement | null;
+    const logoLetter   = document.getElementById('logo-preview-letter') as HTMLElement | null;
+    const logoMsg      = document.getElementById('logo-msg')      as HTMLElement;
 
-    document.getElementById('logo-label')?.addEventListener('click', () => logoInput?.click());
+    const ACADEMIA_ID = document.querySelector<HTMLInputElement>('input[name="academia_id_hidden"]')?.value
+      ?? location.pathname.split('/').pop()!;
 
-    logoInput?.addEventListener('change', function(this: HTMLInputElement) {
-      const file = this.files?.[0];
-      if (!file) return;
-      logoFilename && (logoFilename.textContent = file.name.length > 22 ? file.name.slice(0,19)+'...' : file.name);
+    function setLogoMsg(text: string, ok: boolean) {
+      logoMsg.textContent = text;
+      logoMsg.className = `text-xs mt-1 ${ok ? 'text-green-400' : 'text-red-400'}`;
+    }
+
+    function previewFile(file: File) {
+      logoFilename.textContent = file.name.length > 26 ? file.name.slice(0, 23) + '...' : file.name;
+      logoSaveBtn.disabled = false;
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = e => {
         const src = e.target?.result as string;
-        if (logoPreview) { logoPreview.src = src; logoPreview.classList.remove('hidden'); }
+        if (logoPreview) { logoPreview.src = src; logoPreview.style.display = ''; }
         if (logoLetter) logoLetter.style.display = 'none';
       };
       reader.readAsDataURL(file);
+    }
+
+    // Clique na zona
+    logoDrop.addEventListener('click', () => logoInput.click());
+
+    // Drag & drop
+    logoDrop.addEventListener('dragover', e => { e.preventDefault(); logoDrop.classList.add('border-primary/60'); });
+    logoDrop.addEventListener('dragleave', () => logoDrop.classList.remove('border-primary/60'));
+    logoDrop.addEventListener('drop', e => {
+      e.preventDefault();
+      logoDrop.classList.remove('border-primary/60');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) { logoInput.files = e.dataTransfer!.files; previewFile(f); }
+    });
+
+    logoInput.addEventListener('change', function() {
+      const f = this.files?.[0];
+      if (f) previewFile(f);
+    });
+
+    logoSaveBtn.addEventListener('click', async () => {
+      const file = logoInput.files?.[0];
+      if (!file) { setLogoMsg('Selecione uma imagem primeiro.', false); return; }
+
+      const allowed = ['image/png', 'image/jpeg'];
+      if (!allowed.includes(file.type)) { setLogoMsg('Use apenas PNG ou JPG.', false); return; }
+      if (file.size > 2 * 1024 * 1024) { setLogoMsg('Arquivo muito grande (máx. 2 MB).', false); return; }
+
+      logoSaveBtn.disabled = true;
+      logoSaveBtn.textContent = 'Salvando...';
+
+      const fd = new FormData();
+      fd.append('logo', file);
+      fd.append('academia_id', ACADEMIA_ID);
+
+      try {
+        const res = await fetch('/api/upload-logo', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.error) {
+          setLogoMsg('Erro: ' + data.error, false);
+        } else {
+          setLogoMsg('Logo salvo com sucesso!', true);
+          if (logoPreview) { logoPreview.src = data.url; logoPreview.style.display = ''; }
+          if (logoLetter) logoLetter.style.display = 'none';
+        }
+      } catch {
+        setLogoMsg('Erro de conexão. Tente novamente.', false);
+      } finally {
+        logoSaveBtn.disabled = false;
+        logoSaveBtn.textContent = 'Salvar Logo';
+      }
     });
 
     // Máscara telefone (editar)
