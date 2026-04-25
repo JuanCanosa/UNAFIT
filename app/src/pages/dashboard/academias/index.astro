@@ -65,29 +65,21 @@ if (Astro.request.method === 'POST') {
             ativo: true,
           }, { onConflict: 'id' });
 
-          // Gera magic link — o dono clica, Supabase autentica e manda pro callback SSR
-          const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
-            type: 'magiclink',
-            email,
-            options: { redirectTo: `${appUrl}/auth/callback?next=/dashboard` },
-          });
-          const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
+          const linkLogin = `${appUrl}/${slug}`;
 
-          if (linkErr || !linkAcesso) {
-            // generateLink falhou — mostra a URL de login direto como fallback
-            sucesso = `Academia "${nome}" criada! Erro ao gerar magic link (${linkErr?.message ?? 'sem resposta'}). O dono pode acessar: ${appUrl}/${slug}`;
-          } else if (emailConfigurado()) {
+          if (emailConfigurado()) {
             const { ok, erro: emailErro } = await enviarEmailBoasVindasAcademia({
               email,
               nomeAcademia: nome,
-              linkAcesso,
-              linkLogin: `${appUrl}/${slug}`,
+              senhaTemporaria: senhaInterna,
+              linkAcesso: linkLogin,
+              linkLogin,
             });
             sucesso = ok
-              ? `Academia "${nome}" criada! Link de acesso enviado para ${email}.`
-              : `Academia "${nome}" criada, mas erro ao enviar e-mail (${emailErro}). Link manual: ${linkAcesso}`;
+              ? `Academia "${nome}" criada! E-mail enviado para ${email} com login e senha de acesso.`
+              : `Academia "${nome}" criada, mas erro ao enviar e-mail (${emailErro}). Login: ${email} · Senha: ${senhaInterna} · URL: ${linkLogin}`;
           } else {
-            sucesso = `Academia "${nome}" criada! E-mail não configurado — link de acesso: ${linkAcesso}`;
+            sucesso = `Academia "${nome}" criada! E-mail não configurado. Login: ${email} · Senha: ${senhaInterna} · URL: ${linkLogin}`;
           }
         }
       }

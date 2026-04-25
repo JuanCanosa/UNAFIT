@@ -84,42 +84,41 @@ function templateBase(params: {
 export async function enviarEmailBoasVindasAcademia(params: {
   email: string;
   nomeAcademia: string;
-  linkAcesso: string;  // magic link — autentica diretamente sem senha
-  linkLogin: string;   // URL da academia (fallback visível)
+  senhaTemporaria?: string; // senha gerada pelo admin
+  linkAcesso: string;       // URL de login da academia (ex: unafit.com.br/box972)
+  linkLogin: string;
 }): Promise<{ ok: boolean; erro?: string }> {
-  const { email, nomeAcademia, linkAcesso, linkLogin } = params;
+  const { email, nomeAcademia, senhaTemporaria, linkAcesso } = params;
+
+  const blocoSenha = senhaTemporaria ? `
+    <div style="background:#27272a;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+      <p style="margin:0 0 6px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Seus dados de acesso</p>
+      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">E-mail: <strong style="color:#ffffff;">${email}</strong></p>
+      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">Senha: <strong style="color:#ffffff;font-family:monospace;font-size:18px;letter-spacing:.1em;">${senhaTemporaria}</strong></p>
+      <p style="margin:8px 0 0;font-size:11px;color:#71717a;">Recomendamos alterar a senha após o primeiro acesso.</p>
+    </div>` : '';
 
   const corpo = `
     <p style="margin:0 0 16px;font-size:15px;color:#a1a1aa;line-height:1.6;">
-      Sua academia <strong style="color:#ffffff;">${nomeAcademia}</strong> foi pré-cadastrada na plataforma
-      <strong style="color:#ffffff;">UNAFIT</strong>. Clique no botão abaixo para acessar e completar seu cadastro — nenhuma senha necessária.
+      Sua academia <strong style="color:#ffffff;">${nomeAcademia}</strong> foi cadastrada na plataforma
+      <strong style="color:#ffffff;">UNAFIT</strong>. Clique no botão abaixo para acessar o sistema.
     </p>
 
-    <div style="background:#27272a;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
-      <p style="margin:0 0 6px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Sua academia</p>
-      <p style="margin:0 0 4px;font-size:14px;color:#a1a1aa;">E-mail de acesso: <strong style="color:#ffffff;">${email}</strong></p>
-      <p style="margin:0;font-size:14px;color:#a1a1aa;">URL da academia: <strong style="color:#ffffff;">${linkLogin}</strong></p>
-    </div>
+    ${blocoSenha}
 
     <table cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
       <tr>
         <td style="background:#dc2626;border-radius:8px;">
           <a href="${linkAcesso}"
              style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">
-            Acessar e completar cadastro →
+            Acessar o sistema →
           </a>
         </td>
       </tr>
     </table>
 
-    <p style="margin:0 0 16px;font-size:12px;color:#52525b;">
-      Este link é de uso único e expira em <strong style="color:#a1a1aa;">24 horas</strong>.
-      No primeiro acesso você será solicitado a criar sua própria senha.
-    </p>
-
     <p style="margin:0;font-size:12px;color:#52525b;">
-      Se o botão não funcionar, copie e cole este link no navegador:<br/>
-      <a href="${linkAcesso}" style="color:#dc2626;word-break:break-all;">${linkAcesso}</a>
+      Ou acesse diretamente: <a href="${linkAcesso}" style="color:#dc2626;">${linkAcesso}</a>
     </p>
   `;
 
