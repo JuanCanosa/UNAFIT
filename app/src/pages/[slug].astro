@@ -4,6 +4,11 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/sup
 
 const { slug } = Astro.params;
 
+// Redireciona usuário já autenticado para o dashboard
+const supabaseUser = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user: userLogado } } = await supabaseUser.auth.getUser();
+if (userLogado) return Astro.redirect('/dashboard');
+
 const adminClient = createSupabaseAdminClient();
 
 // Busca academia pelo slug

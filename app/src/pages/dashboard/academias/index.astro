@@ -65,14 +65,18 @@ if (Astro.request.method === 'POST') {
           }, { onConflict: 'id' });
 
           if (emailConfigurado()) {
-            await enviarEmailBoasVindasAcademia({
+            const { ok, erro: emailErro } = await enviarEmailBoasVindasAcademia({
               email,
               nomeAcademia: nome,
               senhaTemporaria: senhaTemp,
               linkLogin: `${appUrl}/${slug}`,
             });
+            sucesso = ok
+              ? `Academia "${nome}" criada! E-mail de boas-vindas enviado para ${email}.`
+              : `Academia "${nome}" criada, mas houve um erro ao enviar o e-mail (${emailErro}). Senha temporária: ${senhaTemp}`;
+          } else {
+            sucesso = `Academia "${nome}" criada! E-mail não configurado — anote a senha temporária: ${senhaTemp} · Link de acesso: ${appUrl}/${slug}`;
           }
-          sucesso = `Pré-cadastro da academia "${nome}" enviado! E-mail com acesso enviado para ${email}.`;
         }
       }
     }

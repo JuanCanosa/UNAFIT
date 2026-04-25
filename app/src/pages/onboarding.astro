@@ -34,6 +34,8 @@ if (Astro.request.method === 'POST') {
   const nomeResponsavel  = (form.get('responsavel_nome') as string)?.trim();
   const cpfCnpj          = (form.get('responsavel_cpf_cnpj') as string)?.trim().replace(/\D/g, '') || null;
   const telefone         = (form.get('telefone') as string)?.trim() || null;
+  const novaSenha        = (form.get('nova_senha') as string) ?? '';
+  const confirmaSenha    = (form.get('confirma_senha') as string) ?? '';
   const nomeAcademia     = (form.get('nome_academia') as string)?.trim();
   const cep              = (form.get('endereco_cep') as string)?.trim().replace(/\D/g, '') || null;
   const rua              = (form.get('endereco_rua') as string)?.trim() || null;
@@ -44,9 +46,12 @@ if (Astro.request.method === 'POST') {
   const estado           = (form.get('endereco_estado') as string)?.trim().toUpperCase() || null;
 
   if (!nomeResponsavel || !cpfCnpj || !nomeAcademia || !rua || !cidade) {
-    erro = 'Preencha todos os campos obrigatórios: nome do responsável, CPF/CNPJ, nome da academia, endereço e cidade.';
+    erro = 'Preencha todos os campos obrigatórios: nome, CPF/CNPJ, nome da academia, rua e cidade.';
+  } else if (!novaSenha || novaSenha.length < 8) {
+    erro = 'A senha deve ter pelo menos 8 caracteres.';
+  } else if (novaSenha !== confirmaSenha) {
+    erro = 'As senhas não coincidem. Verifique e tente novamente.';
   } else {
-    // Atualiza academia
     await adminClient.from('academias').update({
       nome: nomeAcademia,
       responsavel_nome: nomeResponsavel,
@@ -62,10 +67,11 @@ if (Astro.request.method === 'POST') {
       onboarding_completo: true,
     }).eq('id', academia.id);
 
-    // Atualiza nome do perfil
     await adminClient.from('profiles').update({ nome_completo: nomeResponsavel }).eq('id', user.id);
 
-    // Envia email de confirmação
+    // Define a senha permanente do dono
+    await adminClient.auth.admin.updateUserById(user.id, { password: novaSenha });
+
     if (emailConfigurado() && (academia as any).email) {
       await enviarEmailCadastroCompleto({
         email: (academia as any).email,
@@ -80,7 +86,7 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
+const steps = ['Dados Pessoais', 'Criar Senha', 'Academia', 'Endereço'];
 ---
 
 <!DOCTYPE html>
@@ -137,7 +143,8 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
     )}
 
     <form method="POST" class="w-full max-w-xl" id="form-onboarding">
-      <!-- STEP 1: Dados pessoais -->
+
+      <!-- STEP 0: Dados pessoais -->
       <div id="step-0" class="rounded-xl border border-border bg-card p-6 space-y-4">
         <h2 class="text-base font-semibold text-foreground">Dados do Responsável</h2>
         <div>
@@ -158,8 +165,51 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
         </div>
       </div>
 
-      <!-- STEP 2: Dados da academia -->
+      <!-- STEP 1: Criar senha -->
       <div id="step-1" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
+        <div>
+          <h2 class="text-base font-semibold text-foreground">Criar sua senha de acesso</h2>
+          <p class="text-xs text-muted-foreground mt-1">Esta senha substituirá a senha temporária enviada por e-mail.</p>
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Nova senha *</label>
+          <div class="relative">
+            <input name="nova_senha" id="nova-senha" type="password" required minlength="8"
+              placeholder="Mínimo 8 caracteres"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 pr-10 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <button type="button" id="toggle-nova" tabindex="-1"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <svg id="eye-nova" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            </button>
+          </div>
+          <div id="senha-strength" class="mt-1.5 h-1 rounded-full bg-zinc-800 overflow-hidden">
+            <div id="senha-bar" class="h-full rounded-full transition-all duration-300 w-0"></div>
+          </div>
+          <p id="senha-hint" class="text-xs text-muted-foreground mt-1">Digite ao menos 8 caracteres</p>
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Confirmar senha *</label>
+          <div class="relative">
+            <input name="confirma_senha" id="confirma-senha" type="password" required
+              placeholder="Repita a senha"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 pr-10 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <button type="button" id="toggle-confirma" tabindex="-1"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <svg id="eye-confirma" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            </button>
+          </div>
+          <p id="match-hint" class="text-xs mt-1 hidden"></p>
+        </div>
+      </div>
+
+      <!-- STEP 2: Dados da academia -->
+      <div id="step-2" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
         <h2 class="text-base font-semibold text-foreground">Dados da Academia</h2>
         <div>
           <label class="block text-xs text-muted-foreground mb-1">Nome da academia *</label>
@@ -173,7 +223,7 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
       </div>
 
       <!-- STEP 3: Endereço -->
-      <div id="step-2" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
+      <div id="step-3" class="hidden rounded-xl border border-border bg-card p-6 space-y-4">
         <h2 class="text-base font-semibold text-foreground">Endereço da Academia</h2>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -237,27 +287,31 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
   </div>
 
   <script>
-    const TOTAL_STEPS = 3;
+    const TOTAL_STEPS = 4;
     let current = 0;
 
-    const steps = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-${i}`)!);
-    const dots  = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-dot-${i}`)!);
-    const lines = Array.from({ length: TOTAL_STEPS - 1 }, (_, i) => document.getElementById(`step-line-${i}`)!);
-    const btnPrev   = document.getElementById('btn-prev') as HTMLButtonElement;
-    const btnNext   = document.getElementById('btn-next') as HTMLButtonElement;
+    const stepEls = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-${i}`)!);
+    const dots    = Array.from({ length: TOTAL_STEPS }, (_, i) => document.getElementById(`step-dot-${i}`)!);
+    const lines   = Array.from({ length: TOTAL_STEPS - 1 }, (_, i) => document.getElementById(`step-line-${i}`)!);
+    const btnPrev   = document.getElementById('btn-prev')   as HTMLButtonElement;
+    const btnNext   = document.getElementById('btn-next')   as HTMLButtonElement;
     const btnSubmit = document.getElementById('btn-submit') as HTMLButtonElement;
 
     function goTo(n: number) {
-      steps[current].classList.add('hidden');
-      dots[current].className = dots[current].className.replace('border-primary bg-primary text-white', 'border-zinc-700 bg-zinc-800 text-zinc-500');
+      stepEls[current].classList.add('hidden');
+      dots[current].className = dots[current].className
+        .replace('border-primary bg-primary text-white', 'border-zinc-700 bg-zinc-800 text-zinc-500')
+        .replace('border-green-600 bg-green-600 text-white', 'border-zinc-700 bg-zinc-800 text-zinc-500');
 
       current = n;
-      steps[current].classList.remove('hidden');
-      dots[current].className = dots[current].className.replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-primary bg-primary text-white');
+      stepEls[current].classList.remove('hidden');
+      dots[current].className = dots[current].className
+        .replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-primary bg-primary text-white');
 
-      // Mark completed steps
       for (let i = 0; i < current; i++) {
-        dots[i].className = dots[i].className.replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-green-600 bg-green-600 text-white');
+        dots[i].className = dots[i].className
+          .replace('border-zinc-700 bg-zinc-800 text-zinc-500', 'border-green-600 bg-green-600 text-white')
+          .replace('border-primary bg-primary text-white', 'border-green-600 bg-green-600 text-white');
         if (lines[i]) lines[i].className = lines[i].className.replace('bg-zinc-700', 'bg-green-600');
       }
 
@@ -266,10 +320,70 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
       btnSubmit.classList.toggle('hidden', current !== TOTAL_STEPS - 1);
     }
 
-    btnNext.addEventListener('click', () => { if (current < TOTAL_STEPS - 1) goTo(current + 1); });
+    btnNext.addEventListener('click', () => {
+      // Valida senhas antes de avançar do step 1
+      if (current === 1) {
+        const nova    = (document.getElementById('nova-senha')    as HTMLInputElement).value;
+        const confirma = (document.getElementById('confirma-senha') as HTMLInputElement).value;
+        if (nova.length < 8) { alert('A senha deve ter pelo menos 8 caracteres.'); return; }
+        if (nova !== confirma) { alert('As senhas não coincidem.'); return; }
+      }
+      if (current < TOTAL_STEPS - 1) goTo(current + 1);
+    });
     btnPrev.addEventListener('click', () => { if (current > 0) goTo(current - 1); });
 
-    // Máscaras
+    // ── Força da senha ────────────────────────────────────────────────────────
+    const novaSenhaInput = document.getElementById('nova-senha') as HTMLInputElement;
+    const senhaBar       = document.getElementById('senha-bar')!;
+    const senhaHint      = document.getElementById('senha-hint')!;
+
+    novaSenhaInput.addEventListener('input', () => {
+      const v = novaSenhaInput.value;
+      let score = 0;
+      if (v.length >= 8)  score++;
+      if (v.length >= 12) score++;
+      if (/[A-Z]/.test(v)) score++;
+      if (/[0-9]/.test(v)) score++;
+      if (/[^A-Za-z0-9]/.test(v)) score++;
+
+      const pct = Math.min(100, score * 20);
+      senhaBar.style.width = pct + '%';
+      if (score <= 1) { senhaBar.className = 'h-full rounded-full transition-all duration-300 bg-red-500'; senhaHint.textContent = 'Fraca'; }
+      else if (score <= 3) { senhaBar.className = 'h-full rounded-full transition-all duration-300 bg-yellow-500'; senhaHint.textContent = 'Média'; }
+      else { senhaBar.className = 'h-full rounded-full transition-all duration-300 bg-green-500'; senhaHint.textContent = 'Forte'; }
+
+      if (v.length === 0) { senhaBar.style.width = '0'; senhaHint.textContent = 'Digite ao menos 8 caracteres'; }
+    });
+
+    // ── Verificação de confirmação ────────────────────────────────────────────
+    const confirmaSenhaInput = document.getElementById('confirma-senha') as HTMLInputElement;
+    const matchHint          = document.getElementById('match-hint')!;
+
+    confirmaSenhaInput.addEventListener('input', () => {
+      const nova    = novaSenhaInput.value;
+      const confirma = confirmaSenhaInput.value;
+      if (!confirma) { matchHint.classList.add('hidden'); return; }
+      matchHint.classList.remove('hidden');
+      if (nova === confirma) {
+        matchHint.textContent = '✓ Senhas coincidem';
+        matchHint.className = 'text-xs mt-1 text-green-400';
+      } else {
+        matchHint.textContent = '✗ Senhas não coincidem';
+        matchHint.className = 'text-xs mt-1 text-red-400';
+      }
+    });
+
+    // ── Toggles mostrar/ocultar senha ────────────────────────────────────────
+    function setupToggle(btnId: string, inputId: string) {
+      document.getElementById(btnId)?.addEventListener('click', () => {
+        const input = document.getElementById(inputId) as HTMLInputElement;
+        input.type = input.type === 'password' ? 'text' : 'password';
+      });
+    }
+    setupToggle('toggle-nova', 'nova-senha');
+    setupToggle('toggle-confirma', 'confirma-senha');
+
+    // ── Máscaras ──────────────────────────────────────────────────────────────
     document.getElementById('tel-ob')?.addEventListener('input', function(this: HTMLInputElement) {
       let v = this.value.replace(/\D/g, '').slice(0, 11);
       if (v.length > 10) v = v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
@@ -277,6 +391,7 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
       else if (v.length > 2) v = v.replace(/^(\d{2})(\d*)$/, '($1) $2');
       this.value = v;
     });
+
     document.getElementById('doc-ob')?.addEventListener('input', function(this: HTMLInputElement) {
       let v = this.value.replace(/\D/g, '').slice(0, 14);
       if (v.length <= 11) {
@@ -289,7 +404,7 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
       this.value = v;
     });
 
-    // Busca CEP
+    // ── Busca CEP ─────────────────────────────────────────────────────────────
     document.getElementById('cep-ob')?.addEventListener('blur', async function(this: HTMLInputElement) {
       const cep = this.value.replace(/\D/g, '');
       if (cep.length !== 8) return;
@@ -297,8 +412,8 @@ const steps = ['Dados Pessoais', 'Dados da Academia', 'Endereço'];
         const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
         const d = await res.json();
         if (d.erro) return;
-        (document.getElementById('rua-ob') as HTMLInputElement).value = d.logradouro ?? '';
-        (document.getElementById('bairro-ob') as HTMLInputElement).value = d.bairro ?? '';
+        (document.getElementById('rua-ob')    as HTMLInputElement).value = d.logradouro ?? '';
+        (document.getElementById('bairro-ob') as HTMLInputElement).value = d.bairro     ?? '';
         (document.getElementById('cidade-ob') as HTMLInputElement).value = d.localidade ?? '';
       } catch {}
     });
