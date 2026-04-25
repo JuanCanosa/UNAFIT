@@ -106,34 +106,41 @@ if (Astro.request.method === 'POST') {
       .limit(1)
       .single();
 
-    if (!donoProfile || !acadData?.email) {
-      erro = 'Nenhum dono ou e-mail encontrado para esta academia.';
+    if (!donoProfile) {
+      erro = 'Nenhum dono encontrado para esta academia.';
     } else {
-      // Gera link de acesso: magic link para onboarding pendente, recovery para senha se já completou
-      const onboardingCompleto = (acadData as any).onboarding_completo;
-      const redirectTo = onboardingCompleto
-        ? `${appUrl}/auth/callback?next=/portal/reset-password`
-        : `${appUrl}/auth/callback?next=/dashboard`;
+      // Busca o e-mail real do auth user (pode diferir do email de contato da academia)
+      const { data: authUser } = await adminClient.auth.admin.getUserById(donoProfile.id);
+      const donoEmail = authUser?.user?.email;
 
-      const { data: linkData } = await adminClient.auth.admin.generateLink({
-        type: onboardingCompleto ? 'recovery' : 'magiclink',
-        email: acadData.email,
-        options: { redirectTo },
-      });
-      const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
-
-      if (!linkAcesso) {
-        erro = 'Erro ao gerar link de acesso. Tente novamente.';
-      } else if (emailConfigurado()) {
-        await enviarEmailBoasVindasAcademia({
-          email: acadData.email,
-          nomeAcademia: acadData.nome ?? 'Academia',
-          linkAcesso,
-          linkLogin: `${appUrl}/${acadData.slug}`,
-        });
-        sucesso = `Link de acesso reenviado para ${acadData.email}.`;
+      if (!donoEmail) {
+        erro = 'Não foi possível obter o e-mail do dono.';
       } else {
-        sucesso = `E-mail não configurado — link de acesso: ${linkAcesso}`;
+        const onboardingCompleto = !!(acadData as any)?.onboarding_completo;
+        const redirectTo = onboardingCompleto
+          ? `${appUrl}/auth/callback?next=/portal/reset-password`
+          : `${appUrl}/auth/callback?next=/dashboard`;
+
+        const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
+          type: onboardingCompleto ? 'recovery' : 'magiclink',
+          email: donoEmail,
+          options: { redirectTo },
+        });
+        const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
+
+        if (linkErr || !linkAcesso) {
+          erro = `Erro ao gerar link: ${linkErr?.message ?? 'resposta inesperada da API'}`;
+        } else if (emailConfigurado()) {
+          await enviarEmailBoasVindasAcademia({
+            email: donoEmail,
+            nomeAcademia: acadData?.nome ?? 'Academia',
+            linkAcesso,
+            linkLogin: `${appUrl}/${acadData?.slug}`,
+          });
+          sucesso = `Link de acesso enviado para ${donoEmail}.`;
+        } else {
+          sucesso = `E-mail não configurado — link de acesso: ${linkAcesso}`;
+        }
       }
     }
   }
