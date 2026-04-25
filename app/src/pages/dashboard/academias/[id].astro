@@ -33,10 +33,11 @@ if (Astro.request.method === 'POST') {
   const action = form.get('action') as string;
 
   if (action === 'editar_academia') {
+    const novoEmail = (form.get('email') as string)?.trim().toLowerCase() || null;
     const patch: Record<string, any> = {
       nome:                  (form.get('nome') as string)?.trim(),
       slug:                  (form.get('slug') as string)?.trim().toLowerCase().replace(/\s+/g, '-'),
-      email:                 (form.get('email') as string)?.trim().toLowerCase() || null,
+      email:                 novoEmail,
       telefone:              (form.get('telefone') as string)?.trim() || null,
       responsavel_nome:      (form.get('responsavel_nome') as string)?.trim() || null,
       responsavel_cpf_cnpj:  (form.get('responsavel_cpf_cnpj') as string)?.trim().replace(/\D/g, '') || null,
@@ -49,8 +50,19 @@ if (Astro.request.method === 'POST') {
       endereco_estado:       (form.get('endereco_estado') as string)?.trim().toUpperCase() || null,
     };
     const { error: updErr } = await adminClient.from('academias').update(patch).eq('id', id!);
-    if (updErr) erro = updErr.message;
-    else sucesso = 'Academia atualizada com sucesso!';
+    if (updErr) {
+      erro = updErr.message;
+    } else {
+      // Sincroniza o e-mail de login do dono no Supabase Auth
+      if (novoEmail) {
+        const { data: donoProf } = await adminClient
+          .from('profiles').select('id').eq('academia_id', id!).eq('role', 'dono').limit(1).single();
+        if (donoProf) {
+          await adminClient.auth.admin.updateUserById(donoProf.id, { email: novoEmail });
+        }
+      }
+      sucesso = 'Academia atualizada com sucesso!';
+    }
   }
 
   if (action === 'upload_logo') {
@@ -98,49 +110,33 @@ if (Astro.request.method === 'POST') {
       .eq('id', id!)
       .single();
 
-    const { data: donoProfile } = await adminClient
-      .from('profiles')
-      .select('id')
-      .eq('academia_id', id!)
-      .eq('role', 'dono')
-      .limit(1)
-      .single();
-
-    if (!donoProfile) {
-      erro = 'Nenhum dono encontrado para esta academia.';
+    if (!acadData?.email) {
+      erro = 'E-mail da academia não cadastrado. Salve o e-mail na seção "Dados da Academia" primeiro.';
     } else {
-      // Busca o e-mail real do auth user (pode diferir do email de contato da academia)
-      const { data: authUser } = await adminClient.auth.admin.getUserById(donoProfile.id);
-      const donoEmail = authUser?.user?.email;
+      const onboardingCompleto = !!(acadData as any).onboarding_completo;
+      const redirectTo = onboardingCompleto
+        ? `${appUrl}/auth/callback?next=/portal/reset-password`
+        : `${appUrl}/auth/callback?next=/dashboard`;
 
-      if (!donoEmail) {
-        erro = 'Não foi possível obter o e-mail do dono.';
-      } else {
-        const onboardingCompleto = !!(acadData as any)?.onboarding_completo;
-        const redirectTo = onboardingCompleto
-          ? `${appUrl}/auth/callback?next=/portal/reset-password`
-          : `${appUrl}/auth/callback?next=/dashboard`;
+      const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
+        type: onboardingCompleto ? 'recovery' : 'magiclink',
+        email: acadData.email,
+        options: { redirectTo },
+      });
+      const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
 
-        const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
-          type: onboardingCompleto ? 'recovery' : 'magiclink',
-          email: donoEmail,
-          options: { redirectTo },
+      if (linkErr || !linkAcesso) {
+        erro = `Erro ao gerar link: ${linkErr?.message ?? 'resposta inesperada da API'}`;
+      } else if (emailConfigurado()) {
+        await enviarEmailBoasVindasAcademia({
+          email: acadData.email,
+          nomeAcademia: acadData.nome ?? 'Academia',
+          linkAcesso,
+          linkLogin: `${appUrl}/${acadData.slug}`,
         });
-        const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
-
-        if (linkErr || !linkAcesso) {
-          erro = `Erro ao gerar link: ${linkErr?.message ?? 'resposta inesperada da API'}`;
-        } else if (emailConfigurado()) {
-          await enviarEmailBoasVindasAcademia({
-            email: donoEmail,
-            nomeAcademia: acadData?.nome ?? 'Academia',
-            linkAcesso,
-            linkLogin: `${appUrl}/${acadData?.slug}`,
-          });
-          sucesso = `Link de acesso enviado para ${donoEmail}.`;
-        } else {
-          sucesso = `E-mail não configurado — link de acesso: ${linkAcesso}`;
-        }
+        sucesso = `Link de acesso enviado para ${acadData.email}.`;
+      } else {
+        sucesso = `E-mail não configurado — link de acesso: ${linkAcesso}`;
       }
     }
   }
@@ -621,29 +617,37 @@ const hoje = new Date().toISOString().split('T')[0];
         )}
       </div>
 
-      <!-- Redefinir Senha -->
+      <!-- Reenviar Acesso -->
       <div class="rounded-xl border border-border bg-card p-5">
-        <h2 class="text-sm font-semibold text-foreground mb-1">Redefinir Senha</h2>
-        <p class="text-xs text-muted-foreground mb-4">
-          Gera uma nova senha temporária e envia por e-mail para o responsável da academia.
+        <h2 class="text-sm font-semibold text-foreground mb-1">Reenviar Acesso</h2>
+        <p class="text-xs text-muted-foreground mb-3">
+          Envia um link de acesso para o e-mail cadastrado abaixo. O link expira em 24h.
         </p>
-        {donos.length > 0 && (
-          <div class="mb-3 rounded-lg border border-border bg-zinc-900/50 px-3 py-2">
-            <p class="text-xs text-muted-foreground">Conta do dono</p>
-            <p class="text-xs font-medium text-foreground mt-0.5">{(academia as any).email ?? 'E-mail não cadastrado'}</p>
-          </div>
-        )}
-        <form method="POST"
-          onsubmit="return confirm('Gerar nova senha e enviar por e-mail para o responsável da academia?')">
-          <input type="hidden" name="action" value="resetar_senha" />
-          <button type="submit"
-            class="w-full rounded-lg border border-yellow-700/50 bg-yellow-900/20 text-yellow-400 py-2.5 text-sm font-medium hover:bg-yellow-900/40 transition-colors flex items-center justify-center gap-2">
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-            </svg>
-            Gerar Nova Senha
+        <div class="mb-4 rounded-lg border border-border bg-zinc-900/50 px-3 py-2.5">
+          <p class="text-xs text-muted-foreground mb-0.5">Link será enviado para</p>
+          {(academia as any).email ? (
+            <p class="text-sm font-semibold text-foreground">{(academia as any).email}</p>
+          ) : (
+            <p class="text-xs text-yellow-400">Nenhum e-mail cadastrado — adicione em "Dados da Academia".</p>
+          )}
+        </div>
+        {(academia as any).email ? (
+          <form method="POST"
+            onsubmit={`return confirm('Enviar link de acesso para ${(academia as any).email}?')`}>
+            <input type="hidden" name="action" value="resetar_senha" />
+            <button type="submit"
+              class="w-full rounded-lg border border-yellow-700/50 bg-yellow-900/20 text-yellow-400 py-2.5 text-sm font-medium hover:bg-yellow-900/40 transition-colors flex items-center justify-center gap-2">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              Reenviar Link de Acesso
+            </button>
+          </form>
+        ) : (
+          <button disabled class="w-full rounded-lg border border-border text-muted-foreground py-2.5 text-sm opacity-50 cursor-not-allowed">
+            Reenviar Link de Acesso
           </button>
-        </form>
+        )}
       </div>
 
     </div>
