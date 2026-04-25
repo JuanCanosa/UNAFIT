@@ -16,8 +16,8 @@ const adminClient = createSupabaseAdminClient();
 let sucesso = '';
 let erro = '';
 
-function gerarSenha(len = 10): string {
-  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!';
+function gerarSenha(len = 16): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
@@ -36,11 +36,12 @@ if (Astro.request.method === 'POST') {
     if (!nome || !email) {
       erro = 'Nome da academia e e-mail são obrigatórios.';
     } else {
-      const senhaTemp = gerarSenha();
+      // Senha interna usada só para criar a conta — o dono define a própria senha no onboarding
+      const senhaInterna = gerarSenha();
 
       const { data: acad, error: acadErr } = await adminClient
         .from('academias')
-        .insert({ nome, slug, email: email, telefone, onboarding_completo: false })
+        .insert({ nome, slug, email, telefone, onboarding_completo: false })
         .select('id')
         .single();
 
@@ -48,7 +49,7 @@ if (Astro.request.method === 'POST') {
         erro = acadErr.code === '23505' ? 'Já existe uma academia com esse nome ou slug.' : acadErr.message;
       } else {
         const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
-          email, password: senhaTemp, email_confirm: true,
+          email, password: senhaInterna, email_confirm: true,
           user_metadata: { nome_completo: `Dono — ${nome}` },
         });
 
@@ -64,18 +65,26 @@ if (Astro.request.method === 'POST') {
             ativo: true,
           }, { onConflict: 'id' });
 
+          // Gera magic link — o dono clica, Supabase autentica e manda pro callback SSR
+          const { data: linkData } = await adminClient.auth.admin.generateLink({
+            type: 'magiclink',
+            email,
+            options: { redirectTo: `${appUrl}/auth/callback?next=/dashboard` },
+          });
+          const linkAcesso = (linkData as any)?.properties?.action_link ?? `${appUrl}/${slug}`;
+
           if (emailConfigurado()) {
             const { ok, erro: emailErro } = await enviarEmailBoasVindasAcademia({
               email,
               nomeAcademia: nome,
-              senhaTemporaria: senhaTemp,
+              linkAcesso,
               linkLogin: `${appUrl}/${slug}`,
             });
             sucesso = ok
-              ? `Academia "${nome}" criada! E-mail de boas-vindas enviado para ${email}.`
-              : `Academia "${nome}" criada, mas houve um erro ao enviar o e-mail (${emailErro}). Senha temporária: ${senhaTemp}`;
+              ? `Academia "${nome}" criada! Link de acesso enviado para ${email}.`
+              : `Academia "${nome}" criada, mas erro ao enviar e-mail (${emailErro}). Link manual: ${linkAcesso}`;
           } else {
-            sucesso = `Academia "${nome}" criada! E-mail não configurado — anote a senha temporária: ${senhaTemp} · Link de acesso: ${appUrl}/${slug}`;
+            sucesso = `Academia "${nome}" criada! E-mail não configurado — link de acesso: ${linkAcesso}`;
           }
         }
       }

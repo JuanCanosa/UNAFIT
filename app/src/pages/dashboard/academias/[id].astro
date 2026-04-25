@@ -94,7 +94,7 @@ if (Astro.request.method === 'POST') {
   if (action === 'resetar_senha') {
     const { data: acadData } = await adminClient
       .from('academias')
-      .select('nome, slug, email')
+      .select('nome, slug, email, onboarding_completo')
       .eq('id', id!)
       .single();
 
@@ -106,28 +106,34 @@ if (Astro.request.method === 'POST') {
       .limit(1)
       .single();
 
-    if (!donoProfile) {
-      erro = 'Nenhum dono encontrado para esta academia.';
+    if (!donoProfile || !acadData?.email) {
+      erro = 'Nenhum dono ou e-mail encontrado para esta academia.';
     } else {
-      const novaSenha = gerarSenha();
-      const { error: passErr } = await adminClient.auth.admin.updateUserById(
-        donoProfile.id,
-        { password: novaSenha }
-      );
-      if (passErr) {
-        erro = passErr.message;
+      // Gera link de acesso: magic link para onboarding pendente, recovery para senha se já completou
+      const onboardingCompleto = (acadData as any).onboarding_completo;
+      const redirectTo = onboardingCompleto
+        ? `${appUrl}/auth/callback?next=/portal/reset-password`
+        : `${appUrl}/auth/callback?next=/dashboard`;
+
+      const { data: linkData } = await adminClient.auth.admin.generateLink({
+        type: onboardingCompleto ? 'recovery' : 'magiclink',
+        email: acadData.email,
+        options: { redirectTo },
+      });
+      const linkAcesso = (linkData as any)?.properties?.action_link ?? null;
+
+      if (!linkAcesso) {
+        erro = 'Erro ao gerar link de acesso. Tente novamente.';
+      } else if (emailConfigurado()) {
+        await enviarEmailBoasVindasAcademia({
+          email: acadData.email,
+          nomeAcademia: acadData.nome ?? 'Academia',
+          linkAcesso,
+          linkLogin: `${appUrl}/${acadData.slug}`,
+        });
+        sucesso = `Link de acesso reenviado para ${acadData.email}.`;
       } else {
-        if (emailConfigurado() && acadData?.email) {
-          await enviarEmailBoasVindasAcademia({
-            email: acadData.email,
-            nomeAcademia: acadData.nome ?? 'Academia',
-            senhaTemporaria: novaSenha,
-            linkLogin: `${appUrl}/${acadData.slug}`,
-          });
-          sucesso = `Nova senha gerada e enviada para ${acadData.email}.`;
-        } else {
-          sucesso = `Nova senha gerada: ${novaSenha} (e-mail não configurado, anote a senha).`;
-        }
+        sucesso = `E-mail não configurado — link de acesso: ${linkAcesso}`;
       }
     }
   }
