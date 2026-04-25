@@ -82,20 +82,23 @@ function templateBase(params: {
 // ─── Email de boas-vindas para nova academia ──────────────────────────────────
 
 export async function enviarEmailBoasVindasAcademia(params: {
-  email: string;
+  email: string;        // destinatário do e-mail
+  emailLogin?: string;  // e-mail de login (se diferente do destinatário)
   nomeAcademia: string;
-  senhaTemporaria?: string; // senha gerada pelo admin
-  linkAcesso: string;       // URL de login da academia (ex: unafit.com.br/box972)
+  senhaTemporaria?: string;
+  linkAcesso: string;
   linkLogin: string;
 }): Promise<{ ok: boolean; erro?: string }> {
-  const { email, nomeAcademia, senhaTemporaria, linkAcesso } = params;
+  const { email, emailLogin, nomeAcademia, senhaTemporaria, linkAcesso } = params;
+  const loginExibido = emailLogin ?? email;
 
   const blocoSenha = senhaTemporaria ? `
     <div style="background:#27272a;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
-      <p style="margin:0 0 6px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Seus dados de acesso</p>
-      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">E-mail: <strong style="color:#ffffff;">${email}</strong></p>
-      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">Senha: <strong style="color:#ffffff;font-family:monospace;font-size:18px;letter-spacing:.1em;">${senhaTemporaria}</strong></p>
-      <p style="margin:8px 0 0;font-size:11px;color:#71717a;">Recomendamos alterar a senha após o primeiro acesso.</p>
+      <p style="margin:0 0 10px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Seus dados de acesso</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">E-mail: <strong style="color:#ffffff;">${loginExibido}</strong></p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">Senha: <strong style="color:#ffffff;font-family:monospace;font-size:20px;letter-spacing:.12em;">${senhaTemporaria}</strong></p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">URL: <a href="${linkAcesso}" style="color:#dc2626;">${linkAcesso}</a></p>
+      <p style="margin:12px 0 0;font-size:11px;color:#71717a;">Recomendamos alterar a senha após o primeiro acesso.</p>
     </div>` : '';
 
   const corpo = `

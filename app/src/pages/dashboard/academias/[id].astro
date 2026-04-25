@@ -117,18 +117,21 @@ if (Astro.request.method === 'POST') {
         if (passErr) {
           erro = `Erro ao redefinir senha: ${passErr.message}`;
         } else {
-          // Envia e-mail com credenciais para o e-mail de login do dono
           const emailDestino = acadData?.email ?? donoLoginEmail;
+          const linkLogin    = `${appUrl}/${acadData?.slug ?? ''}`;
+
           if (emailConfigurado()) {
             await enviarEmailBoasVindasAcademia({
               email: emailDestino,
+              emailLogin: donoLoginEmail !== emailDestino ? donoLoginEmail : undefined,
               nomeAcademia: acadData?.nome ?? 'Academia',
-              linkAcesso: `${appUrl}/${acadData?.slug ?? ''}`,
-              linkLogin: `${appUrl}/${acadData?.slug ?? ''}`,
+              senhaTemporaria: novaSenha,
+              linkAcesso: linkLogin,
+              linkLogin,
             });
           }
-          // Sempre mostra as credenciais no painel — independente do e-mail
-          sucesso = `Senha redefinida! Login: ${donoLoginEmail} · Senha: ${novaSenha} · Acesso: ${appUrl}/${acadData?.slug}${emailConfigurado() ? ` (e-mail enviado para ${emailDestino})` : ''}`;
+          sucesso = `Senha redefinida! Login: ${donoLoginEmail} · Senha: ${novaSenha} · Acesso: ${linkLogin}${emailConfigurado() ? ` · E-mail enviado para ${emailDestino}` : ''}`;
+
         }
       }
     }
