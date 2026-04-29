@@ -43,57 +43,58 @@ if (Astro.request.method === 'POST') {
   // ── Esqueci minha senha ────────────────────────────────────────────────────
   if (action === 'esqueci') {
     mostrarEsqueci = true;
-    const rawInput = (form.get('identificador') as string)?.trim() ?? '';
+    const rawInput  = (form.get('identificador') as string)?.trim() ?? '';
     const cpfDigits = rawInput.replace(/\D/g, '');
-    const ehCpf = cpfDigits.length === 11 && !/[@.]/.test(rawInput);
+    const ehCpf     = cpfDigits.length === 11 && !/[@.]/.test(rawInput);
 
-    // Resolve email de autenticação
-    let authEmail: string | null = null;
+    // Resolve o email real do aluno (a partir do CPF ou do email digitado)
+    let authEmail:    string | null = null;
+    let emailEnvio:   string | null = null;
+
     if (ehCpf) {
       const { data: alunoMatch } = await adminClient
-        .from('alunos').select('email, cpf')
+        .from('alunos').select('email')
         .eq('cpf', cpfDigits).eq('academia_id', academia.id).maybeSingle();
-      authEmail = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
+      emailEnvio = alunoMatch?.email ?? null;
+      authEmail  = emailEnvio ?? `${cpfDigits}@aluno.unafit.com.br`;
     } else {
-      authEmail = rawInput.toLowerCase();
+      authEmail  = rawInput.toLowerCase();
+      emailEnvio = authEmail;
     }
 
-    // Verifica se usuário existe no Supabase Auth
+    // Verifica se o usuário existe no Supabase Auth
     const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
     const authUser = users.find(u => u.email?.toLowerCase() === authEmail?.toLowerCase());
 
     if (!authUser) {
       erroEsqueci = 'Não encontramos nenhuma conta com esse e-mail ou CPF nesta academia.';
+    } else if (!emailEnvio) {
+      // CPF sem e-mail cadastrado — não é possível enviar sem expor a senha na tela
+      erroEsqueci = 'Sua conta não possui e-mail cadastrado. Fale com o responsável pela academia para redefinir sua senha.';
     } else {
-      const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+      const chars    = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
       const senhaTemp = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 
       const { error: updErr } = await adminClient.auth.admin.updateUserById(authUser.id, { password: senhaTemp });
 
       if (updErr) {
         erroEsqueci = 'Erro ao gerar nova senha. Tente novamente.';
+      } else if (!emailConfigurado()) {
+        erroEsqueci = 'Serviço de e-mail não configurado. Contate o responsável pela academia.';
       } else {
-        const emailDestino = ehCpf ? null : authEmail;
-        const loginUrl = `${appUrl}/${slug}`;
-
-        if (emailDestino && emailConfigurado()) {
-          const nomeAluno = authUser.user_metadata?.nome_completo ?? authUser.email ?? '';
-          await enviarEmailNovaSenha({
-            email: emailDestino,
-            nomeAluno,
-            nomeAcademia: academia.nome,
-            logoUrl: academia.logo_url ?? null,
-            senhaTemporaria: senhaTemp,
-            loginUrl,
-          });
-          sucessoEsqueci = `Uma nova senha foi enviada para ${emailDestino}. Verifique sua caixa de entrada.`;
-        } else if (ehCpf) {
-          // Login por CPF sem email — exibe a senha diretamente (único canal disponível)
-          sucessoEsqueci = `Nova senha gerada: ${senhaTemp} — Anote e entre com seu CPF.`;
-        } else {
-          sucessoEsqueci = `Nova senha gerada. E-mail não configurado — contate o responsável pela academia.`;
-        }
-        mostrarEsqueci = false;
+        const nomeAluno = authUser.user_metadata?.nome_completo ?? '';
+        await enviarEmailNovaSenha({
+          email: emailEnvio,
+          nomeAluno,
+          nomeAcademia: academia.nome,
+          logoUrl:       academia.logo_url ?? null,
+          senhaTemporaria: senhaTemp,
+          loginUrl: `${appUrl}/${slug}`,
+        });
+        // Mascara o email para não expor o endereço completo
+        const emailMask = emailEnvio.replace(/^(.{2})(.*)(@.+)$/, (_, a, _b, c) => `${a}***${c}`);
+        sucessoEsqueci  = `Nova senha enviada para ${emailMask}. Verifique sua caixa de entrada.`;
+        mostrarEsqueci  = false;
       }
     }
   }
