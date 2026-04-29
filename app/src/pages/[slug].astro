@@ -1,6 +1,7 @@
 ---
 import '@/styles/globals.css';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { emailConfigurado, enviarEmailNovaSenha } from '@/lib/email';
 
 const { slug } = Astro.params;
 
@@ -26,52 +27,108 @@ const { data: academia } = await adminClient
 if (!academia || !academia.ativo) return Astro.redirect('/login');
 
 let erro = '';
+let erroEsqueci = '';
+let sucessoEsqueci = '';
+let mostrarEsqueci = false;
+
 const msgParam = new URL(Astro.request.url).searchParams.get('msg');
 const sucesso = msgParam === 'senha_alterada' ? 'Senha alterada com sucesso! Entre com a nova senha.' : '';
 
-// POST: fazer login
+const appUrl = (import.meta.env.SITE ?? import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br').replace(/\/$/, '');
+
 if (Astro.request.method === 'POST') {
-  const form = await Astro.request.formData();
-  const rawInput = (form.get('email') as string)?.trim() ?? '';
-  const senha    = (form.get('senha') as string) ?? '';
+  const form   = await Astro.request.formData();
+  const action = (form.get('action') as string) ?? 'login';
 
-  let email = rawInput;
+  // ── Esqueci minha senha ────────────────────────────────────────────────────
+  if (action === 'esqueci') {
+    mostrarEsqueci = true;
+    const rawInput = (form.get('identificador') as string)?.trim() ?? '';
+    const cpfDigits = rawInput.replace(/\D/g, '');
+    const ehCpf = cpfDigits.length === 11 && !/[@.]/.test(rawInput);
 
-  // Suporte a login por CPF
-  const cpfDigits = rawInput.replace(/\D/g, '');
-  if (cpfDigits.length === 11) {
-    const { data: alunoMatch } = await adminClient
-      .from('alunos')
-      .select('email')
-      .eq('cpf', cpfDigits)
-      .eq('academia_id', academia.id)
-      .not('email', 'is', null)
-      .maybeSingle();
-    email = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
-  }
-
-  const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
-  const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password: senha });
-
-  if (authErr) {
-    erro = 'E-mail/CPF ou senha incorretos.';
-  } else if (authData.user) {
-    // Verifica se é aluno multi-academia e seleciona esta academia
-    const { data: vinculo } = await adminClient
-      .from('aluno_academias')
-      .select('id')
-      .eq('profile_id', authData.user.id)
-      .eq('academia_id', academia.id)
-      .eq('ativo', true)
-      .maybeSingle();
-
-    if (vinculo) {
-      await adminClient.from('profiles')
-        .update({ academia_id: academia.id })
-        .eq('id', authData.user.id);
+    // Resolve email de autenticação
+    let authEmail: string | null = null;
+    if (ehCpf) {
+      const { data: alunoMatch } = await adminClient
+        .from('alunos').select('email, cpf')
+        .eq('cpf', cpfDigits).eq('academia_id', academia.id).maybeSingle();
+      authEmail = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
+    } else {
+      authEmail = rawInput.toLowerCase();
     }
 
-    return Astro.redirect('/dashboard');
+    // Verifica se usuário existe no Supabase Auth
+    const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
+    const authUser = users.find(u => u.email?.toLowerCase() === authEmail?.toLowerCase());
+
+    if (!authUser) {
+      erroEsqueci = 'Não encontramos nenhuma conta com esse e-mail ou CPF nesta academia.';
+    } else {
+      const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+      const senhaTemp = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+
+      const { error: updErr } = await adminClient.auth.admin.updateUserById(authUser.id, { password: senhaTemp });
+
+      if (updErr) {
+        erroEsqueci = 'Erro ao gerar nova senha. Tente novamente.';
+      } else {
+        const emailDestino = ehCpf ? null : authEmail;
+        const loginUrl = `${appUrl}/${slug}`;
+
+        if (emailDestino && emailConfigurado()) {
+          const nomeAluno = authUser.user_metadata?.nome_completo ?? authUser.email ?? '';
+          await enviarEmailNovaSenha({
+            email: emailDestino,
+            nomeAluno,
+            nomeAcademia: academia.nome,
+            logoUrl: academia.logo_url ?? null,
+            senhaTemporaria: senhaTemp,
+            loginUrl,
+          });
+          sucessoEsqueci = `Uma nova senha foi enviada para ${emailDestino}. Verifique sua caixa de entrada.`;
+        } else if (ehCpf) {
+          // Login por CPF sem email — exibe a senha diretamente (único canal disponível)
+          sucessoEsqueci = `Nova senha gerada: ${senhaTemp} — Anote e entre com seu CPF.`;
+        } else {
+          sucessoEsqueci = `Nova senha gerada. E-mail não configurado — contate o responsável pela academia.`;
+        }
+        mostrarEsqueci = false;
+      }
+    }
+  }
+
+  // ── Login normal ───────────────────────────────────────────────────────────
+  if (action === 'login') {
+    const rawInput = (form.get('email') as string)?.trim() ?? '';
+    const senha    = (form.get('senha') as string) ?? '';
+    let email = rawInput;
+
+    const cpfDigits = rawInput.replace(/\D/g, '');
+    if (cpfDigits.length === 11) {
+      const { data: alunoMatch } = await adminClient
+        .from('alunos').select('email')
+        .eq('cpf', cpfDigits).eq('academia_id', academia.id)
+        .not('email', 'is', null).maybeSingle();
+      email = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
+    }
+
+    const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+    const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password: senha });
+
+    if (authErr) {
+      erro = 'E-mail/CPF ou senha incorretos.';
+    } else if (authData.user) {
+      const { data: vinculo } = await adminClient
+        .from('aluno_academias').select('id')
+        .eq('profile_id', authData.user.id).eq('academia_id', academia.id).eq('ativo', true).maybeSingle();
+
+      if (vinculo) {
+        await adminClient.from('profiles').update({ academia_id: academia.id }).eq('id', authData.user.id);
+      }
+
+      return Astro.redirect('/dashboard');
+    }
   }
 }
 
@@ -119,41 +176,85 @@ const nomeAcademia = academia.nome;
       </div>
     )}
 
-    {erro && (
-      <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
-        {erro}
+    {sucessoEsqueci && (
+      <div class="mb-4 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">
+        {sucessoEsqueci}
       </div>
     )}
 
-    <form method="POST" class="space-y-4">
-      <div>
-        <label class="block text-xs text-muted-foreground mb-1.5">E-mail ou CPF</label>
-        <input
-          name="email" type="text" required autofocus
-          placeholder="seu@email.com ou CPF"
-          class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors"
-        />
-      </div>
-      <div>
-        <label class="block text-xs text-muted-foreground mb-1.5">Senha</label>
-        <input
-          name="senha" type="password" required
-          placeholder="••••••••"
-          class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors"
-        />
+    <!-- Formulário de login -->
+    <div id="form-login" class={mostrarEsqueci ? 'hidden' : ''}>
+      {erro && (
+        <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+          {erro}
+        </div>
+      )}
+
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="login" />
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1.5">E-mail ou CPF</label>
+          <input name="email" type="text" required autofocus
+            placeholder="seu@email.com ou CPF"
+            class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors" />
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1.5">Senha</label>
+          <input name="senha" type="password" required placeholder="••••••••"
+            class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors" />
+        </div>
+
+        <div class="flex justify-end">
+          <button type="button" id="btn-esqueci"
+            class="text-xs text-muted-foreground hover:text-primary transition-colors">
+            Esqueci minha senha
+          </button>
+        </div>
+
+        <button type="submit"
+          class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Entrar
+        </button>
+      </form>
+    </div>
+
+    <!-- Formulário "Esqueci minha senha" -->
+    <div id="form-esqueci" class={mostrarEsqueci ? '' : 'hidden'}>
+      {erroEsqueci && (
+        <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+          {erroEsqueci}
+        </div>
+      )}
+
+      <div class="mb-5">
+        <h2 class="text-base font-semibold text-foreground">Esqueci minha senha</h2>
+        <p class="text-xs text-muted-foreground mt-1">
+          Digite seu e-mail ou CPF. Se estiver cadastrado, enviaremos uma nova senha.
+        </p>
       </div>
 
-      <div class="flex justify-end">
-        <a href="/esqueci-senha" class="text-xs text-muted-foreground hover:text-primary transition-colors">
-          Esqueci minha senha
-        </a>
-      </div>
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="esqueci" />
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1.5">E-mail ou CPF</label>
+          <input name="identificador" type="text" required autofocus
+            placeholder="seu@email.com ou CPF"
+            class="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-colors" />
+        </div>
 
-      <button type="submit"
-        class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
-        Entrar
-      </button>
-    </form>
+        <button type="submit"
+          class="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Enviar nova senha
+        </button>
+      </form>
+
+      <div class="mt-4 text-center">
+        <button type="button" id="btn-voltar-login"
+          class="text-xs text-muted-foreground hover:text-primary transition-colors">
+          ← Voltar para o login
+        </button>
+      </div>
+    </div>
 
     <!-- Rodapé -->
     <div class="mt-8 text-center">
@@ -162,5 +263,16 @@ const nomeAcademia = academia.nome;
       </p>
     </div>
   </div>
+
+  <script>
+    document.getElementById('btn-esqueci')?.addEventListener('click', () => {
+      document.getElementById('form-login')?.classList.add('hidden');
+      document.getElementById('form-esqueci')?.classList.remove('hidden');
+    });
+    document.getElementById('btn-voltar-login')?.addEventListener('click', () => {
+      document.getElementById('form-esqueci')?.classList.add('hidden');
+      document.getElementById('form-login')?.classList.remove('hidden');
+    });
+  </script>
 </body>
 </html>
