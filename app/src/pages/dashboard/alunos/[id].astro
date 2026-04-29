@@ -160,8 +160,8 @@ if (Astro.request.method === 'POST') {
 
     if (action === 'definir_senha') {
       const nova_senha = (form.get('nova_senha') as string)?.trim();
-      if (!nova_senha || nova_senha.length < 6) {
-        formError = 'A senha deve ter pelo menos 6 caracteres.';
+      if (!nova_senha || nova_senha.length < 8) {
+        formError = 'A senha deve ter pelo menos 8 caracteres.';
       } else if (authUser) {
         // Usuário existe — atualiza senha
         const { error } = await adminClient.auth.admin.updateUserById(authUser.id, { password: nova_senha });
@@ -382,8 +382,8 @@ const statusPagCores: Record<string, string> = {
               <input type="hidden" name="action" value="definir_senha" />
               <label class="block text-xs text-zinc-400">Definir senha do aluno</label>
               <div class="flex gap-2">
-                <input name="nova_senha" type="password" minlength="6" required
-                  placeholder="Nova senha (mín. 6 car.)"
+                <input name="nova_senha" type="password" minlength="8" required
+                  placeholder="Nova senha (mín. 8 car.)"
                   class="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
                 <button type="submit"
                   class="px-3 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium rounded-lg whitespace-nowrap">
