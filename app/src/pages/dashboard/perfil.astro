@@ -169,8 +169,9 @@ if (Astro.request.method === 'POST') {
         if (updErr) {
           erro = updErr.message;
         } else {
-          // Senha alterada invalida a sessão — redireciona para login com aviso
-          return Astro.redirect('/login?msg=senha_alterada');
+          // Senha alterada invalida a sessão — redireciona para a URL da academia
+          const destino = academia?.slug ? `/${academia.slug}?msg=senha_alterada` : '/login?msg=senha_alterada';
+          return Astro.redirect(destino);
         }
       }
     }

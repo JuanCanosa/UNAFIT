@@ -26,6 +26,8 @@ const { data: academia } = await adminClient
 if (!academia || !academia.ativo) return Astro.redirect('/login');
 
 let erro = '';
+const msgParam = new URL(Astro.request.url).searchParams.get('msg');
+const sucesso = msgParam === 'senha_alterada' ? 'Senha alterada com sucesso! Entre com a nova senha.' : '';
 
 // POST: fazer login
 if (Astro.request.method === 'POST') {
@@ -110,6 +112,12 @@ const nomeAcademia = academia.nome;
       <h1 class="text-xl font-bold text-foreground">{nomeAcademia}</h1>
       <p class="mt-1 text-sm text-muted-foreground">Entre com sua conta</p>
     </div>
+
+    {sucesso && (
+      <div class="mb-4 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">
+        {sucesso}
+      </div>
+    )}
 
     {erro && (
       <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
