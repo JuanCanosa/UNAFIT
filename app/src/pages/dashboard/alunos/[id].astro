@@ -204,9 +204,14 @@ if (Astro.request.method === 'POST') {
           options: { redirectTo: `${siteUrl}/portal/reset-password` },
         });
 
-        if (linkErr || !linkData?.properties?.action_link) {
+        const hashedToken = linkData?.properties?.hashed_token;
+        if (linkErr || !hashedToken) {
           formError = linkErr?.message ?? 'Erro ao gerar link de redefinição.';
         } else {
+          // Monta link PKCE — imune a prefetching de email (Hotmail/Outlook)
+          // O token só é consumido quando o JS chama verifyOtp(), não ao acessar a URL
+          const resetLink = `${siteUrl}/portal/reset-password?token_hash=${encodeURIComponent(hashedToken)}&type=recovery`;
+
           // Busca dados da academia para o email branded
           const { data: acad } = await adminClient
             .from('academias')
@@ -227,7 +232,7 @@ if (Astro.request.method === 'POST') {
             nomeAluno:     alunoAcesso.nome,
             nomeAcademia:  acad?.nome ?? 'Academia',
             logoUrl:       acad?.logo_url ?? null,
-            linkReset:     linkData.properties.action_link,
+            linkReset:     resetLink,
           });
 
           if (!resultado.ok) formError = resultado.erro ?? 'Erro ao enviar e-mail.';
