@@ -35,6 +35,8 @@ const staff    = membros?.filter(m => m.role !== 'aluno')     ?? [];
 const ativos   = alunos.filter(a => a.ativo).length;
 const inativos = alunos.filter(a => !a.ativo).length;
 
+let erroMembro = '';
+
 // Handle POST — cadastrar novo membro ou toggle ativo
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -52,19 +54,30 @@ if (Astro.request.method === 'POST') {
     const nome_completo = form.get('nome_completo') as string;
     const telefone      = form.get('telefone') as string;
 
-    // Cria usuário via API de administração — retorna novo UUID
     const res = await fetch(`${Astro.url.origin}/api/membros/criar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json',
                  'Cookie': Astro.request.headers.get('cookie') ?? '' },
       body: JSON.stringify({ email, nome_completo, telefone }),
     });
-    return Astro.redirect('/dashboard/membros');
+
+    if (res.ok) {
+      return Astro.redirect('/dashboard/membros');
+    } else {
+      const json = await res.json().catch(() => ({}));
+      erroMembro = json.error ?? 'Erro ao cadastrar membro. Tente novamente.';
+    }
   }
 }
 ---
 
 <DashboardLayout title="Membros">
+
+  {erroMembro && (
+    <div class="mb-5 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+      {erroMembro}
+    </div>
+  )}
 
   <!-- Cabeçalho -->
   <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

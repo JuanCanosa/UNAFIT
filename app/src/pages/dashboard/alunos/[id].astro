@@ -1,7 +1,7 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
-import { enviarEmailResetSenha, enviarEmailAtualizacaoCadastro, emailConfigurado } from '@/lib/email';
+import { enviarEmailNovaSenha, enviarEmailAtualizacaoCadastro, emailConfigurado } from '@/lib/email';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -196,43 +196,40 @@ if (Astro.request.method === 'POST') {
       if (!authUser) {
         formError = 'Este aluno ainda não tem conta de acesso. Defina uma senha primeiro.';
       } else {
-        // Gera link de recuperação com token válido por 24h
-        const siteUrl = (process.env.SITE ?? 'https://unafit.com.br').replace(/\/$/, '');
-        const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
-          type: 'recovery',
-          email: authEmailAcesso,
-          options: { redirectTo: `${siteUrl}/portal/reset-password` },
+        // Gera senha temporária aleatória (10 chars: letras + números)
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+        let senhaTemp = '';
+        for (let i = 0; i < 10; i++) senhaTemp += chars[Math.floor(Math.random() * chars.length)];
+
+        // Atualiza a senha no Supabase Auth via admin
+        const { error: updateErr } = await adminClient.auth.admin.updateUserById(authUser.id, {
+          password: senhaTemp,
         });
 
-        const hashedToken = linkData?.properties?.hashed_token;
-        if (linkErr || !hashedToken) {
-          formError = linkErr?.message ?? 'Erro ao gerar link de redefinição.';
+        if (updateErr) {
+          formError = updateErr.message;
         } else {
-          // Monta link PKCE — imune a prefetching de email (Hotmail/Outlook)
-          // O token só é consumido quando o JS chama verifyOtp(), não ao acessar a URL
-          const resetLink = `${siteUrl}/portal/reset-password?token_hash=${encodeURIComponent(hashedToken)}&type=recovery`;
-
           // Busca dados da academia para o email branded
           const { data: acad } = await adminClient
             .from('academias')
-            .select('nome, logo_url')
+            .select('nome, slug, logo_url')
             .eq('id', profile.academia_id!)
             .single();
 
+          const siteUrl = (process.env.SITE ?? 'https://unafit.com.br').replace(/\/$/, '');
+          const loginUrl = acad?.slug ? `${siteUrl}/${acad.slug}` : `${siteUrl}/login`;
+
           if (!emailConfigurado()) {
-            // Fallback: envia pelo Supabase padrão se Resend não configurado
-            await adminClient.auth.resetPasswordForEmail(alunoAcesso.email, {
-              redirectTo: `${siteUrl}/login`,
-            });
-            return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1`);
+            return Astro.redirect(`/dashboard/alunos/${alunoId}?reset_enviado=1&senha_temp=${encodeURIComponent(senhaTemp)}&login_url=${encodeURIComponent(loginUrl)}`);
           }
 
-          const resultado = await enviarEmailResetSenha({
+          const resultado = await enviarEmailNovaSenha({
             email:         alunoAcesso.email,
             nomeAluno:     alunoAcesso.nome,
             nomeAcademia:  acad?.nome ?? 'Academia',
             logoUrl:       acad?.logo_url ?? null,
-            linkReset:     resetLink,
+            senhaTemporaria: senhaTemp,
+            loginUrl,
           });
 
           if (!resultado.ok) formError = resultado.erro ?? 'Erro ao enviar e-mail.';
@@ -243,9 +240,12 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const savedParam      = new URL(Astro.request.url).searchParams.get('saved');
-const novoParam       = new URL(Astro.request.url).searchParams.get('novo');
-const resetEnviadoParam = new URL(Astro.request.url).searchParams.get('reset_enviado');
+const urlParams         = new URL(Astro.request.url).searchParams;
+const savedParam        = urlParams.get('saved');
+const novoParam         = urlParams.get('novo');
+const resetEnviadoParam = urlParams.get('reset_enviado');
+const senhaTempParam    = urlParams.get('senha_temp');
+const loginUrlParam     = urlParams.get('login_url');
 
 // Busca dados do aluno
 const { data: aluno } = await supabase
@@ -303,9 +303,17 @@ const statusPagCores: Record<string, string> = {
         {novoParam ? 'Aluno cadastrado com sucesso!' : 'Alterações salvas com sucesso!'}
       </div>
     )}
-    {resetEnviadoParam && (
+    {resetEnviadoParam && !senhaTempParam && (
       <div class="bg-blue-900/40 border border-blue-600 text-blue-300 px-4 py-3 rounded-lg text-sm">
-        ✉ E-mail de redefinição de senha enviado para {aluno.email}.
+        ✉ E-mail com nova senha enviado para {aluno.email}.
+      </div>
+    )}
+    {resetEnviadoParam && senhaTempParam && (
+      <div class="rounded-lg border border-yellow-600/40 bg-yellow-900/20 px-4 py-3 text-sm space-y-1.5">
+        <p class="font-semibold text-yellow-300">Senha gerada — e-mail não configurado. Repasse manualmente ao aluno:</p>
+        <p class="text-yellow-200">Login: <strong>{aluno.email || aluno.cpf}</strong></p>
+        <p class="text-yellow-200">Senha: <strong class="font-mono text-lg tracking-widest">{senhaTempParam}</strong></p>
+        {loginUrlParam && <p class="text-yellow-200">URL: <strong>{loginUrlParam}</strong></p>}
       </div>
     )}
     {formError && (

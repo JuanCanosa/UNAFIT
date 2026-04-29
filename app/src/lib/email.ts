@@ -349,3 +349,61 @@ export async function enviarEmailAtualizacaoCadastro(params: {
     return { ok: false, erro: e.message };
   }
 }
+
+// ─── Email de nova senha para aluno ──────────────────────────────────────────
+
+export async function enviarEmailNovaSenha(params: {
+  email: string;
+  nomeAluno: string;
+  nomeAcademia: string;
+  logoUrl: string | null;
+  senhaTemporaria: string;
+  loginUrl: string;
+}): Promise<{ ok: boolean; erro?: string }> {
+  const { email, nomeAluno, nomeAcademia, logoUrl, senhaTemporaria, loginUrl } = params;
+
+  const corpo = `
+    <p style="margin:0 0 12px;font-size:15px;color:#a1a1aa;">
+      Olá, <strong style="color:#ffffff;">${nomeAluno}</strong>!
+    </p>
+    <p style="margin:0 0 20px;font-size:15px;color:#a1a1aa;line-height:1.6;">
+      O responsável pela academia <strong style="color:#ffffff;">${nomeAcademia}</strong>
+      gerou um novo acesso para você.
+    </p>
+
+    <div style="background:#27272a;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+      <p style="margin:0 0 10px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Seus dados de acesso</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">E-mail: <strong style="color:#ffffff;">${email}</strong></p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">Senha: <strong style="color:#ffffff;font-family:monospace;font-size:20px;letter-spacing:.12em;">${senhaTemporaria}</strong></p>
+      <p style="margin:0 0 8px;font-size:14px;color:#a1a1aa;">URL: <a href="${loginUrl}" style="color:#dc2626;">${loginUrl}</a></p>
+      <p style="margin:8px 0 0;font-size:11px;color:#71717a;">Recomendamos alterar a senha após o primeiro acesso.</p>
+    </div>
+
+    <table cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+      <tr>
+        <td style="background:#dc2626;border-radius:8px;">
+          <a href="${loginUrl}" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">
+            Acessar o sistema →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const html = templateBase({ nomeAcademia, logoUrl, titulo: `Seu acesso — ${nomeAcademia}`, corpo });
+
+  try {
+    const resend = getResend();
+    const { error } = await resend.emails.send({
+      from: `${nomeAcademia} <${FROM_EMAIL}>`,
+      to: email,
+      subject: `${nomeAcademia} — Seu acesso ao sistema`,
+      html,
+    });
+    if (error) return { ok: false, erro: error.message };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, erro: e.message };
+  }
+}
+}

@@ -97,49 +97,53 @@ if (Astro.request.method === 'POST') {
 
         // Cria conta de acesso no Supabase Auth com senha definida pelo gestor
         // Se o aluno já tem conta em outra academia, vincula sem criar novo usuário
-        try {
-          const adminClient = createSupabaseAdminClient();
-          let profileId: string | null = null;
+        const adminClient = createSupabaseAdminClient();
+        let profileId: string | null = null;
 
-          const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
+        const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
+          email: authEmail,
+          password: senha,
+          email_confirm: true,
+          user_metadata: { nome_completo: nome },
+        });
+
+        if (!authErr && authData?.user) {
+          // Novo usuário — cria perfil
+          profileId = authData.user.id;
+          await adminClient.from('profiles').upsert({
+            id: profileId,
+            nome_completo: nome,
+            telefone,
+            role: 'aluno',
+            academia_id: profile.academia_id,
+            ativo: true,
+          }, { onConflict: 'id' });
+        } else if (authErr?.message?.toLowerCase().includes('already') || authErr?.message?.toLowerCase().includes('registered')) {
+          // Usuário já existe em outra academia — localiza o ID pelo email
+          const { data: linkData } = await adminClient.auth.admin.generateLink({
+            type: 'recovery',
             email: authEmail,
-            password: senha,
-            email_confirm: true,
-            user_metadata: { nome_completo: nome },
           });
+          profileId = linkData?.user?.id ?? null;
+        } else if (authErr) {
+          // Erro inesperado na criação de conta — reverte o aluno inserido
+          await supabase.from('alunos').delete().eq('id', aluno!.id);
+          formError = `Erro ao criar acesso: ${authErr.message}`;
+        }
 
-          if (!authErr && authData?.user) {
-            // Novo usuário — cria perfil
-            profileId = authData.user.id;
-            await adminClient.from('profiles').upsert({
-              id: profileId,
-              nome_completo: nome,
-              telefone,
-              role: 'aluno',
-              academia_id: profile.academia_id,
-              ativo: true,
-            }, { onConflict: 'id' });
-          } else {
-            // Usuário já existe (mesma conta em outra academia) — localiza pelo email
-            const { data: linkData } = await adminClient.auth.admin.generateLink({
-              type: 'recovery',
-              email: authEmail,
-            });
-            profileId = linkData?.user?.id ?? null;
-          }
+        // Registra vínculo aluno ↔ academia (multi-academia)
+        if (profileId && !formError) {
+          await adminClient.from('aluno_academias').upsert({
+            profile_id: profileId,
+            academia_id: profile.academia_id!,
+            aluno_id: aluno!.id,
+            ativo: true,
+          }, { onConflict: 'profile_id,academia_id' });
+        }
 
-          // Registra vínculo aluno ↔ academia (multi-academia)
-          if (profileId) {
-            await adminClient.from('aluno_academias').upsert({
-              profile_id: profileId,
-              academia_id: profile.academia_id!,
-              aluno_id: aluno!.id,
-              ativo: true,
-            }, { onConflict: 'profile_id,academia_id' });
-          }
-        } catch (_) {}
-
-        return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1`);
+        if (!formError) {
+          return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1`);
+        }
       }
     }
   }
