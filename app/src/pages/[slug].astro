@@ -4,6 +4,10 @@ import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/sup
 
 const { slug } = Astro.params;
 
+// Slugs reservados — evita conflito com rotas futuras
+const RESERVED_SLUGS = ['sobre', 'contato', 'termos', 'privacidade', 'precos', 'suporte'];
+if (!slug || RESERVED_SLUGS.includes(slug)) return Astro.redirect('/login');
+
 // Redireciona usuário já autenticado para o dashboard
 const supabaseUser = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user: userLogado } } = await supabaseUser.auth.getUser();
@@ -19,7 +23,7 @@ const { data: academia } = await adminClient
   .single();
 
 // Slug não encontrado → redireciona para login padrão
-if (!academia || !(academia as any).ativo) return Astro.redirect('/login');
+if (!academia || !academia.ativo) return Astro.redirect('/login');
 
 let erro = '';
 
@@ -38,7 +42,7 @@ if (Astro.request.method === 'POST') {
       .from('alunos')
       .select('email')
       .eq('cpf', cpfDigits)
-      .eq('academia_id', (academia as any).id)
+      .eq('academia_id', academia.id)
       .not('email', 'is', null)
       .maybeSingle();
     email = alunoMatch?.email ?? `${cpfDigits}@aluno.unafit.com.br`;
@@ -55,13 +59,13 @@ if (Astro.request.method === 'POST') {
       .from('aluno_academias')
       .select('id')
       .eq('profile_id', authData.user.id)
-      .eq('academia_id', (academia as any).id)
+      .eq('academia_id', academia.id)
       .eq('ativo', true)
       .maybeSingle();
 
     if (vinculo) {
       await adminClient.from('profiles')
-        .update({ academia_id: (academia as any).id })
+        .update({ academia_id: academia.id })
         .eq('id', authData.user.id);
     }
 
@@ -69,8 +73,8 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const logoUrl = (academia as any).logo_url;
-const nomeAcademia = (academia as any).nome;
+const logoUrl = academia.logo_url;
+const nomeAcademia = academia.nome;
 ---
 
 <!DOCTYPE html>

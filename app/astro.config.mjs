@@ -6,9 +6,6 @@ import node from '@astrojs/node';
 export default defineConfig({
   output: 'server',           // SSR habilitado
   site: 'https://unafit.com.br',
-  security: {
-    checkOrigin: false,
-  },
   adapter: node({
     mode: 'standalone',
   }),

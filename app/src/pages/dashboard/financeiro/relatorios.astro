@@ -1,0 +1,228 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import Card from '@/components/ui/Card.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+// Apenas dono e saas_admin acessam relatórios financeiros
+if (!profile || (profile.role !== 'dono' && profile.role !== 'saas_admin')) {
+  return Astro.redirect('/dashboard');
+}
+
+const academiaId = profile.academia_id!;
+
+// ── Dados financeiros consolidados ────────────────────────────────────────────
+const mesAtual = new Date();
+const primeiroDiaMes = `${mesAtual.getFullYear()}-${String(mesAtual.getMonth() + 1).padStart(2, '0')}-01`;
+
+// Faturas do mês atual
+const { data: faturasMes } = await supabase
+  .from('pagamentos')
+  .select('id, valor, status, data_vencimento')
+  .eq('academia_id', academiaId)
+  .gte('data_vencimento', primeiroDiaMes);
+
+const pagamentos = faturasMes ?? [];
+
+const totalPago = pagamentos
+  .filter(f => f.status === 'pago')
+  .reduce((sum, f) => sum + Number(f.valor), 0);
+
+const totalPendente = pagamentos
+  .filter(f => f.status === 'pendente')
+  .reduce((sum, f) => sum + Number(f.valor), 0);
+
+const totalVencido = pagamentos
+  .filter(f => f.status === 'vencido')
+  .reduce((sum, f) => sum + Number(f.valor), 0);
+
+const totalGeral = totalPago + totalPendente + totalVencido;
+
+// Últimos 6 meses para evolução
+const meses: { label: string; pago: number; pendente: number }[] = [];
+for (let i = 5; i >= 0; i--) {
+  const d = new Date(mesAtual.getFullYear(), mesAtual.getMonth() - i, 1);
+  const inicio = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+  const fim = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const fimStr = `${fim.getFullYear()}-${String(fim.getMonth() + 1).padStart(2, '0')}-${String(fim.getDate()).padStart(2, '0')}`;
+  
+  const { data: fMes } = await supabase
+    .from('pagamentos')
+    .select('valor, status')
+    .eq('academia_id', academiaId)
+    .gte('data_vencimento', inicio)
+    .lte('data_vencimento', fimStr);
+
+  const pago = (fMes ?? []).filter(f => f.status === 'pago').reduce((s, f) => s + Number(f.valor), 0);
+  const pendente = (fMes ?? []).filter(f => f.status !== 'pago' && f.status !== 'cancelado').reduce((s, f) => s + Number(f.valor), 0);
+
+  meses.push({
+    label: d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
+    pago,
+    pendente,
+  });
+}
+
+const maxMes = Math.max(...meses.map(m => m.pago + m.pendente), 1);
+
+// Contagens de alunos
+const { count: totalAlunos } = await supabase
+  .from('alunos')
+  .select('id', { count: 'exact', head: true })
+  .eq('academia_id', academiaId)
+  .eq('status', 'ativo');
+
+const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const mesLabel = mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+---
+
+<DashboardLayout title="Relatórios Financeiros">
+  <div class="mb-7">
+    <h1 class="text-2xl font-bold text-foreground">Relatórios Financeiros</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Visão consolidada da saúde financeira da academia</p>
+  </div>
+
+  <!-- KPIs do mês -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Receita do Mês</p>
+      <p class="mt-2 text-2xl font-bold text-primary">{brl(totalPago)}</p>
+      <p class="mt-1 text-xs text-muted-foreground">{mesLabel}</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Pendente</p>
+      <p class="mt-2 text-2xl font-bold text-yellow-400">{brl(totalPendente)}</p>
+      <p class="mt-1 text-xs text-muted-foreground">aguardando pagamento</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Vencido</p>
+      <p class={`mt-2 text-2xl font-bold ${totalVencido > 0 ? 'text-red-400' : 'text-foreground'}`}>
+        {brl(totalVencido)}
+      </p>
+      <p class="mt-1 text-xs text-muted-foreground">inadimplência</p>
+    </Card>
+    <Card>
+      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Alunos Ativos</p>
+      <p class="mt-2 text-2xl font-bold text-foreground">{totalAlunos ?? 0}</p>
+      <p class="mt-1 text-xs text-muted-foreground">matriculados</p>
+    </Card>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- Evolução mensal (barras) -->
+    <Card>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-5">
+        Evolução Mensal — Últimos 6 meses
+      </h2>
+      <div class="space-y-3">
+        {meses.map(m => {
+          const pctPago = maxMes > 0 ? (m.pago / maxMes) * 100 : 0;
+          const pctPendente = maxMes > 0 ? (m.pendente / maxMes) * 100 : 0;
+          return (
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="font-medium text-foreground capitalize">{m.label}</span>
+                <span class="text-muted-foreground">{brl(m.pago + m.pendente)}</span>
+              </div>
+              <div class="flex h-3 rounded-full bg-zinc-800 overflow-hidden">
+                {pctPago > 0 && (
+                  <div class="h-full bg-primary rounded-l-full" style={`width: ${pctPago}%`}></div>
+                )}
+                {pctPendente > 0 && (
+                  <div class="h-full bg-yellow-500/60" style={`width: ${pctPendente}%`}></div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div class="mt-4 flex items-center gap-4 text-xs text-muted-foreground">
+        <div class="flex items-center gap-1.5">
+          <span class="h-2.5 w-2.5 rounded-full bg-primary"></span>
+          Pago
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="h-2.5 w-2.5 rounded-full bg-yellow-500/60"></span>
+          Pendente / Vencido
+        </div>
+      </div>
+    </Card>
+
+    <!-- Resumo do mês -->
+    <Card>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-5">
+        Resumo — {mesLabel}
+      </h2>
+      
+      <div class="space-y-4">
+        <!-- Barra de composição -->
+        <div>
+          <div class="flex h-4 rounded-full overflow-hidden bg-zinc-800">
+            {totalGeral > 0 && (
+              <>
+                {totalPago > 0 && (
+                  <div class="h-full bg-green-500" style={`width: ${(totalPago / totalGeral) * 100}%`}></div>
+                )}
+                {totalPendente > 0 && (
+                  <div class="h-full bg-yellow-500" style={`width: ${(totalPendente / totalGeral) * 100}%`}></div>
+                )}
+                {totalVencido > 0 && (
+                  <div class="h-full bg-red-500" style={`width: ${(totalVencido / totalGeral) * 100}%`}></div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <!-- Detalhes -->
+        <div class="grid grid-cols-1 gap-3">
+          <div class="flex items-center justify-between rounded-lg border border-green-600/20 bg-green-900/10 px-4 py-3">
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-green-500"></span>
+              <span class="text-sm text-green-300">Recebido</span>
+            </div>
+            <span class="text-sm font-semibold text-green-400">{brl(totalPago)}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border border-yellow-600/20 bg-yellow-900/10 px-4 py-3">
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-yellow-500"></span>
+              <span class="text-sm text-yellow-300">Pendente</span>
+            </div>
+            <span class="text-sm font-semibold text-yellow-400">{brl(totalPendente)}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border border-red-600/20 bg-red-900/10 px-4 py-3">
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-red-500"></span>
+              <span class="text-sm text-red-300">Vencido</span>
+            </div>
+            <span class="text-sm font-semibold text-red-400">{brl(totalVencido)}</span>
+          </div>
+        </div>
+
+        <div class="pt-3 border-t border-border flex justify-between items-center">
+          <span class="text-sm text-muted-foreground">Total do mês</span>
+          <span class="text-lg font-bold text-foreground">{brl(totalGeral)}</span>
+        </div>
+
+        {totalGeral > 0 && (
+          <div class="text-xs text-muted-foreground">
+            Taxa de adimplência: <strong class={totalPago / totalGeral >= 0.8 ? 'text-green-400' : 'text-yellow-400'}>
+              {Math.round((totalPago / totalGeral) * 100)}%
+            </strong>
+          </div>
+        )}
+      </div>
+    </Card>
+
+  </div>
+</DashboardLayout>

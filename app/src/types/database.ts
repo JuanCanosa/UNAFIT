@@ -10,6 +10,20 @@ export interface Academia {
   nome: string;
   slug: string;
   asaas_api_key: string | null;
+  asaas_customer_id: string | null;
+  logo_url: string | null;
+  email: string | null;
+  telefone: string | null;
+  responsavel_nome: string | null;
+  responsavel_cpf_cnpj: string | null;
+  endereco_cep: string | null;
+  endereco_rua: string | null;
+  endereco_numero: string | null;
+  endereco_complemento: string | null;
+  endereco_bairro: string | null;
+  endereco_cidade: string | null;
+  endereco_estado: string | null;
+  onboarding_completo: boolean;
   ativo: boolean;
   criado_em: string;
   atualizado_em: string;
@@ -22,6 +36,7 @@ export interface Profile {
   nome_completo: string;
   telefone: string | null;
   asaas_cliente_id: string | null;
+  avatar_url: string | null;
   ativo: boolean;
   criado_em: string;
   atualizado_em: string;
@@ -31,11 +46,9 @@ export interface Wod {
   id: string;
   academia_id: string;
   nome: string;
-  homenagem: string | null;
-  mobilidade: string | null;
-  aquecimento: string | null;
   treino: string;
   score_type: ScoreType;
+  data_aplicacao: string | null;
   criado_por: string | null;
   criado_em: string;
   atualizado_em: string;
@@ -48,6 +61,8 @@ export interface AulaAgenda {
   data_aula: string;        // formato: 'YYYY-MM-DD'
   horario_inicio: string;   // formato: 'HH:MM:SS'
   horario_fim: string;      // formato: 'HH:MM:SS'
+  modalidade: string;
+  obs_aquecimento: string | null;
   capacidade_max: number | null;
   criado_por: string | null;
   criado_em: string;
@@ -120,4 +135,14 @@ export interface Fatura {
   descricao: string | null;
   criado_em: string;
   atualizado_em: string;
+}
+
+/** Tabela aluno_academias — vínculo multi-academia para alunos */
+export interface AlunoAcademia {
+  id: string;
+  profile_id: string;
+  academia_id: string;
+  aluno_id: string | null;
+  ativo: boolean;
+  criado_em: string;
 }

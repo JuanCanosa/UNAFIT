@@ -264,6 +264,13 @@ ALTER TABLE faturas                ENABLE ROW LEVEL SECURITY;
 
 -- =============================================================================
 -- FUNÇÕES AUXILIARES RLS
+--
+-- IMPORTANTE: saas_admin NUNCA passa pelo branch "academia_id = minha_academia_id()"
+-- porque minha_academia_id() retorna NULL (saas_admin.academia_id IS NULL) e
+-- NULL = NULL resulta em NULL (falso) no PostgreSQL.
+-- O acesso do saas_admin é garantido EXCLUSIVAMENTE pela condição
+-- "meu_role() = 'saas_admin'" presente em cada policy.
+-- NÃO remova essa condição nem tente unificar os branches.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION minha_academia_id()

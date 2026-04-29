@@ -1,9 +1,9 @@
 import { defineMiddleware } from 'astro:middleware';
 import { createServerClient, parseCookieHeader } from '@supabase/ssr';
+import { createSupabaseAdminClient } from '@/lib/supabase';
 
 const SUPABASE_URL = import.meta.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.SUPABASE_ANON_KEY;
-const SUPABASE_SERVICE_KEY = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = new URL(context.request.url);
@@ -21,7 +21,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
         getAll() {
           return parseCookieHeader(context.request.headers.get('Cookie') ?? '');
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options: Record<string, unknown> }[]) {
           cookiesToSet.forEach(({ name, value, options }) => {
             context.cookies.set(name, value, options);
           });
@@ -33,10 +33,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
     if (!user) return next();
 
     // Usa service role para evitar RLS race conditions no middleware
-    const { createClient } = await import('@supabase/supabase-js');
-    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    const adminClient = createSupabaseAdminClient();
 
     const { data: profile } = await adminClient
       .from('profiles')

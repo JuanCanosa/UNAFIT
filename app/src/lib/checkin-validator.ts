@@ -4,7 +4,7 @@
  * Lógica de validação do check-in — executada APENAS no servidor (Astro SSR).
  * Usa o cliente ADMIN (service_role) para consultar faturas internamente,
  * garantindo que nenhum dado financeiro vaze para o cliente ou para roles
- * sem permissão (ex: professor).
+ * sem permissão (ex: colaborador).
  *
  * Regras (conforme docs/RULES.md — UNAFIT):
  *  1. Janela de Tempo: liberado 10min antes do início até 1h após o FIM da aula.
@@ -17,6 +17,7 @@
  */
 
 import { createSupabaseAdminClient } from './supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AulaAgenda, FaturaStatus } from '@/types/database';
 
 // Status que bloqueiam o check-in (RULES.md §4)
@@ -88,7 +89,7 @@ export async function validarCheckin({
   }
 
   // ─── 4. Trava financeira A: faturas em aberto ───────────────────────────────
-  const temBloqueante = await contarFaturas(alunoId, academiaId, {
+  const temBloqueante = await contarFaturas(admin, alunoId, academiaId, {
     status: STATUS_BLOQUEANTE,
   });
   if (temBloqueante > 0) {
@@ -97,7 +98,7 @@ export async function validarCheckin({
 
   // ─── 5. Trava financeira B: exige pagamento do mês vigente ─────────────────
   const mesAtual = primeiroDiaMes(agora);
-  const temPagoMes = await contarFaturas(alunoId, academiaId, {
+  const temPagoMes = await contarFaturas(admin, alunoId, academiaId, {
     status: ['paga'],
     mesReferencia: mesAtual,
   });
@@ -123,12 +124,11 @@ function verificarJanelaTempo(aula: AulaAgenda, agora: Date): boolean {
 
 /** Consulta faturas com filtros opcionais — retorna apenas a contagem. */
 async function contarFaturas(
+  admin: SupabaseClient,
   alunoId: string,
   academiaId: string,
   filtros: { status: FaturaStatus[]; mesReferencia?: string },
 ): Promise<number> {
-  const admin = createSupabaseAdminClient();
-
   let query = admin
     .from('faturas')
     .select('id', { count: 'exact', head: true })
