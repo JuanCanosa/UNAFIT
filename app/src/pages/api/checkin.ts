@@ -93,10 +93,8 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       academia_id: profile.academia_id,
     });
 
-  if (insertError) {
-    console.error('[POST /api/checkin] Erro ao inserir:', insertError.message);
+  if (insertError)
     return json({ ok: false, motivo: 'Erro interno ao registrar check-in.' }, 500);
-  }
 
   return json({ ok: true }, 200);
 };

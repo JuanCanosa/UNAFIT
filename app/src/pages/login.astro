@@ -199,34 +199,6 @@ if (Astro.request.method === 'POST') {
         </form>
       </div>
 
-      <!-- Credenciais de teste (ambiente de dev) -->
-      <details class="mt-4 rounded-xl border border-border bg-muted/50 text-xs">
-        <summary class="cursor-pointer px-4 py-2.5 font-medium text-muted-foreground hover:text-foreground transition-colors select-none">
-          Credenciais de teste
-        </summary>
-        <div class="px-4 pb-3 pt-1 space-y-1.5 font-mono">
-          {[
-            ['Dono',      'dono@crossfit-exemplo.com'],
-            ['Professor', 'professor@crossfit-exemplo.com'],
-            ['Aluno RX',  'joao.rx@email.com'],
-            ['Aluno Scaled', 'maria.scaled@email.com'],
-          ].map(([role, email]) => (
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-muted-foreground w-24 shrink-0">{role}</span>
-              <button
-                type="button"
-                class="fill-email-btn truncate text-primary hover:underline text-left"
-                data-email={email}
-                data-password="Senha@123"
-              >
-                {email}
-              </button>
-            </div>
-          ))}
-          <p class="pt-1 text-muted-foreground">Senha: <span class="text-foreground">Senha@123</span></p>
-        </div>
-      </details>
-
     </div>
 
   </body>
@@ -270,14 +242,6 @@ if (Astro.request.method === 'POST') {
          <path stroke-linecap="round" stroke-linejoin="round"
            d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943
               9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />`;
-  });
-
-  // Preenche campos com credenciais de teste ao clicar
-  document.querySelectorAll<HTMLButtonElement>('.fill-email-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      (document.getElementById('email') as HTMLInputElement).value = btn.dataset.email!;
-      (document.getElementById('password') as HTMLInputElement).value = btn.dataset.password!;
-    });
   });
 
   // Loading state no submit

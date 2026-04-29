@@ -185,8 +185,7 @@ const scoreTypeLabel: Record<string, string> = {
         {aulas.map((aula) => {
           const jaFezCheckin = checkinsFeitosSet.has(aula.id);
           const naJanela     = dentroJanela(aula.data_aula, aula.horario_inicio, aula.horario_fim);
-          // @ts-ignore — Supabase retorna join como objeto
-          const wod = aula.wods as { nome: string; score_type: string; treino: string } | null;
+          const wod = (aula.wods as { nome: string; score_type: string; treino: string } | null);
 
           return (
             <Card

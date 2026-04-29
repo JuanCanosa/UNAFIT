@@ -142,11 +142,8 @@ async function contarFaturas(
 
   const { count, error } = await query;
 
-  if (error) {
-    // Falha na consulta financeira → bloqueia por segurança
-    console.error('[checkin-validator] Erro ao consultar faturas:', error.message);
-    return -1; // valor sentinela: caller interpreta como bloqueante
-  }
+  if (error)
+    return -1; // falha na consulta → bloqueia por segurança
 
   return count ?? 0;
 }

@@ -1,8 +1,3 @@
-/**
- * POST /api/membros/criar
- * Cadastra um novo aluno via GoTrue Admin API.
- * Apenas dono e saas_admin podem chamar.
- */
 import type { APIRoute } from 'astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
@@ -31,10 +26,13 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   const admin = createSupabaseAdminClient();
 
-  // Cria o usuário no GoTrue
+  // Gera senha temporária aleatória — aluno redefine pelo link enviado pelo dono
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const senhaTemp = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+
   const { data, error: createErr } = await admin.auth.admin.createUser({
     email,
-    password: 'Senha@123',   // senha temporária — aluno deve redefinir
+    password: senhaTemp,
     email_confirm: true,
     user_metadata: { nome_completo },
   });
