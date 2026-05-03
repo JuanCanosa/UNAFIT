@@ -1,0 +1,86 @@
+<!--
+  InstallBanner — detecta beforeinstallprompt e convida o usuário a instalar o PWA.
+  Renderiza um banner discreto no topo apenas em dispositivos que suportam a instalação.
+  Totalmente client-side: não afeta SSR nem hidratação.
+-->
+<div
+  id="pwa-install-banner"
+  class="hidden items-center justify-between gap-3 bg-zinc-900 border-b border-primary/20 px-4 py-2.5"
+  role="banner"
+  aria-label="Instalar aplicativo"
+>
+  <!-- Ícone + texto -->
+  <div class="flex items-center gap-3 min-w-0">
+    <img src="/icon-unafit-192x192.png" alt="UNAFIT" class="h-8 w-8 rounded-xl shrink-0" />
+    <div class="min-w-0">
+      <p class="text-sm font-semibold text-foreground leading-none">Instalar o App UNAFIT</p>
+      <p class="text-xs text-muted-foreground mt-0.5">Acesso rápido sem abrir o navegador</p>
+    </div>
+  </div>
+
+  <!-- Ações -->
+  <div class="flex items-center gap-2 shrink-0">
+    <button
+      id="pwa-install-btn"
+      class="rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-black hover:bg-primary/90 transition-colors"
+      style="min-height: 44px; min-width: 44px;"
+    >
+      Instalar
+    </button>
+    <button
+      id="pwa-dismiss-btn"
+      class="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      style="min-height: 44px;"
+      aria-label="Dispensar"
+    >
+      Agora não
+    </button>
+  </div>
+</div>
+
+<script>
+  const STORAGE_KEY = 'pwa-install-dismissed';
+  const banner      = document.getElementById('pwa-install-banner')!;
+  const installBtn  = document.getElementById('pwa-install-btn')!;
+  const dismissBtn  = document.getElementById('pwa-dismiss-btn')!;
+
+  // Não mostra se já foi dispensado recentemente (7 dias)
+  const dismissed = localStorage.getItem(STORAGE_KEY);
+  if (dismissed && Date.now() - Number(dismissed) < 7 * 24 * 60 * 60 * 1000) {
+    // silently skip
+  } else {
+    let deferredPrompt: any = null;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      // Mostra o banner com display:flex
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
+    });
+
+    installBtn.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
+      if (outcome === 'accepted') {
+        localStorage.setItem(STORAGE_KEY, String(Date.now()));
+      }
+    });
+
+    dismissBtn.addEventListener('click', () => {
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
+      localStorage.setItem(STORAGE_KEY, String(Date.now()));
+    });
+
+    // Se o app já está instalado, oculta automaticamente
+    window.addEventListener('appinstalled', () => {
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
+    });
+  }
+</script>
