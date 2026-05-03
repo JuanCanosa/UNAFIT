@@ -72,9 +72,6 @@ if (profile.role === 'aluno') {
   </head>
   <body class="min-h-screen bg-background">
 
-    <!-- Banner de instalação PWA (aparece apenas quando disponível) -->
-    <InstallBanner />
-
     <!-- Sidebar -->
     <Sidebar
       role={profile.role as UserRole}
@@ -87,6 +84,9 @@ if (profile.role === 'aluno') {
 
     <!-- Layout principal (offset pelo sidebar no desktop) -->
     <div class="lg:pl-64 min-h-screen flex flex-col">
+
+      <!-- Banner de instalação PWA — aparece apenas na coluna principal -->
+      <InstallBanner />
 
       <!-- Topbar mobile -->
       <header class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background/80 backdrop-blur-sm px-4 lg:hidden">
