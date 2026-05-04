@@ -16,7 +16,8 @@ const { data: profile } = await supabase
   .eq('id', user.id)
   .single();
 
-if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+if (!profile) return Astro.redirect('/login');
+if (profile.role === 'aluno') return Astro.redirect('/dashboard/agenda-aluno' + new URL(Astro.request.url).search);
 
 const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 

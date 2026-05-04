@@ -1,0 +1,385 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, nome_completo, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+// ── Parâmetro de dia ──────────────────────────────────────────────────────────
+const url      = new URL(Astro.request.url);
+const diaParam = url.searchParams.get('dia');
+const hoje     = new Date();
+const hojeISO  = hoje.toISOString().split('T')[0];
+const diaISO   = diaParam && /^\d{4}-\d{2}-\d{2}$/.test(diaParam) ? diaParam : hojeISO;
+
+// ── Semana (hoje + 6 dias) ────────────────────────────────────────────────────
+const semana = Array.from({ length: 7 }, (_, i) => {
+  const d = new Date(hoje);
+  d.setDate(hoje.getDate() + i);
+  return d;
+});
+
+// ── Aulas do dia selecionado ──────────────────────────────────────────────────
+const admin = createSupabaseAdminClient();
+
+const { data: aulas } = await supabase
+  .from('aulas_agenda')
+  .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, wods(nome, score_type, treino)')
+  .eq('academia_id', profile.academia_id!)
+  .eq('data_aula', diaISO)
+  .order('horario_inicio');
+
+const aulaIds = aulas?.map(a => a.id) ?? [];
+
+const [checkinAlunoRes, totalCheckinsRes] = await Promise.all([
+  aulaIds.length > 0
+    ? supabase.from('checkins').select('aula_id').eq('aluno_id', user.id).in('aula_id', aulaIds)
+    : Promise.resolve({ data: [] }),
+  aulaIds.length > 0
+    ? admin.from('checkins').select('aula_id').in('aula_id', aulaIds)
+    : Promise.resolve({ data: [] }),
+]);
+
+const checkinsFeitosSet = new Set<string>((checkinAlunoRes.data ?? []).map((c: any) => c.aula_id));
+const checkinCountMap = new Map<string, number>();
+(totalCheckinsRes.data ?? []).forEach((c: any) => {
+  checkinCountMap.set(c.aula_id, (checkinCountMap.get(c.aula_id) ?? 0) + 1);
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const DIAS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+function fmt(t: string) { return t.substring(0, 5); }
+
+function toISO(d: Date) { return d.toISOString().split('T')[0]; }
+
+type Status = 'aguardando' | 'aberto' | 'encerrado';
+function getStatus(dataAula: string, ini: string, fim: string): Status {
+  const agora    = new Date();
+  const start    = new Date(`${dataAula}T${ini}`);
+  const end      = new Date(`${dataAula}T${fim}`);
+  const abertura = new Date(start.getTime() - 10 * 60_000);
+  const fechamento = new Date(end.getTime() + 10 * 60_000);
+  if (agora < abertura)    return 'aguardando';
+  if (agora <= fechamento) return 'aberto';
+  return 'encerrado';
+}
+
+const scoreLabel: Record<string, string> = {
+  tempo: 'Para Tempo', reps: 'Max Reps', carga: 'Max Carga',
+  rounds_reps: 'AMRAP', pass_fail: 'Pass/Fail',
+};
+
+const modalidadeBadge: Record<string, string> = {
+  'CrossFit':     'border-[#00FF85]/30 text-[#00FF85] bg-[#00FF85]/10',
+  'Treino Livre': 'border-blue-500/30 text-blue-400 bg-blue-500/10',
+  'Funcional':    'border-orange-500/30 text-orange-400 bg-orange-500/10',
+};
+
+const diaSelecionadoDate = new Date(diaISO + 'T12:00:00');
+const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getDay()]}, ${diaSelecionadoDate.getDate()} de ${MESES[diaSelecionadoDate.getMonth()]}`;
+---
+
+<DashboardLayout title="Agenda">
+
+  <!-- Cabeçalho -->
+  <div class="mb-5">
+    <p class="text-xs font-semibold uppercase tracking-widest text-[#00FF85] mb-0.5">Agenda de Aulas</p>
+    <h1 class="text-2xl font-bold text-foreground">{diaSelecionadoLabel}</h1>
+  </div>
+
+  <!-- Seletor de dias (scroll horizontal no mobile) -->
+  <div class="mb-6 -mx-4 px-4">
+    <div class="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {semana.map(d => {
+        const iso     = toISO(d);
+        const ativo   = iso === diaISO;
+        const ehHoje  = iso === hojeISO;
+        return (
+          <a
+            href={`/dashboard/agenda-aluno?dia=${iso}`}
+            class={`flex flex-col items-center shrink-0 rounded-xl px-3 py-2.5 border transition-all min-w-[56px] ${
+              ativo
+                ? 'bg-[#00FF85] border-[#00FF85] text-black font-bold shadow-[0_0_16px_rgba(0,255,133,0.4)]'
+                : 'bg-card border-border text-muted-foreground hover:border-[#00FF85]/40 hover:text-foreground'
+            }`}
+          >
+            <span class="text-[10px] font-semibold uppercase tracking-wider">{DIAS[d.getDay()]}</span>
+            <span class={`text-lg font-bold leading-none mt-0.5 ${ativo ? 'text-black' : ''}`}>{d.getDate()}</span>
+            {ehHoje && !ativo && (
+              <span class="mt-1 h-1 w-1 rounded-full bg-[#00FF85]"></span>
+            )}
+          </a>
+        );
+      })}
+    </div>
+  </div>
+
+  <!-- Lista de aulas -->
+  {!aulas || aulas.length === 0 ? (
+
+    <div class="flex flex-col items-center justify-center py-16 text-center">
+      <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900 border border-border">
+        <svg class="h-8 w-8 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      </div>
+      <p class="font-semibold text-foreground">Sem aulas neste dia</p>
+      <p class="mt-1 text-sm text-muted-foreground">Selecione outro dia ou fale com seu professor.</p>
+    </div>
+
+  ) : (
+
+    <div class="space-y-3">
+      {aulas.map(aula => {
+        const status      = getStatus(aula.data_aula, aula.horario_inicio, aula.horario_fim);
+        const jaFez       = checkinsFeitosSet.has(aula.id);
+        const totalCheckins = checkinCountMap.get(aula.id) ?? 0;
+        const cap         = aula.capacidade_max as number | null;
+        const semVagas    = !!cap && cap > 0 && totalCheckins >= cap;
+        const vagasRestantes = cap && cap > 0 ? cap - totalCheckins : null;
+        const wod         = (aula.wods as any);
+        const podeCheckin = status === 'aberto' && !jaFez && !semVagas;
+        const badgeMod    = modalidadeBadge[aula.modalidade] ?? 'border-border text-muted-foreground bg-zinc-900';
+
+        return (
+          <div class={`relative overflow-hidden rounded-2xl border bg-[#0a0a0a] transition-all ${
+            podeCheckin
+              ? 'border-[#00FF85]/50 shadow-[0_0_24px_rgba(0,255,133,0.15)] animate-pulse-border'
+              : jaFez
+              ? 'border-[#00FF85]/30'
+              : 'border-zinc-800'
+          }`}>
+
+            <!-- Linha lateral de status -->
+            <div class={`absolute left-0 top-0 h-full w-[3px] ${
+              jaFez         ? 'bg-[#00FF85]' :
+              podeCheckin   ? 'bg-[#00FF85]' :
+              status === 'encerrado' ? 'bg-zinc-700' :
+              'bg-zinc-600'
+            }`}></div>
+
+            <div class="pl-5 pr-4 pt-4 pb-4">
+
+              <!-- Linha 1: horário + badge modalidade + status -->
+              <div class="flex items-start justify-between gap-3 mb-3">
+                <div class="flex items-center gap-3">
+                  <!-- Horário -->
+                  <div class="shrink-0">
+                    <div class="text-xl font-black font-mono text-white leading-none">{fmt(aula.horario_inicio)}</div>
+                    <div class="text-[10px] text-zinc-500 mt-0.5">até {fmt(aula.horario_fim)}</div>
+                  </div>
+                  <!-- Separador -->
+                  <div class="h-8 w-px bg-zinc-800"></div>
+                  <!-- Modalidade + WOD -->
+                  <div>
+                    <span class={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${badgeMod}`}>
+                      {aula.modalidade}
+                    </span>
+                    {wod?.nome && (
+                      <p class="mt-1 font-bold text-sm text-white leading-tight">{wod.nome}</p>
+                    )}
+                  </div>
+                </div>
+
+                <!-- Status badge direito -->
+                {jaFez ? (
+                  <span class="shrink-0 flex items-center gap-1 rounded-full bg-[#00FF85]/10 border border-[#00FF85]/30 px-2.5 py-1 text-[10px] font-bold text-[#00FF85]">
+                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Confirmado
+                  </span>
+                ) : podeCheckin ? (
+                  <span class="shrink-0 rounded-full bg-[#00FF85]/10 border border-[#00FF85]/40 px-2.5 py-1 text-[10px] font-bold text-[#00FF85] animate-pulse">
+                    ● Aberto
+                  </span>
+                ) : status === 'aguardando' ? (
+                  <span class="shrink-0 rounded-full bg-zinc-900 border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-500">
+                    Aguardando
+                  </span>
+                ) : (
+                  <span class="shrink-0 rounded-full bg-zinc-900 border border-zinc-800 px-2.5 py-1 text-[10px] text-zinc-600">
+                    Encerrado
+                  </span>
+                )}
+              </div>
+
+              <!-- Score type + treino -->
+              {(wod?.score_type || wod?.treino) && (
+                <div class="mb-3 rounded-xl bg-zinc-900/80 border border-zinc-800 px-3 py-2.5">
+                  {wod?.score_type && (
+                    <span class="text-[10px] font-bold text-[#00FF85] uppercase tracking-widest">
+                      {scoreLabel[wod.score_type] ?? wod.score_type}
+                    </span>
+                  )}
+                  {wod?.treino && (
+                    <p class="mt-1 text-xs text-zinc-400 line-clamp-2 leading-relaxed">{wod.treino}</p>
+                  )}
+                </div>
+              )}
+
+              <!-- Vagas -->
+              <div class="flex items-center justify-between mb-3">
+                {cap && cap > 0 ? (
+                  <div class="flex items-center gap-2 flex-1">
+                    <div class="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        class={`h-full rounded-full transition-all ${semVagas ? 'bg-red-500' : 'bg-[#00FF85]'}`}
+                        style={`width: ${Math.min(100, (totalCheckins / cap) * 100).toFixed(0)}%`}
+                      ></div>
+                    </div>
+                    <span class="text-xs font-semibold text-zinc-400 shrink-0">
+                      {semVagas ? (
+                        <span class="text-red-400">Lotado</span>
+                      ) : (
+                        <span class="text-[#00FF85]">{vagasRestantes} vaga{vagasRestantes !== 1 ? 's' : ''}</span>
+                      )}
+                    </span>
+                  </div>
+                ) : (
+                  <span class="text-xs text-zinc-500">
+                    <svg class="inline h-3 w-3 mr-1 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0" />
+                    </svg>
+                    Vagas ilimitadas
+                  </span>
+                )}
+              </div>
+
+              <!-- Botão de ação -->
+              {jaFez ? (
+                <div class="flex items-center justify-center gap-2 py-3 rounded-xl bg-[#00FF85]/5 border border-[#00FF85]/20 text-sm font-bold text-[#00FF85]">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Presença confirmada!
+                </div>
+              ) : semVagas ? (
+                <button disabled class="w-full rounded-xl bg-zinc-800 py-3 text-sm font-bold text-zinc-600 cursor-not-allowed flex items-center justify-center gap-2">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />
+                  </svg>
+                  Turma lotada
+                </button>
+              ) : podeCheckin ? (
+                <button
+                  class="checkin-btn w-full rounded-xl py-3.5 text-sm font-black text-black transition-all active:scale-95 flex items-center justify-center gap-2"
+                  style="background: #00FF85; box-shadow: 0 0 24px rgba(0,255,133,0.4);"
+                  data-aula-id={aula.id}
+                >
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Confirmar Presença
+                </button>
+              ) : status === 'aguardando' ? (
+                <button disabled class="w-full rounded-xl bg-zinc-900 border border-zinc-800 py-3 text-sm font-semibold text-zinc-500 cursor-not-allowed flex items-center justify-center gap-2">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Check-in indisponível no momento
+                </button>
+              ) : (
+                <button disabled class="w-full rounded-xl bg-zinc-900 border border-zinc-800 py-3 text-sm font-semibold text-zinc-600 cursor-not-allowed flex items-center justify-center gap-2">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Check-in indisponível no momento
+                </button>
+              )}
+
+            </div>
+          </div>
+        );
+      })}
+    </div>
+
+  )}
+
+  <!-- Toast -->
+  <div id="toast" class="hidden fixed bottom-6 left-4 right-4 z-50 max-w-sm mx-auto rounded-xl border px-4 py-3 text-sm font-bold text-center shadow-2xl"></div>
+
+</DashboardLayout>
+
+<style>
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 12px rgba(0,255,133,0.15); }
+    50%       { box-shadow: 0 0 28px rgba(0,255,133,0.35); }
+  }
+  .animate-pulse-border { animation: pulse-border 2.5s ease-in-out infinite; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+</style>
+
+<script>
+  const toast = document.getElementById('toast')!;
+
+  function showToast(msg: string, ok: boolean) {
+    toast.textContent = msg;
+    toast.className = [
+      'fixed bottom-6 left-4 right-4 z-50 max-w-sm mx-auto rounded-xl border px-4 py-3 text-sm font-bold text-center shadow-2xl',
+      ok
+        ? 'bg-[#0a0a0a] border-[#00FF85]/40 text-[#00FF85] shadow-[0_0_20px_rgba(0,255,133,0.2)]'
+        : 'bg-[#0a0a0a] border-red-500/40 text-red-400',
+    ].join(' ');
+    setTimeout(() => toast.classList.add('hidden'), 4000);
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.checkin-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const aulaId = btn.dataset.aulaId;
+      if (!aulaId) return;
+
+      btn.disabled = true;
+      btn.innerHTML = `
+        <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        Registrando…`;
+
+      try {
+        const res  = await fetch('/api/checkin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ aula_id: aulaId }),
+        });
+        const data = await res.json() as { ok: boolean; motivo?: string };
+
+        if (data.ok) {
+          showToast('Presença confirmada! 💪', true);
+          btn.outerHTML = `
+            <div class="flex items-center justify-center gap-2 py-3 rounded-xl bg-[#00FF85]/5 border border-[#00FF85]/20 text-sm font-bold text-[#00FF85]">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Presença confirmada!
+            </div>`;
+        } else {
+          showToast(data.motivo ?? 'Erro ao confirmar presença.', false);
+          btn.disabled = false;
+          btn.style.cssText = 'background: #00FF85; box-shadow: 0 0 24px rgba(0,255,133,0.4);';
+          btn.innerHTML = `
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Confirmar Presença`;
+        }
+      } catch {
+        showToast('Erro de conexão. Tente novamente.', false);
+        btn.disabled = false;
+      }
+    });
+  });
+</script>
