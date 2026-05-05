@@ -215,16 +215,26 @@ const { data: faturas } = await adminClient
   .order('data_vencimento', { ascending: false })
   .limit(20);
 
-const { data: membros } = await adminClient
-  .from('profiles')
-  .select('id, nome_completo, role, ativo, criado_em')
-  .eq('academia_id', id!)
-  .neq('role', 'saas_admin')
-  .order('role')
-  .order('nome_completo');
+const [
+  { data: membros },
+  { count: totalAlunos_count },
+] = await Promise.all([
+  adminClient
+    .from('profiles')
+    .select('id, nome_completo, role, ativo, criado_em')
+    .eq('academia_id', id!)
+    .neq('role', 'saas_admin')
+    .order('role')
+    .order('nome_completo'),
+  // Conta pela tabela alunos (fonte de verdade), não por profiles
+  adminClient
+    .from('alunos')
+    .select('id', { count: 'exact', head: true })
+    .eq('academia_id', id!),
+]);
 
-const assin = (academia as any).saas_assinaturas?.[0];
-const totalAlunos = membros?.filter((m: any) => m.role === 'aluno').length ?? 0;
+const assin       = (academia as any).saas_assinaturas?.[0];
+const totalAlunos = totalAlunos_count ?? 0;
 const totalColabs = membros?.filter((m: any) => m.role === 'colaborador').length ?? 0;
 const donos       = membros?.filter((m: any) => m.role === 'dono') ?? [];
 

@@ -1,0 +1,270 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { enviarEmailNovaSenha, emailConfigurado } from '@/lib/email';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'dono') return Astro.redirect('/dashboard');
+
+let formError = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const nome     = (form.get('nome') as string)?.trim();
+  const email    = (form.get('email') as string)?.trim().toLowerCase();
+  const cpfRaw   = (form.get('cpf') as string)?.replace(/\D/g, '') ?? '';
+  const cpf      = cpfRaw.length === 11 ? cpfRaw : null;
+  const telefone = (form.get('telefone') as string)?.trim() || null;
+  const cargo    = (form.get('cargo') as string)?.trim() || 'Colaborador';
+
+  const endereco_cep          = (form.get('endereco_cep') as string)?.replace(/\D/g, '') || null;
+  const endereco_rua          = (form.get('endereco_rua') as string)?.trim() || null;
+  const endereco_numero       = (form.get('endereco_numero') as string)?.trim() || null;
+  const endereco_complemento  = (form.get('endereco_complemento') as string)?.trim() || null;
+  const endereco_bairro       = (form.get('endereco_bairro') as string)?.trim() || null;
+  const endereco_cidade       = (form.get('endereco_cidade') as string)?.trim() || null;
+  const endereco_estado       = (form.get('endereco_estado') as string)?.trim().toUpperCase() || null;
+
+  if (!nome) {
+    formError = 'Nome é obrigatório.';
+  } else if (!email) {
+    formError = 'E-mail é obrigatório para o colaborador acessar o sistema.';
+  } else if (cpfRaw && cpfRaw.length !== 11) {
+    formError = 'CPF inválido — deve ter 11 dígitos.';
+  } else {
+    const adminClient = createSupabaseAdminClient();
+
+    // Gera senha temporária
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let senhaTemp = '';
+    for (let i = 0; i < 10; i++) senhaTemp += chars[Math.floor(Math.random() * chars.length)];
+
+    // Cria usuário no Supabase Auth
+    const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
+      email,
+      password: senhaTemp,
+      email_confirm: true,
+      user_metadata: { nome_completo: nome },
+    });
+
+    if (createErr) {
+      formError = createErr.code === 'email_exists'
+        ? 'Este e-mail já está cadastrado no sistema.'
+        : createErr.message;
+    } else if (newUser?.user) {
+      const profileId = newUser.user.id;
+
+      // Cria profile com role = colaborador
+      await adminClient.from('profiles').upsert({
+        id: profileId,
+        nome_completo: nome,
+        telefone,
+        role: 'colaborador',
+        academia_id: profile.academia_id,
+        ativo: true,
+      }, { onConflict: 'id' });
+
+      // Cria registro na tabela colaboradores
+      const { data: novoColab, error: colabErr } = await supabase
+        .from('colaboradores')
+        .insert({
+          academia_id: profile.academia_id,
+          profile_id: profileId,
+          nome, email, cpf, telefone, cargo,
+          status: 'ativo',
+          endereco_cep, endereco_rua, endereco_numero,
+          endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado,
+        })
+        .select('id')
+        .single();
+
+      if (colabErr) {
+        // Reverte criação do usuário auth se o colaborador não foi criado
+        await adminClient.auth.admin.deleteUser(profileId);
+        formError = colabErr.message;
+      } else {
+        // Busca dados da academia para o email
+        const { data: acad } = await adminClient
+          .from('academias').select('nome, slug, logo_url').eq('id', profile.academia_id!).single();
+
+        const siteUrl  = (process.env.SITE ?? 'https://unafit.com.br').replace(/\/$/, '');
+        const loginUrl = acad?.slug ? `${siteUrl}/${acad.slug}` : `${siteUrl}/login`;
+
+        if (emailConfigurado()) {
+          await enviarEmailNovaSenha({
+            email,
+            nomeAluno: nome,
+            nomeAcademia: acad?.nome ?? 'Academia',
+            logoUrl: acad?.logo_url ?? null,
+            senhaTemporaria: senhaTemp,
+            loginUrl,
+          });
+        }
+
+        return Astro.redirect(`/dashboard/colaboradores/${novoColab.id}?novo=1${!emailConfigurado() ? `&senha_temp=${encodeURIComponent(senhaTemp)}&login_url=${encodeURIComponent(loginUrl)}` : ''}`);
+      }
+    }
+  }
+}
+---
+
+<DashboardLayout title="Novo Colaborador">
+  <div class="max-w-2xl mx-auto space-y-5">
+
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-sm text-zinc-400">
+      <a href="/dashboard/colaboradores" class="hover:text-white transition-colors">← Colaboradores</a>
+    </div>
+
+    <div>
+      <h1 class="text-2xl font-bold text-white">Novo Colaborador</h1>
+      <p class="text-zinc-400 text-sm mt-1">O colaborador receberá um e-mail com a senha de acesso.</p>
+    </div>
+
+    {formError && (
+      <div class="bg-red-900/40 border border-red-600 text-red-300 px-4 py-3 rounded-lg text-sm">{formError}</div>
+    )}
+
+    <form method="POST" class="space-y-6">
+
+      <!-- Dados pessoais -->
+      <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Dados Pessoais</h2>
+
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Nome completo *</label>
+          <input name="nome" required placeholder="Nome do colaborador"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">E-mail *</label>
+            <input name="email" type="email" required placeholder="email@exemplo.com"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Telefone</label>
+            <input name="telefone" id="tel-novo" placeholder="(00) 00000-0000"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">CPF</label>
+            <input name="cpf" id="cpf-novo" placeholder="000.000.000-00" maxlength="14"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Cargo</label>
+            <input name="cargo" placeholder="Ex: Treinador, Recepcionista…"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Endereço -->
+      <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Endereço <span class="text-zinc-600 normal-case font-normal">(opcional)</span></h2>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">CEP</label>
+            <input name="endereco_cep" id="cep-novo" maxlength="9" placeholder="00000-000"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Número</label>
+            <input name="endereco_numero"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Rua / Logradouro</label>
+          <input name="endereco_rua" id="rua-novo"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Complemento</label>
+            <input name="endereco_complemento"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Bairro</label>
+            <input name="endereco_bairro" id="bairro-novo"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Cidade</label>
+            <input name="endereco_cidade" id="cidade-novo"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-sm text-zinc-400 mb-1">Estado (UF)</label>
+            <input name="endereco_estado" maxlength="2" placeholder="SP"
+              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-primary focus:outline-none" />
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <a href="/dashboard/colaboradores"
+          class="flex-1 py-2.5 border border-zinc-700 text-zinc-400 text-sm rounded-lg text-center hover:text-white transition-colors">
+          Cancelar
+        </a>
+        <button type="submit"
+          class="flex-1 py-2.5 bg-primary hover:bg-primary/90 text-black text-sm font-bold rounded-lg transition-colors">
+          Cadastrar e Enviar Acesso
+        </button>
+      </div>
+    </form>
+  </div>
+</DashboardLayout>
+
+<script>
+  // Máscara telefone
+  document.getElementById('tel-novo')?.addEventListener('input', function(this: HTMLInputElement) {
+    let v = this.value.replace(/\D/g, '').slice(0, 11);
+    if (v.length > 10) v = v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
+    else if (v.length > 6) v = v.replace(/^(\d{2})(\d{4})(\d*)$/, '($1) $2-$3');
+    else if (v.length > 2) v = v.replace(/^(\d{2})(\d*)$/, '($1) $2');
+    this.value = v;
+  });
+
+  // Máscara CPF
+  document.getElementById('cpf-novo')?.addEventListener('input', function(this: HTMLInputElement) {
+    const d = this.value.replace(/\D/g, '').slice(0, 11);
+    if (d.length > 9) this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+    else if (d.length > 6) this.value = d.replace(/(\d{3})(\d{3})(\d{1,3})/, '$1.$2.$3');
+    else if (d.length > 3) this.value = d.replace(/(\d{3})(\d{1,3})/, '$1.$2');
+    else this.value = d;
+  });
+
+  // Busca CEP
+  document.getElementById('cep-novo')?.addEventListener('blur', async function(this: HTMLInputElement) {
+    const cep = this.value.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const d = await res.json();
+      if (d.erro) return;
+      (document.getElementById('rua-novo') as HTMLInputElement).value    = d.logradouro ?? '';
+      (document.getElementById('bairro-novo') as HTMLInputElement).value = d.bairro ?? '';
+      (document.getElementById('cidade-novo') as HTMLInputElement).value = d.localidade ?? '';
+    } catch {}
+  });
+</script>
