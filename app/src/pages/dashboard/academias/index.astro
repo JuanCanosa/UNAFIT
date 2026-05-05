@@ -105,23 +105,32 @@ const { data: academias } = await adminClient
   `)
   .order('criado_em', { ascending: false });
 
-// Conta usuários por academia
-const { data: contagens } = await adminClient
-  .from('profiles')
-  .select('academia_id, role')
-  .neq('role', 'saas_admin');
+// Conta por fontes de verdade: alunos e colaboradores nas suas tabelas; donos em profiles
+const [
+  { data: alunosRows },
+  { data: colaboradoresRows },
+  { data: donosRows },
+] = await Promise.all([
+  adminClient.from('alunos').select('academia_id'),
+  adminClient.from('colaboradores').select('academia_id'),
+  adminClient.from('profiles').select('academia_id').eq('role', 'dono'),
+]);
 
-const contagemPorAcademia = (contagens ?? []).reduce((acc: Record<string, Record<string, number>>, p: any) => {
-  if (!p.academia_id) return acc;
-  acc[p.academia_id] = acc[p.academia_id] ?? {};
-  acc[p.academia_id][p.role] = (acc[p.academia_id][p.role] ?? 0) + 1;
-  return acc;
-}, {});
+function buildCountMap(rows: { academia_id: string }[] | null): Record<string, number> {
+  return (rows ?? []).reduce((acc: Record<string, number>, r) => {
+    if (r.academia_id) acc[r.academia_id] = (acc[r.academia_id] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+const alunosPorAcademia       = buildCountMap(alunosRows);
+const colaboradoresPorAcademia = buildCountMap(colaboradoresRows);
+const donosPorAcademia         = buildCountMap(donosRows);
 
 // Stats globais
 const totalAcademias = academias?.length ?? 0;
-const totalAtivas = academias?.filter((a: any) => a.ativo).length ?? 0;
-const totalAlunos = (contagens ?? []).filter((p: any) => p.role === 'aluno').length;
+const totalAtivas    = academias?.filter((a: any) => a.ativo).length ?? 0;
+const totalAlunos    = Object.values(alunosPorAcademia).reduce((s, v) => s + v, 0);
 const mrr = (academias ?? []).reduce((sum: number, a: any) => {
   const assin = a.saas_assinaturas?.[0];
   if (assin?.status === 'ativa') sum += Number(assin.saas_planos?.valor ?? 0);
@@ -181,7 +190,9 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
       </Card>
     ) : academias.map((a: any) => {
       const assin = a.saas_assinaturas?.[0];
-      const contagem = contagemPorAcademia[a.id] ?? {};
+      const nAlunos       = alunosPorAcademia[a.id] ?? 0;
+      const nColaboradores = colaboradoresPorAcademia[a.id] ?? 0;
+      const nDonos        = donosPorAcademia[a.id] ?? 0;
       return (
         <div class="rounded-xl border border-border bg-card p-4 hover:border-primary/20 transition-colors">
           <div class="flex items-start gap-4">
@@ -219,9 +230,9 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
                 )}
               </div>
               <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-                <span><strong class="text-foreground">{contagem['aluno'] ?? 0}</strong> alunos</span>
-                <span><strong class="text-foreground">{contagem['colaborador'] ?? 0}</strong> colaboradores</span>
-                <span><strong class="text-foreground">{contagem['dono'] ?? 0}</strong> dono(s)</span>
+                <span><strong class="text-foreground">{nAlunos}</strong> aluno{nAlunos !== 1 ? 's' : ''}</span>
+                <span><strong class="text-foreground">{nColaboradores}</strong> colaborador{nColaboradores !== 1 ? 'es' : ''}</span>
+                <span><strong class="text-foreground">{nDonos}</strong> dono{nDonos !== 1 ? 's' : ''}</span>
                 <span class="text-muted-foreground/60">Criada {new Date(a.criado_em).toLocaleDateString('pt-BR')}</span>
               </div>
             </div>
