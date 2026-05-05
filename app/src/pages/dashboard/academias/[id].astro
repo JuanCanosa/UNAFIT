@@ -218,6 +218,7 @@ const { data: faturas } = await adminClient
 const [
   { data: membros },
   { count: totalAlunos_count },
+  { count: totalColabs_count },
 ] = await Promise.all([
   adminClient
     .from('profiles')
@@ -226,16 +227,21 @@ const [
     .neq('role', 'saas_admin')
     .order('role')
     .order('nome_completo'),
-  // Conta pela tabela alunos (fonte de verdade), não por profiles
+  // Fonte de verdade: tabela alunos
   adminClient
     .from('alunos')
+    .select('id', { count: 'exact', head: true })
+    .eq('academia_id', id!),
+  // Fonte de verdade: tabela colaboradores
+  adminClient
+    .from('colaboradores')
     .select('id', { count: 'exact', head: true })
     .eq('academia_id', id!),
 ]);
 
 const assin       = (academia as any).saas_assinaturas?.[0];
 const totalAlunos = totalAlunos_count ?? 0;
-const totalColabs = membros?.filter((m: any) => m.role === 'colaborador').length ?? 0;
+const totalColabs = totalColabs_count ?? 0;
 const donos       = membros?.filter((m: any) => m.role === 'dono') ?? [];
 
 // E-mail real de login do dono (pode diferir do e-mail de contato da academia)
