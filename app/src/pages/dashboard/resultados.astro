@@ -1,7 +1,7 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Card from '@/components/ui/Card.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -15,39 +15,68 @@ const { data: profile } = await supabase
 
 if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
-// Busca checkins do aluno com dados da aula e WOD
+const admin = createSupabaseAdminClient();
+
+// ── Plano atual (aluno_academias → alunos → aluno_planos → planos) ─────────
+const { data: vinculo } = await admin
+  .from('aluno_academias')
+  .select('aluno_id')
+  .eq('profile_id', user.id)
+  .eq('academia_id', profile.academia_id!)
+  .eq('ativo', true)
+  .maybeSingle();
+
+let planoAtual: { nome: string; valor: number; vencimento_dia: number } | null = null;
+if (vinculo?.aluno_id) {
+  const { data: alunoPlano } = await admin
+    .from('aluno_planos')
+    .select('planos(nome, valor, vencimento_dia)')
+    .eq('aluno_id', vinculo.aluno_id)
+    .eq('status', 'ativo')
+    .order('data_inicio', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  planoAtual = (alunoPlano as any)?.planos ?? null;
+}
+
+// ── Checkins — coluna correta é feito_em (não created_at) ─────────────────
 const { data: checkins } = await supabase
   .from('checkins')
   .select(`
-    id, created_at,
+    id, feito_em,
     aulas_agenda(id, data_aula, horario_inicio, modalidade,
       wods(id, nome)
     )
   `)
   .eq('aluno_id', user.id)
-  .order('created_at', { ascending: false })
+  .order('feito_em', { ascending: false })
   .limit(50);
 
-// Busca resultados/scores registrados
+// ── Scores de performance ─────────────────────────────────────────────────
 const { data: resultados } = await supabase
   .from('resultados_performance')
   .select(`
-    id, resultado, observacao, created_at,
+    id, tempo, repeticoes, carga_kg, rounds, reps_extra, passou, rx_scaled, observacao, registrado_em,
     aulas_agenda(id, data_aula, modalidade,
-      wods(id, nome)
+      wods(id, nome, score_type)
     )
   `)
   .eq('aluno_id', user.id)
-  .order('created_at', { ascending: false })
+  .order('registrado_em', { ascending: false })
   .limit(50);
 
-const totalCheckins = checkins?.length ?? 0;
+const totalCheckins   = checkins?.length ?? 0;
 const totalResultados = resultados?.length ?? 0;
 
-// Frequência: checkins nos últimos 30 dias
-const trinta = new Date();
-trinta.setDate(trinta.getDate() - 30);
-const checkinsRecentes = checkins?.filter(c => new Date(c.created_at) >= trinta).length ?? 0;
+// Checkins nos últimos 30 dias em BRT
+const trintaDias = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const checkinsRecentes = checkins?.filter(c => new Date((c as any).feito_em) >= trintaDias).length ?? 0;
+
+function fmtData(iso: string) {
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', {
+    weekday: 'short', day: '2-digit', month: 'short',
+  });
+}
 ---
 
 <DashboardLayout title="Meus Resultados">
@@ -56,18 +85,42 @@ const checkinsRecentes = checkins?.filter(c => new Date(c.created_at) >= trinta)
     <p class="mt-1 text-sm text-muted-foreground">Histórico de treinos e performance</p>
   </div>
 
+  <!-- Card do plano atual -->
+  {planoAtual && (
+    <div class="mb-6 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 flex items-center gap-4">
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 border border-primary/30">
+        <svg class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+        </svg>
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Plano atual</p>
+        <p class="font-bold text-foreground">{planoAtual.nome}</p>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="text-lg font-bold text-primary">
+          {Number(planoAtual.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          <span class="text-xs font-normal text-muted-foreground">/mês</span>
+        </p>
+        {planoAtual.vencimento_dia && (
+          <p class="text-xs text-muted-foreground">Vence todo dia {planoAtual.vencimento_dia}</p>
+        )}
+      </div>
+    </div>
+  )}
+
   <!-- Stats -->
-  <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+  <div class="grid grid-cols-3 gap-3 mb-6">
     <Card>
-      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Check-ins totais</p>
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Total treinos</p>
       <p class="mt-1 text-3xl font-bold text-primary">{totalCheckins}</p>
     </Card>
     <Card>
-      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Últimos 30 dias</p>
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Últimos 30 dias</p>
       <p class="mt-1 text-3xl font-bold text-foreground">{checkinsRecentes}</p>
     </Card>
-    <Card class="col-span-2 sm:col-span-1">
-      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Scores registrados</p>
+    <Card>
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Scores</p>
       <p class="mt-1 text-3xl font-bold text-foreground">{totalResultados}</p>
     </Card>
   </div>
@@ -84,23 +137,25 @@ const checkinsRecentes = checkins?.filter(c => new Date(c.created_at) >= trinta)
           {checkins.slice(0, 20).map((c: any) => {
             const aula = c.aulas_agenda;
             const wod  = aula?.wods;
+            // feito_em é UTC — converte para data da aula
+            const dataDisplay = aula?.data_aula ? fmtData(aula.data_aula) : new Date(c.feito_em).toLocaleDateString('pt-BR');
             return (
               <div class="flex items-start gap-3 border-b border-border/50 pb-3 last:border-0 last:pb-0">
                 <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs font-bold">
-                  {aula ? new Date(aula.data_aula + 'T12:00:00').getDate() : '—'}
+                  {aula?.data_aula
+                    ? new Date(aula.data_aula + 'T12:00:00Z').getUTCDate()
+                    : '—'}
                 </div>
                 <div class="min-w-0 flex-1">
                   <p class="text-sm font-medium text-foreground truncate">
                     {wod?.nome ?? aula?.modalidade ?? 'Aula'}
                   </p>
                   <p class="text-xs text-muted-foreground">
-                    {aula
-                      ? new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })
-                      : new Date(c.created_at).toLocaleDateString('pt-BR')}
+                    {dataDisplay}
                     {aula?.horario_inicio ? ` · ${aula.horario_inicio.slice(0,5)}` : ''}
                   </p>
                 </div>
-                <span class="text-xs text-green-400 font-medium shrink-0">✓</span>
+                <span class="text-xs text-primary font-bold shrink-0">✓</span>
               </div>
             );
           })}
@@ -118,20 +173,31 @@ const checkinsRecentes = checkins?.filter(c => new Date(c.created_at) >= trinta)
           {resultados.slice(0, 20).map((r: any) => {
             const aula = r.aulas_agenda;
             const wod  = aula?.wods;
+            // Formata o score conforme o tipo
+            let scoreLabel = '';
+            if (r.tempo)      scoreLabel = r.tempo;
+            else if (r.rounds != null) scoreLabel = `${r.rounds}${r.reps_extra ? `+${r.reps_extra}` : ''} rounds`;
+            else if (r.repeticoes != null) scoreLabel = `${r.repeticoes} reps`;
+            else if (r.carga_kg != null)   scoreLabel = `${r.carga_kg} kg`;
+            else if (r.passou != null)     scoreLabel = r.passou ? 'Pass ✓' : 'Fail ✗';
+            const ehRx = r.rx_scaled === true || r.rx_scaled === 'rx';
             return (
               <div class="flex items-start gap-3 border-b border-border/50 pb-3 last:border-0 last:pb-0">
                 <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground text-xs font-bold">
-                  {aula ? new Date(aula.data_aula + 'T12:00:00').getDate() : '—'}
+                  {aula?.data_aula ? new Date(aula.data_aula + 'T12:00:00Z').getUTCDate() : '—'}
                 </div>
                 <div class="min-w-0 flex-1">
-                  <p class="text-sm font-medium text-foreground truncate">
-                    {wod?.nome ?? aula?.modalidade ?? 'WOD'}
-                  </p>
-                  <p class="text-xs text-primary font-semibold">{r.resultado}</p>
+                  <div class="flex items-center gap-2">
+                    <p class="text-sm font-medium text-foreground truncate">
+                      {wod?.nome ?? aula?.modalidade ?? 'WOD'}
+                    </p>
+                    {ehRx && <span class="text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">RX</span>}
+                  </div>
+                  {scoreLabel && <p class="text-xs text-primary font-bold">{scoreLabel}</p>}
                   {r.observacao && <p class="text-xs text-muted-foreground truncate">{r.observacao}</p>}
                 </div>
                 <span class="text-xs text-muted-foreground shrink-0">
-                  {new Date(r.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                  {aula?.data_aula ? fmtData(aula.data_aula) : '—'}
                 </span>
               </div>
             );
