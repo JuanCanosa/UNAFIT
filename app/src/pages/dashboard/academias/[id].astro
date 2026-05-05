@@ -104,34 +104,40 @@ if (Astro.request.method === 'POST') {
     if (!donoProfile) {
       erro = 'Nenhum dono encontrado para esta academia.';
     } else {
-      // Busca o e-mail real de login do dono no Supabase Auth
       const { data: authUser } = await adminClient.auth.admin.getUserById(donoProfile.id);
-      const donoLoginEmail = authUser?.user?.email;
+      const authEmail  = authUser?.user?.email;
+      // O e-mail da academia é a fonte de verdade para login
+      const emailLogin = acadData?.email ?? authEmail;
 
-      if (!donoLoginEmail) {
-        erro = 'Não foi possível obter o e-mail do dono.';
+      if (!emailLogin) {
+        erro = 'Esta academia não possui e-mail cadastrado.';
       } else {
+        // Sincroniza o e-mail Auth com o e-mail da academia (se diferente)
+        if (authEmail && authEmail !== emailLogin) {
+          await adminClient.auth.admin.updateUserById(donoProfile.id, {
+            email: emailLogin,
+            email_confirm: true,
+          });
+        }
+
         const novaSenha = gerarSenha();
         const { error: passErr } = await adminClient.auth.admin.updateUserById(donoProfile.id, { password: novaSenha });
 
         if (passErr) {
           erro = `Erro ao redefinir senha: ${passErr.message}`;
         } else {
-          const emailDestino = acadData?.email ?? donoLoginEmail;
-          const linkLogin    = `${appUrl}/${acadData?.slug ?? ''}`;
+          const linkLogin = `${appUrl}/${acadData?.slug ?? ''}`;
 
           if (emailConfigurado()) {
             await enviarEmailBoasVindasAcademia({
-              email: emailDestino,
-              emailLogin: donoLoginEmail !== emailDestino ? donoLoginEmail : undefined,
+              email: emailLogin,
               nomeAcademia: acadData?.nome ?? 'Academia',
               senhaTemporaria: novaSenha,
               linkAcesso: linkLogin,
               linkLogin,
             });
           }
-          sucesso = `Senha redefinida! Login: ${donoLoginEmail} · Senha: ${novaSenha} · Acesso: ${linkLogin}${emailConfigurado() ? ` · E-mail enviado para ${emailDestino}` : ''}`;
-
+          sucesso = `Senha redefinida! Login: ${emailLogin} · Senha: ${novaSenha} · URL: ${linkLogin}${emailConfigurado() ? ` · E-mail enviado para ${emailLogin}` : ''}`;
         }
       }
     }
@@ -643,18 +649,14 @@ const hoje = new Date().toISOString().split('T')[0];
           Gera uma nova senha e envia para o dono. As credenciais também aparecem aqui.
         </p>
 
-        <div class="mb-4 space-y-2">
+        <div class="mb-4">
           <div class="rounded-lg border border-border bg-zinc-900/50 px-3 py-2">
             <p class="text-xs text-muted-foreground">E-mail de login do dono</p>
-            <p class="text-xs font-semibold text-foreground mt-0.5">{donoLoginEmail ?? '—'}</p>
+            <p class="text-xs font-semibold text-foreground mt-0.5">
+              {(academia as any).email ?? donoLoginEmail ?? '—'}
+            </p>
+            <p class="text-[10px] text-muted-foreground mt-1">A nova senha será enviada para este e-mail.</p>
           </div>
-          {(academia as any).email && (academia as any).email !== donoLoginEmail && (
-            <div class="rounded-lg border border-yellow-700/30 bg-yellow-900/10 px-3 py-2">
-              <p class="text-xs text-yellow-500/80">E-mail de contato diferente do login</p>
-              <p class="text-xs font-semibold text-yellow-400 mt-0.5">{(academia as any).email}</p>
-              <p class="text-xs text-muted-foreground mt-1">A nova senha será enviada para o e-mail de contato, mas o login usa o e-mail acima.</p>
-            </div>
-          )}
         </div>
 
         {donos.length > 0 ? (
