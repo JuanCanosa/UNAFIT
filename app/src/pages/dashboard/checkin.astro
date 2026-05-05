@@ -15,7 +15,8 @@ const { data: profile } = await supabase
 if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
 const admin   = createSupabaseAdminClient();
-const hojeISO = new Date().toISOString().split('T')[0];
+// Data de hoje no fuso de Brasília (servidor roda em UTC)
+const hojeISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 
 // Academia (branding)
 const { data: academia } = await admin
@@ -68,9 +69,12 @@ function fmt(t: string) { return t.substring(0, 5); }
 type AulaStatus = 'aguardando' | 'aberto' | 'encerrado';
 
 function getStatus(dataAula: string, inicio: string, fim: string): AulaStatus {
-  const agora     = new Date();
-  const ini       = new Date(`${dataAula}T${inicio}`);
-  const end       = new Date(`${dataAula}T${fim}`);
+  const agora = new Date(); // UTC
+  const hIni  = inicio.length === 5 ? inicio + ':00' : inicio;
+  const hFim  = fim.length   === 5 ? fim   + ':00' : fim;
+  // Offset -03:00 de Brasília para comparação correta com UTC do servidor
+  const ini = new Date(`${dataAula}T${hIni}-03:00`);
+  const end = new Date(`${dataAula}T${hFim}-03:00`);
   const abertura  = new Date(ini.getTime() - 10 * 60_000);
   const fechamento = new Date(end.getTime() + 10 * 60_000);
   if (agora < abertura)   return 'aguardando';

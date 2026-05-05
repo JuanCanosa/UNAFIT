@@ -87,13 +87,16 @@ export async function validarCheckin({
 }
 
 function verificarJanelaTempo(aula: AulaAgenda, agora: Date): boolean {
-  const inicio    = parseDatetime(aula.data_aula, aula.horario_inicio);
-  const fim       = parseDatetime(aula.data_aula, aula.horario_fim);
-  const abertura  = new Date(inicio.getTime() - MINUTOS_ANTES_INICIO * 60_000);
-  const fechamento = new Date(fim.getTime()   + MINUTOS_APOS_FIM     * 60_000);
+  // Horários armazenados no fuso de Brasília (UTC-3) — offset explícito para comparação correta
+  const inicio     = parseBrazilDatetime(aula.data_aula, aula.horario_inicio);
+  const fim        = parseBrazilDatetime(aula.data_aula, aula.horario_fim);
+  const abertura   = new Date(inicio.getTime() - MINUTOS_ANTES_INICIO * 60_000);
+  const fechamento = new Date(fim.getTime()    + MINUTOS_APOS_FIM     * 60_000);
   return agora >= abertura && agora <= fechamento;
 }
 
-function parseDatetime(data: string, horario: string): Date {
-  return new Date(`${data}T${horario}`);
+function parseBrazilDatetime(data: string, horario: string): Date {
+  // Garante segundos para o formato ISO e usa offset -03:00 de Brasília
+  const hh = horario.length === 5 ? horario + ':00' : horario;
+  return new Date(`${data}T${hh}-03:00`);
 }

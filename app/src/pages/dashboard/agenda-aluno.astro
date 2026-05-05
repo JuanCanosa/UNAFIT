@@ -17,16 +17,17 @@ if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 // ── Parâmetro de dia ──────────────────────────────────────────────────────────
 const url      = new URL(Astro.request.url);
 const diaParam = url.searchParams.get('dia');
-const hoje     = new Date();
-const hojeISO  = hoje.toISOString().split('T')[0];
+// Data de hoje no fuso de Brasília — servidor roda em UTC
+const hojeISO  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const diaISO   = diaParam && /^\d{4}-\d{2}-\d{2}$/.test(diaParam) ? diaParam : hojeISO;
 
-// ── Semana (hoje + 6 dias) ────────────────────────────────────────────────────
-const semana = Array.from({ length: 7 }, (_, i) => {
-  const d = new Date(hoje);
-  d.setDate(hoje.getDate() + i);
-  return d;
-});
+// ── Semana (hoje + 6 dias) usando UTC ao meio-dia para evitar problemas de DST ─
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().split('T')[0];
+}
+const semana = Array.from({ length: 7 }, (_, i) => addDays(hojeISO, i));
 
 // ── Aulas do dia selecionado ──────────────────────────────────────────────────
 const admin = createSupabaseAdminClient();
@@ -61,15 +62,16 @@ const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov'
 
 function fmt(t: string) { return t.substring(0, 5); }
 
-function toISO(d: Date) { return d.toISOString().split('T')[0]; }
-
 type Status = 'aguardando' | 'aberto' | 'encerrado';
 function getStatus(dataAula: string, ini: string, fim: string): Status {
-  const agora    = new Date();
-  const start    = new Date(`${dataAula}T${ini}`);
-  const end      = new Date(`${dataAula}T${fim}`);
-  const abertura = new Date(start.getTime() - 10 * 60_000);
-  const fechamento = new Date(end.getTime() + 10 * 60_000);
+  const agora = new Date(); // UTC
+  const hIni  = ini.length === 5 ? ini + ':00' : ini;
+  const hFim  = fim.length === 5 ? fim + ':00' : fim;
+  // Offset -03:00 de Brasília para comparação correta com UTC do servidor
+  const start       = new Date(`${dataAula}T${hIni}-03:00`);
+  const end         = new Date(`${dataAula}T${hFim}-03:00`);
+  const abertura    = new Date(start.getTime() - 10 * 60_000);
+  const fechamento  = new Date(end.getTime()   + 10 * 60_000);
   if (agora < abertura)    return 'aguardando';
   if (agora <= fechamento) return 'aberto';
   return 'encerrado';
@@ -86,8 +88,9 @@ const modalidadeBadge: Record<string, string> = {
   'Funcional':    'border-orange-500/30 text-orange-400 bg-orange-500/10',
 };
 
-const diaSelecionadoDate = new Date(diaISO + 'T12:00:00');
-const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getDay()]}, ${diaSelecionadoDate.getDate()} de ${MESES[diaSelecionadoDate.getMonth()]}`;
+// Usa UTC noon para evitar ambiguidade de timezone no título
+const diaSelecionadoDate  = new Date(diaISO + 'T12:00:00Z');
+const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelecionadoDate.getUTCDate()} de ${MESES[diaSelecionadoDate.getUTCMonth()]}`;
 ---
 
 <DashboardLayout title="Agenda">
@@ -101,10 +104,11 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getDay()]}, ${diaSelecion
   <!-- Seletor de dias (scroll horizontal no mobile) -->
   <div class="mb-6 -mx-4 px-4">
     <div class="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-      {semana.map(d => {
-        const iso     = toISO(d);
-        const ativo   = iso === diaISO;
-        const ehHoje  = iso === hojeISO;
+      {semana.map(iso => {
+        const ativo  = iso === diaISO;
+        const ehHoje = iso === hojeISO;
+        // Usa UTC noon para evitar problemas de offset ao ler getUTCDay/getUTCDate
+        const d = new Date(iso + 'T12:00:00Z');
         return (
           <a
             href={`/dashboard/agenda-aluno?dia=${iso}`}
@@ -114,8 +118,8 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getDay()]}, ${diaSelecion
                 : 'bg-card border-border text-muted-foreground hover:border-[#00FF85]/40 hover:text-foreground'
             }`}
           >
-            <span class="text-[10px] font-semibold uppercase tracking-wider">{DIAS[d.getDay()]}</span>
-            <span class={`text-lg font-bold leading-none mt-0.5 ${ativo ? 'text-black' : ''}`}>{d.getDate()}</span>
+            <span class="text-[10px] font-semibold uppercase tracking-wider">{DIAS[d.getUTCDay()]}</span>
+            <span class={`text-lg font-bold leading-none mt-0.5 ${ativo ? 'text-black' : ''}`}>{d.getUTCDate()}</span>
             {ehHoje && !ativo && (
               <span class="mt-1 h-1 w-1 rounded-full bg-[#00FF85]"></span>
             )}
