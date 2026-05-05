@@ -16,7 +16,8 @@ const { data: profile } = await supabase
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
 const { id: alunoId } = Astro.params;
-const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
+const canEdit          = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
+const canVerFinanceiro = profile.role === 'dono' || profile.role === 'saas_admin';
 
 let formError = '';
 
@@ -436,21 +437,19 @@ const statusPagCores: Record<string, string> = {
           </div>
         )}
 
-        <!-- Plano atual -->
-        <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
-          <div class="flex items-center justify-between">
-            <h2 class="text-sm font-semibold text-zinc-300">Plano atual</h2>
-            {canEdit && (
+        <!-- Plano atual — visível apenas para dono/saas_admin -->
+        {canVerFinanceiro && (
+          <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-semibold text-zinc-300">Plano atual</h2>
               <button onclick="document.getElementById('modal-plano').classList.remove('hidden')"
                 class="text-xs text-red-400 hover:text-red-300">Trocar</button>
-            )}
-          </div>
-          {matriculaAtiva ? (
-            <div>
-              <p class="text-white font-medium">{(matriculaAtiva as any).planos?.nome}</p>
-              <p class="text-green-400 text-sm">R$ {Number((matriculaAtiva as any).planos?.valor).toFixed(2).replace('.', ',')}/mês</p>
-              <p class="text-zinc-500 text-xs">Vence dia {(matriculaAtiva as any).planos?.vencimento_dia}</p>
-              {canEdit && (
+            </div>
+            {matriculaAtiva ? (
+              <div>
+                <p class="text-white font-medium">{(matriculaAtiva as any).planos?.nome}</p>
+                <p class="text-green-400 text-sm">R$ {Number((matriculaAtiva as any).planos?.valor).toFixed(2).replace('.', ',')}/mês</p>
+                <p class="text-zinc-500 text-xs">Vence dia {(matriculaAtiva as any).planos?.vencimento_dia}</p>
                 <form method="POST" class="mt-3">
                   <input type="hidden" name="action" value="cancelar_plano" />
                   <input type="hidden" name="aluno_plano_id" value={(matriculaAtiva as any).id} />
@@ -458,57 +457,59 @@ const statusPagCores: Record<string, string> = {
                     Cancelar matrícula
                   </button>
                 </form>
-              )}
-            </div>
-          ) : (
-            <p class="text-zinc-500 text-sm">Sem plano ativo</p>
-          )}
-        </div>
+              </div>
+            ) : (
+              <p class="text-zinc-500 text-sm">Sem plano ativo</p>
+            )}
+          </div>
+        )}
       </div>
 
       <!-- Coluna direita -->
       <div class="lg:col-span-2 space-y-6">
 
-        <!-- Pagamentos -->
-        <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
-          <h2 class="text-sm font-semibold text-zinc-300">Mensalidades</h2>
-          {!pagamentos?.length ? (
-            <p class="text-zinc-500 text-sm">Nenhum pagamento registrado.</p>
-          ) : (
-            <div class="space-y-2">
-              {pagamentos.map((p: any) => (
-                <div class="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
-                  <div>
-                    <p class="text-sm text-white">
-                      Venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
-                    </p>
-                    <p class="text-xs text-zinc-500">R$ {Number(p.valor).toFixed(2).replace('.', ',')}</p>
+        <!-- Pagamentos — visível apenas para dono/saas_admin -->
+        {canVerFinanceiro && (
+          <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
+            <h2 class="text-sm font-semibold text-zinc-300">Mensalidades</h2>
+            {!pagamentos?.length ? (
+              <p class="text-zinc-500 text-sm">Nenhum pagamento registrado.</p>
+            ) : (
+              <div class="space-y-2">
+                {pagamentos.map((p: any) => (
+                  <div class="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                    <div>
+                      <p class="text-sm text-white">
+                        Venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      </p>
+                      <p class="text-xs text-zinc-500">R$ {Number(p.valor).toFixed(2).replace('.', ',')}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span class={`text-xs px-2 py-0.5 rounded-full ${statusPagCores[p.status]}`}>
+                        {p.status}
+                      </span>
+                      {(p.status === 'pendente' || p.status === 'vencido') && (
+                        <form method="POST">
+                          <input type="hidden" name="action" value="registrar_pagamento" />
+                          <input type="hidden" name="pagamento_id" value={p.id} />
+                          <button class="text-xs text-green-400 hover:text-green-300 border border-green-800 px-2 py-0.5 rounded">
+                            Marcar pago
+                          </button>
+                        </form>
+                      )}
+                      {p.link_pagamento && (
+                        <a href={p.link_pagamento} target="_blank"
+                          class="text-xs text-blue-400 hover:text-blue-300 border border-blue-900 px-2 py-0.5 rounded">
+                          Pagar
+                        </a>
+                      )}
+                    </div>
                   </div>
-                  <div class="flex items-center gap-2">
-                    <span class={`text-xs px-2 py-0.5 rounded-full ${statusPagCores[p.status]}`}>
-                      {p.status}
-                    </span>
-                    {(p.status === 'pendente' || p.status === 'vencido') && canEdit && (
-                      <form method="POST">
-                        <input type="hidden" name="action" value="registrar_pagamento" />
-                        <input type="hidden" name="pagamento_id" value={p.id} />
-                        <button class="text-xs text-green-400 hover:text-green-300 border border-green-800 px-2 py-0.5 rounded">
-                          Marcar pago
-                        </button>
-                      </form>
-                    )}
-                    {p.link_pagamento && (
-                      <a href={p.link_pagamento} target="_blank"
-                        class="text-xs text-blue-400 hover:text-blue-300 border border-blue-900 px-2 py-0.5 rounded">
-                        Pagar
-                      </a>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         <!-- Histórico de checkins -->
         <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
