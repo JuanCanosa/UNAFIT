@@ -14,97 +14,167 @@ const { data: profile } = await supabase
 
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
-const url = new URL(Astro.request.url);
-const busca = url.searchParams.get('q') || '';
-const filtroPlano = url.searchParams.get('plano') || '';
-const filtroCategoria = url.searchParams.get('categoria') || '';
-const filtroStatus = url.searchParams.get('status') || '';
+const url          = new URL(Astro.request.url);
+const busca        = url.searchParams.get('q')         || '';
+const filtroStatus = url.searchParams.get('status')    || '';
+const filtroPlano  = url.searchParams.get('plano')     || '';
+const filtroCat    = url.searchParams.get('categoria') || '';
 
+// Busca paralela de alunos + listas de filtros
 let query = supabase
   .from('alunos')
   .select(`
-    id, nome, email, telefone, cpf, status, created_at,
+    id, nome, email, telefone, cpf, status, categoria_id, created_at,
     categorias_alunos(id, nome, cor),
     aluno_planos(id, status, planos(id, nome))
   `)
   .eq('academia_id', profile.academia_id!)
   .order('nome');
 
-if (busca) query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
+if (busca)        query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
 if (filtroStatus) query = query.eq('status', filtroStatus);
+if (filtroCat)    query = query.eq('categoria_id', filtroCat);
 
-const { data: alunos } = await query;
-const { data: planos } = await supabase.from('planos').select('id, nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome');
-const { data: categorias } = await supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome');
+const [
+  { data: todosAlunos },
+  { data: planos },
+  { data: categorias },
+] = await Promise.all([
+  query,
+  supabase.from('planos').select('id, nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
+  supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
+]);
+
+// Filtro por plano feito em JS (requer join por aluno_planos)
+const alunos = filtroPlano
+  ? (todosAlunos ?? []).filter((a: any) =>
+      a.aluno_planos?.some((ap: any) => ap.status === 'ativo' && ap.planos?.id === filtroPlano)
+    )
+  : (todosAlunos ?? []);
 
 const statusCores: Record<string, string> = {
-  ativo:    'bg-green-900/50 text-green-400',
-  inativo:  'bg-zinc-800 text-zinc-500',
-  pendente: 'bg-yellow-900/50 text-yellow-400',
+  ativo:    'bg-green-900/50 text-green-400 border border-green-800/50',
+  inativo:  'bg-zinc-800 text-zinc-500 border border-zinc-700',
+  pendente: 'bg-yellow-900/50 text-yellow-400 border border-yellow-800/50',
 };
 
-const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
+const canEdit   = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
+const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
 ---
 
 <DashboardLayout title="Alunos">
-  <div class="p-6 max-w-7xl mx-auto space-y-6">
+  <div class="space-y-5">
 
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-bold text-white">Alunos</h1>
-        <p class="text-zinc-400 text-sm mt-1">{alunos?.length ?? 0} aluno{alunos?.length !== 1 ? 's' : ''} encontrado{alunos?.length !== 1 ? 's' : ''}</p>
+        <p class="text-zinc-400 text-sm mt-0.5">
+          {alunos.length} aluno{alunos.length !== 1 ? 's' : ''} encontrado{alunos.length !== 1 ? 's' : ''}
+        </p>
       </div>
-      {canEdit && (
-        <a href="/dashboard/alunos/novo"
-          class="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg">
-          + Novo Aluno
-        </a>
-      )}
+      <div class="flex items-center gap-2">
+        <!-- Exportar CSV -->
+        <button
+          id="btn-csv"
+          class="inline-flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-sm rounded-lg transition-colors"
+          title="Exportar CSV"
+        >
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          CSV
+        </button>
+        <!-- Exportar PDF -->
+        <button
+          id="btn-pdf"
+          class="inline-flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-sm rounded-lg transition-colors"
+          title="Exportar PDF"
+        >
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          PDF
+        </button>
+        {canEdit && (
+          <a href="/dashboard/alunos/novo"
+            class="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 text-black text-sm font-bold rounded-lg transition-colors">
+            + Novo Aluno
+          </a>
+        )}
+      </div>
     </div>
 
     <!-- Filtros -->
-    <form method="GET" class="flex flex-wrap gap-3">
-      <input name="q" value={busca} placeholder="Buscar por nome, email ou CPF..."
-        class="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm placeholder-zinc-500" />
-      <select name="status" class="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300">
-        <option value="">Todos os status</option>
-        <option value="ativo" selected={filtroStatus === 'ativo'}>Ativo</option>
-        <option value="pendente" selected={filtroStatus === 'pendente'}>Pendente</option>
-        <option value="inativo" selected={filtroStatus === 'inativo'}>Inativo</option>
+    <form method="GET" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+      <!-- Busca -->
+      <input
+        name="q" value={busca}
+        placeholder="Buscar por nome, email ou CPF..."
+        class="lg:col-span-2 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50"
+      />
+      <!-- Categoria -->
+      <select name="categoria" class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50">
+        <option value="">Todas as categorias</option>
+        {categorias?.map(c => (
+          <option value={c.id} selected={filtroCat === c.id}>{c.nome}</option>
+        ))}
       </select>
-      <button type="submit" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg">Filtrar</button>
-      {(busca || filtroStatus) && (
-        <a href="/dashboard/alunos" class="px-4 py-2 border border-zinc-700 text-zinc-400 text-sm rounded-lg hover:text-white">Limpar</a>
-      )}
+      <!-- Plano -->
+      <select name="plano" class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50">
+        <option value="">Todos os planos</option>
+        {planos?.map(p => (
+          <option value={p.id} selected={filtroPlano === p.id}>{p.nome}</option>
+        ))}
+      </select>
+      <!-- Status + ações -->
+      <div class="flex gap-2">
+        <select name="status" class="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50">
+          <option value="">Todos os status</option>
+          <option value="ativo"    selected={filtroStatus === 'ativo'}>Ativo</option>
+          <option value="pendente" selected={filtroStatus === 'pendente'}>Pendente</option>
+          <option value="inativo"  selected={filtroStatus === 'inativo'}>Inativo</option>
+        </select>
+        <button type="submit" class="shrink-0 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors">
+          Filtrar
+        </button>
+        {temFiltro && (
+          <a href="/dashboard/alunos" class="shrink-0 px-3 py-2 border border-zinc-700 text-zinc-400 text-sm rounded-lg hover:text-white transition-colors">
+            Limpar
+          </a>
+        )}
+      </div>
     </form>
 
-    <!-- Lista -->
-    {!alunos?.length ? (
+    <!-- Tabela -->
+    {!alunos.length ? (
       <div class="border border-zinc-700 rounded-xl p-12 text-center">
+        <svg class="mx-auto h-10 w-10 text-zinc-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0" />
+        </svg>
         <p class="text-zinc-400 text-lg mb-2">Nenhum aluno encontrado</p>
         {canEdit && (
-          <a href="/dashboard/alunos/novo" class="text-red-400 hover:text-red-300 text-sm">Cadastrar primeiro aluno →</a>
+          <a href="/dashboard/alunos/novo" class="text-primary hover:text-primary/80 text-sm">Cadastrar primeiro aluno →</a>
         )}
       </div>
     ) : (
-      <div class="border border-zinc-700 rounded-xl overflow-hidden">
+      <div id="tabela-alunos" class="border border-zinc-700 rounded-xl overflow-hidden">
         <table class="w-full">
           <thead>
-            <tr class="border-b border-zinc-700 bg-zinc-800/50">
-              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Aluno</th>
-              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider hidden sm:table-cell">Plano</th>
-              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider hidden md:table-cell">Categoria</th>
-              <th class="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Status</th>
-              <th class="px-4 py-3"></th>
+            <tr class="border-b border-zinc-700 bg-zinc-900/60">
+              <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Aluno</th>
+              <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider hidden sm:table-cell">Plano</th>
+              <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider hidden md:table-cell">Categoria</th>
+              <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Status</th>
+              <th class="px-4 py-3 no-print"></th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-zinc-800">
+          <tbody class="divide-y divide-zinc-800" id="tbody-alunos">
             {alunos.map((a: any) => {
               const planoAtivo = a.aluno_planos?.find((ap: any) => ap.status === 'ativo');
               const cat = a.categorias_alunos;
               return (
-                <tr class="hover:bg-zinc-800/40 transition-colors">
+                <tr class="hover:bg-zinc-800/40 transition-colors" data-nome={a.nome} data-email={a.email ?? ''} data-cpf={a.cpf ?? ''} data-plano={planoAtivo?.planos?.nome ?? ''} data-categoria={cat?.nome ?? ''} data-status={a.status}>
                   <td class="px-4 py-3">
                     <div class="font-medium text-white text-sm">{a.nome}</div>
                     <div class="text-zinc-500 text-xs">{a.email}</div>
@@ -118,8 +188,8 @@ const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || pro
                   </td>
                   <td class="px-4 py-3 hidden md:table-cell">
                     {cat ? (
-                      <span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-zinc-800">
-                        <span class="w-2 h-2 rounded-full" style={`background:${cat.cor}`}></span>
+                      <span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700">
+                        <span class="w-2 h-2 rounded-full shrink-0" style={`background:${cat.cor}`}></span>
                         {cat.nome}
                       </span>
                     ) : (
@@ -131,9 +201,9 @@ const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || pro
                       {a.status}
                     </span>
                   </td>
-                  <td class="px-4 py-3 text-right">
+                  <td class="px-4 py-3 text-right no-print">
                     <a href={`/dashboard/alunos/${a.id}`}
-                      class="text-xs text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 px-3 py-1 rounded-lg">
+                      class="text-xs text-zinc-400 hover:text-white border border-zinc-700 hover:border-zinc-500 px-3 py-1 rounded-lg transition-colors">
                       Ver
                     </a>
                   </td>
@@ -144,5 +214,53 @@ const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || pro
         </table>
       </div>
     )}
+
   </div>
 </DashboardLayout>
+
+<style>
+  @media print {
+    .no-print { display: none !important; }
+    body { background: white !important; color: black !important; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; color: black !important; font-size: 12px; }
+    th { background: #f5f5f5 !important; }
+  }
+</style>
+
+<script>
+  // ── Dados da tabela para export ─────────────────────────────────────────────
+  function getLinhas() {
+    return Array.from(document.querySelectorAll<HTMLTableRowElement>('#tbody-alunos tr')).map(tr => ({
+      nome:      tr.dataset.nome      ?? '',
+      email:     tr.dataset.email     ?? '',
+      cpf:       tr.dataset.cpf       ?? '',
+      plano:     tr.dataset.plano     ?? '',
+      categoria: tr.dataset.categoria ?? '',
+      status:    tr.dataset.status    ?? '',
+    }));
+  }
+
+  // ── CSV ─────────────────────────────────────────────────────────────────────
+  document.getElementById('btn-csv')?.addEventListener('click', () => {
+    const linhas = getLinhas();
+    const header = ['Nome', 'Email', 'CPF', 'Plano', 'Categoria', 'Status'];
+    const rows   = linhas.map(l =>
+      [l.nome, l.email, l.cpf, l.plano, l.categoria, l.status]
+        .map(v => `"${v.replace(/"/g, '""')}"`)
+        .join(',')
+    );
+    const csv   = [header.join(','), ...rows].join('\n');
+    const blob  = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link  = document.createElement('a');
+    link.href   = URL.createObjectURL(blob);
+    link.download = `alunos-${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
+  // ── PDF (via impressão do browser) ─────────────────────────────────────────
+  document.getElementById('btn-pdf')?.addEventListener('click', () => {
+    window.print();
+  });
+</script>
