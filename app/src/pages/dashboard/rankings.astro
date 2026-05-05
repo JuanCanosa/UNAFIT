@@ -1,12 +1,6 @@
 ---
-/**
- * /dashboard/rankings
- * Ranking geral da academia — visível para dono, professor e saas_admin.
- * Exibe top atletas por número de check-ins.
- */
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Card from '@/components/ui/Card.astro';
-import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
@@ -21,34 +15,57 @@ const { data: profile } = await supabase
 
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
-// Ranking de presença: checkins agrupados por aluno
-const { data: checkins } = await supabase
-  .from('checkins')
-  .select('aluno_id, profiles ( nome_completo )')
-  .eq('academia_id', profile.academia_id!);
+// Mês atual em horário de Brasília
+const hojeISO_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const inicioMes  = hojeISO_BR.slice(0, 7) + '-01';
 
-// Agrupa por aluno no servidor
-const contagem: Record<string, { nome: string; total: number }> = {};
-for (const c of checkins ?? []) {
-  const id   = c.aluno_id;
+const mesFmt = new Date(inicioMes + 'T12:00:00Z').toLocaleDateString('pt-BR', {
+  month: 'long', year: 'numeric',
+});
+
+// Busca paralela: aulas do mês + checkins do mês
+const [
+  { data: aulasDoMes },
+  { data: checkinsDoMes },
+] = await Promise.all([
+  supabase
+    .from('aulas_agenda')
+    .select('id, data_aula, horario_inicio, modalidade, capacidade_max, wods(nome)')
+    .eq('academia_id', profile.academia_id!)
+    .gte('data_aula', inicioMes)
+    .lte('data_aula', hojeISO_BR)
+    .order('data_aula', { ascending: false }),
+
+  supabase
+    .from('checkins')
+    .select('aula_id, aluno_id, profiles(nome_completo)')
+    .eq('academia_id', profile.academia_id!)
+    .gte('feito_em', `${inicioMes}T00:00:00`),
+]);
+
+// Processa em JS: presença por aula + ranking de alunos
+const presencasPorAula: Record<string, number> = {};
+const rankingMap: Record<string, { nome: string; total: number }> = {};
+
+for (const c of checkinsDoMes ?? []) {
+  if (c.aula_id) {
+    presencasPorAula[c.aula_id] = (presencasPorAula[c.aula_id] ?? 0) + 1;
+  }
   const nome = (c.profiles as any)?.nome_completo ?? '?';
-  if (!contagem[id]) contagem[id] = { nome, total: 0 };
-  contagem[id]!.total++;
+  if (!rankingMap[c.aluno_id]) rankingMap[c.aluno_id] = { nome, total: 0 };
+  rankingMap[c.aluno_id]!.total++;
 }
-const ranking = Object.values(contagem)
+
+const topAlunos = Object.values(rankingMap)
   .sort((a, b) => b.total - a.total)
   .slice(0, 20);
 
-// Últimos resultados do mês
-const mesISO = new Date().toISOString().slice(0, 7) + '-01';
-
-const { data: resultadosRecentes } = await supabase
-  .from('ranking_geral')
-  .select('resultado_id, tempo, rx_scaled, registrado_em, aluno_nome, wod_nome, data_aula')
-  .eq('academia_id', profile.academia_id!)
-  .gte('registrado_em', mesISO + 'T00:00:00')
-  .order('registrado_em', { ascending: false })
-  .limit(20);
+const totalAulasNoMes     = aulasDoMes?.length ?? 0;
+const totalPresencasNoMes = checkinsDoMes?.length ?? 0;
+const alunosUnicos        = Object.keys(rankingMap).length;
+const mediaPresenca       = totalAulasNoMes > 0
+  ? (totalPresencasNoMes / totalAulasNoMes).toFixed(1)
+  : '—';
 
 const medalhas = ['🥇', '🥈', '🥉'];
 ---
@@ -57,38 +74,64 @@ const medalhas = ['🥇', '🥈', '🥉'];
 
   <div class="mb-6">
     <h1 class="text-2xl font-bold text-foreground">Rankings</h1>
-    <p class="mt-1 text-sm text-muted-foreground">Desempenho e presença dos atletas</p>
+    <p class="mt-1 text-sm text-muted-foreground capitalize">Desempenho e presença dos atletas · {mesFmt}</p>
   </div>
 
+  <!-- Stats do mês -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+    <div class="rounded-xl border border-border bg-card p-4">
+      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Aulas no Mês</p>
+      <p class="mt-1.5 text-3xl font-bold text-foreground">{totalAulasNoMes}</p>
+      <p class="text-xs text-muted-foreground mt-1">turmas realizadas</p>
+    </div>
+    <div class="rounded-xl border border-primary/20 bg-primary/5 p-4">
+      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Presenças</p>
+      <p class="mt-1.5 text-3xl font-bold text-primary">{totalPresencasNoMes}</p>
+      <p class="text-xs text-muted-foreground mt-1">check-ins no mês</p>
+    </div>
+    <div class="rounded-xl border border-border bg-card p-4">
+      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Média / Aula</p>
+      <p class="mt-1.5 text-3xl font-bold text-foreground">{mediaPresenca}</p>
+      <p class="text-xs text-muted-foreground mt-1">alunos por turma</p>
+    </div>
+    <div class="rounded-xl border border-border bg-card p-4">
+      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Alunos Ativos</p>
+      <p class="mt-1.5 text-3xl font-bold text-foreground">{alunosUnicos}</p>
+      <p class="text-xs text-muted-foreground mt-1">treinaram este mês</p>
+    </div>
+  </div>
+
+  <!-- Grid principal -->
   <div class="grid gap-6 lg:grid-cols-2">
 
-    <!-- Ranking de Presença -->
+    <!-- TOP PRESENÇA -->
     <Card>
       <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        🏋️ Top Presença
+        🏋️ Top Presença — Este Mês
       </h2>
 
-      {ranking.length === 0 ? (
-        <p class="py-6 text-center text-sm text-muted-foreground">Sem dados de check-in ainda.</p>
+      {topAlunos.length === 0 ? (
+        <p class="py-8 text-center text-sm text-muted-foreground">Nenhum check-in registrado este mês.</p>
       ) : (
-        <div class="space-y-2">
-          {ranking.map((r, i) => (
+        <div class="space-y-1.5">
+          {topAlunos.map((r, i) => (
             <div class:list={[
               'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
               i === 0 ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30',
             ]}>
-              <span class="text-lg w-7 text-center">
-                {i < 3 ? medalhas[i] : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
+              <span class="w-7 text-center">
+                {i < 3
+                  ? <span class="text-lg">{medalhas[i]}</span>
+                  : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>
+                }
               </span>
               <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
                 {r.nome.charAt(0).toUpperCase()}
               </div>
-              <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-foreground truncate">{r.nome}</p>
-              </div>
-              <div class="text-right">
+              <p class="flex-1 min-w-0 text-sm font-medium text-foreground truncate">{r.nome}</p>
+              <div class="text-right shrink-0">
                 <p class="text-sm font-bold text-primary">{r.total}</p>
-                <p class="text-xs text-muted-foreground">check-ins</p>
+                <p class="text-[10px] text-muted-foreground">check-in{r.total !== 1 ? 's' : ''}</p>
               </div>
             </div>
           ))}
@@ -96,41 +139,58 @@ const medalhas = ['🥇', '🥈', '🥉'];
       )}
     </Card>
 
-    <!-- Últimos Resultados -->
+    <!-- HISTÓRICO DE AULAS -->
     <Card>
       <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        ⏱ Resultados Recentes
+        📋 Histórico de Aulas — Este Mês
       </h2>
 
-      {!resultadosRecentes || resultadosRecentes.length === 0 ? (
-        <p class="py-6 text-center text-sm text-muted-foreground">Nenhum resultado registrado este mês.</p>
+      {!aulasDoMes || aulasDoMes.length === 0 ? (
+        <p class="py-8 text-center text-sm text-muted-foreground">Nenhuma aula registrada este mês.</p>
       ) : (
-        <div class="space-y-3">
-          {resultadosRecentes.map((r) => {
-            const data = r.data_aula
-              ? new Date(r.data_aula + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
-              : '—';
-
-            let score = '—';
-            if (r.tempo) {
-              const parts = r.tempo.toString().split(':');
-              score = parts.length >= 2 ? `${parts[parts.length-2]}:${parts[parts.length-1].split('.')[0]}` : r.tempo.toString();
-            }
-
+        <div class="space-y-1.5 max-h-[520px] overflow-y-auto pr-1">
+          {aulasDoMes.map((a: any) => {
+            const presencas = presencasPorAula[a.id] ?? 0;
+            const cap       = Number(a.capacidade_max) || 0;
+            const pct       = cap > 0 ? Math.min(100, Math.round((presencas / cap) * 100)) : null;
+            const nomeAula  = (a.wods as any)?.nome ?? a.modalidade ?? 'Aula';
+            const dataObj   = new Date(a.data_aula + 'T12:00:00Z');
             return (
               <div class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/30 transition-colors">
-                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
-                  {(r.aluno_nome as string).charAt(0).toUpperCase()}
+                <!-- Data -->
+                <div class="flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-lg bg-muted text-center">
+                  <span class="text-sm font-bold text-foreground leading-none">
+                    {dataObj.getUTCDate()}
+                  </span>
+                  <span class="text-[9px] text-muted-foreground uppercase tracking-wide">
+                    {dataObj.toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', '')}
+                  </span>
                 </div>
+                <!-- Info -->
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-foreground truncate">{r.aluno_nome}</p>
-                  <p class="text-xs text-muted-foreground truncate">{r.wod_nome ?? 'WOD'} · {data}</p>
+                  <p class="text-sm font-medium text-foreground truncate">{nomeAula}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {a.horario_inicio?.slice(0, 5)}
+                    {cap > 0 ? ` · cap. ${cap}` : ''}
+                  </p>
+                  {pct !== null && (
+                    <div class="mt-1.5 h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        class:list={[
+                          'h-full rounded-full transition-all',
+                          pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-primary',
+                        ]}
+                        style={`width: ${pct}%`}
+                      />
+                    </div>
+                  )}
                 </div>
-                <div class="text-right shrink-0">
-                  <p class="text-sm font-bold text-primary">{score}</p>
-                  <Badge variant={r.rx_scaled ? 'primary' : 'muted'} class="text-[10px]">
-                    {r.rx_scaled ? 'RX' : 'Scaled'}
-                  </Badge>
+                <!-- Presenças -->
+                <div class="text-right shrink-0 min-w-[48px]">
+                  <p class="text-sm font-bold text-foreground">{presencas}</p>
+                  <p class="text-[10px] text-muted-foreground">
+                    {cap > 0 ? `de ${cap}` : 'presente' + (presencas !== 1 ? 's' : '')}
+                  </p>
                 </div>
               </div>
             );
@@ -140,5 +200,4 @@ const medalhas = ['🥇', '🥈', '🥉'];
     </Card>
 
   </div>
-
 </DashboardLayout>

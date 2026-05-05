@@ -93,26 +93,38 @@ if (profile?.role === 'saas_admin') {
   }));
 }
 
-// ── Academia/colaborador: stats do dia ────────────────────────────────────────
-let totalAulasHoje = 0;
-let totalCheckins  = 0;
+// ── Academia/colaborador: stats do dia + mês ──────────────────────────────────
+let totalAulasHoje    = 0;
+let totalCheckins     = 0;
+let totalAulasNoMes   = 0;
+let totalPresencasNoMes = 0;
 let aniversariantesHoje: { id: string; nome: string }[] = [];
 let aniversariantesMes:  { id: string; nome: string; data_nascimento: string }[] = [];
 
 if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
-  const { count: aulas } = await supabase
-    .from('aulas_agenda')
-    .select('id', { count: 'exact', head: true })
-    .eq('academia_id', profile!.academia_id!)
-    .eq('data_aula', hojeISO);
-  totalAulasHoje = aulas ?? 0;
+  const hojeISO_BR  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+  const inicioMesISO = hojeISO_BR.slice(0, 7) + '-01';
 
-  const { count: checkins } = await supabase
-    .from('checkins')
-    .select('id', { count: 'exact', head: true })
-    .eq('academia_id', profile!.academia_id!)
-    .gte('feito_em', `${hojeISO}T00:00:00`);
-  totalCheckins = checkins ?? 0;
+  const [
+    { count: aulas },
+    { count: checkins },
+    { count: aulasmes },
+    { count: checkinsmes },
+  ] = await Promise.all([
+    supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
+      .eq('academia_id', profile!.academia_id!).eq('data_aula', hojeISO),
+    supabase.from('checkins').select('id', { count: 'exact', head: true })
+      .eq('academia_id', profile!.academia_id!).gte('feito_em', `${hojeISO}T00:00:00`),
+    supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
+      .eq('academia_id', profile!.academia_id!).gte('data_aula', inicioMesISO).lte('data_aula', hojeISO_BR),
+    supabase.from('checkins').select('id', { count: 'exact', head: true })
+      .eq('academia_id', profile!.academia_id!).gte('feito_em', `${inicioMesISO}T00:00:00`),
+  ]);
+
+  totalAulasHoje      = aulas ?? 0;
+  totalCheckins       = checkins ?? 0;
+  totalAulasNoMes     = aulasmes ?? 0;
+  totalPresencasNoMes = checkinsmes ?? 0;
 
   const agora = new Date();
   const mes = String(agora.getMonth() + 1).padStart(2, '0');
@@ -325,7 +337,7 @@ const isSaasAdmin = profile?.role === 'saas_admin';
       )}
 
       {profile?.role !== 'aluno' && (
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-7">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
           <Card>
             <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Aulas Hoje</p>
             <p class="mt-2 text-3xl font-bold text-foreground">{totalAulasHoje}</p>
@@ -334,15 +346,20 @@ const isSaasAdmin = profile?.role === 'saas_admin';
           <Card>
             <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Check-ins Hoje</p>
             <p class="mt-2 text-3xl font-bold text-primary">{totalCheckins}</p>
-            <p class="mt-1 text-xs text-muted-foreground">presenças confirmadas</p>
+            <p class="mt-1 text-xs text-muted-foreground">presenças hoje</p>
           </Card>
           <Card>
-            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</p>
-            <div class="mt-2">
-              <Badge variant="success">Sistema Online</Badge>
-            </div>
-            <p class="mt-1 text-xs text-muted-foreground">todos os serviços ativos</p>
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Aulas no Mês</p>
+            <p class="mt-2 text-3xl font-bold text-foreground">{totalAulasNoMes}</p>
+            <p class="mt-1 text-xs text-muted-foreground">turmas realizadas</p>
           </Card>
+          <div class="rounded-xl border border-primary/20 bg-primary/5 p-5">
+            <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Presenças no Mês</p>
+            <p class="mt-2 text-3xl font-bold text-primary">{totalPresencasNoMes}</p>
+            <p class="mt-1 text-xs text-muted-foreground">
+              <a href="/dashboard/rankings" class="hover:text-primary transition-colors">ver ranking →</a>
+            </p>
+          </div>
         </div>
       )}
 
