@@ -264,19 +264,29 @@ const cpfMascarado = aluno.cpf
 const [
   { data: matriculas },
   { data: pagamentos },
-  { data: checkins },
   { data: categorias },
   { data: planos },
+  { data: linkAluno },
 ] = await Promise.all([
   supabase.from('aluno_planos').select('*, planos(id, nome, valor, vencimento_dia)')
     .eq('aluno_id', alunoId!).order('created_at', { ascending: false }),
   supabase.from('pagamentos').select('*').eq('aluno_id', alunoId!).order('data_vencimento', { ascending: false }).limit(12),
-  supabase.from('checkins')
-    .select('id, created_at, aulas_agenda(id, data_aula, horario_inicio, modalidade, wods(id, nome))')
-    .eq('aluno_id', alunoId!).order('created_at', { ascending: false }).limit(20),
   supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
   supabase.from('planos').select('id, nome, valor').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
+  // aluno_id na tabela alunos ≠ aluno_id em checkins (checkins usa profiles.id)
+  supabase.from('aluno_academias').select('profile_id').eq('aluno_id', alunoId!).maybeSingle(),
 ]);
+
+// checkins.aluno_id = profiles.id — precisa do profile_id do vínculo
+const profileIdAluno = linkAluno?.profile_id ?? null;
+const { data: checkins } = profileIdAluno
+  ? await supabase
+      .from('checkins')
+      .select('id, feito_em, aulas_agenda(id, data_aula, horario_inicio, modalidade, wods(id, nome))')
+      .eq('aluno_id', profileIdAluno)
+      .order('feito_em', { ascending: false })
+      .limit(50)
+  : { data: [] as any[] };
 
 const matriculaAtiva = matriculas?.find((m: any) => m.status === 'ativo');
 
@@ -502,34 +512,43 @@ const statusPagCores: Record<string, string> = {
 
         <!-- Histórico de checkins -->
         <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-3">
-          <h2 class="text-sm font-semibold text-zinc-300">
-            Histórico de Aulas
-            <span class="ml-2 text-xs text-zinc-600 font-normal">{checkins?.length ?? 0} checkins</span>
-          </h2>
-          {!checkins?.length ? (
-            <p class="text-zinc-500 text-sm">Nenhum checkin registrado.</p>
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-zinc-300">Histórico de Aulas</h2>
+            <span class="text-xs text-zinc-600">{checkins?.length ?? 0} check-in{(checkins?.length ?? 0) !== 1 ? 's' : ''}</span>
+          </div>
+          {!profileIdAluno ? (
+            <p class="text-zinc-500 text-sm">Aluno sem conta de acesso vinculada.</p>
+          ) : !checkins?.length ? (
+            <p class="text-zinc-500 text-sm">Nenhum check-in registrado ainda.</p>
           ) : (
-            <div class="space-y-2">
+            <div class="space-y-1">
               {checkins.map((c: any) => {
                 const aula = c.aulas_agenda;
+                const dataStr = aula?.data_aula
+                  ? new Date(aula.data_aula + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })
+                  : new Date(c.feito_em).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+                const nomeAula = aula?.wods?.nome ?? aula?.modalidade ?? 'Aula';
                 return (
-                  <div class="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
-                    <div>
-                      <p class="text-sm text-white">
-                        {aula ? new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
-                        {aula?.horario_inicio && ` · ${aula.horario_inicio.slice(0,5)}`}
-                      </p>
+                  <div class="flex items-center gap-3 py-2 border-b border-zinc-800 last:border-0">
+                    <div class="flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg bg-zinc-800 text-center">
+                      <span class="text-sm font-bold text-white leading-none">
+                        {aula?.data_aula
+                          ? new Date(aula.data_aula + 'T12:00:00Z').getUTCDate()
+                          : new Date(c.feito_em).getDate()}
+                      </span>
+                      <span class="text-[9px] text-zinc-500 uppercase">
+                        {aula?.data_aula
+                          ? new Date(aula.data_aula + 'T12:00:00Z').toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', '')
+                          : new Date(c.feito_em).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}
+                      </span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm text-white font-medium truncate">{nomeAula}</p>
                       <p class="text-xs text-zinc-500">
-                        {aula?.modalidade ?? '—'}
-                        {aula?.wods?.nome && ` · WOD: ${aula.wods.nome}`}
+                        {dataStr}{aula?.horario_inicio ? ` · ${aula.horario_inicio.slice(0, 5)}` : ''}
                       </p>
                     </div>
-                    {aula && (
-                      <a href={`/dashboard/agenda/${aula.id}`}
-                        class="text-xs text-zinc-400 hover:text-white border border-zinc-700 px-2 py-0.5 rounded">
-                        Ver aula
-                      </a>
-                    )}
+                    <span class="text-xs text-primary font-bold shrink-0">✓</span>
                   </div>
                 );
               })}
