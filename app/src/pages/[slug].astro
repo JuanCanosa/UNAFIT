@@ -68,10 +68,16 @@ if (Astro.request.method === 'POST') {
 
     if (!authUser) {
       erroEsqueci = 'Não encontramos nenhuma conta com esse e-mail ou CPF nesta academia.';
-    } else if (!emailEnvio) {
-      // CPF sem e-mail cadastrado — não é possível enviar sem expor a senha na tela
-      erroEsqueci = 'Sua conta não possui e-mail cadastrado. Fale com o responsável pela academia para redefinir sua senha.';
     } else {
+      const { data: profileEsqueci } = await adminClient
+        .from('profiles').select('ativo').eq('id', authUser.id).single();
+
+      if (!profileEsqueci?.ativo) {
+        erroEsqueci = 'Esta conta foi desativada. Entre em contato com o responsável pela academia.';
+      } else if (!emailEnvio) {
+        // CPF sem e-mail cadastrado — não é possível enviar sem expor a senha na tela
+        erroEsqueci = 'Sua conta não possui e-mail cadastrado. Fale com o responsável pela academia para redefinir sua senha.';
+      } else {
       const chars    = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
       const senhaTemp = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 
@@ -96,8 +102,9 @@ if (Astro.request.method === 'POST') {
         sucessoEsqueci  = `Nova senha enviada para ${emailMask}. Verifique sua caixa de entrada.`;
         mostrarEsqueci  = false;
       }
-    }
-  }
+      } // fecha else { password reset }
+    }   // fecha } else { outer check }
+  }     // fecha if (action === 'esqueci')
 
   // ── Login normal ───────────────────────────────────────────────────────────
   if (action === 'login') {
@@ -120,15 +127,24 @@ if (Astro.request.method === 'POST') {
     if (authErr) {
       erro = 'E-mail/CPF ou senha incorretos.';
     } else if (authData.user) {
-      const { data: vinculo } = await adminClient
-        .from('aluno_academias').select('id')
-        .eq('profile_id', authData.user.id).eq('academia_id', academia.id).eq('ativo', true).maybeSingle();
+      // Verifica se a conta está ativa antes de permitir acesso
+      const { data: profileLogin } = await adminClient
+        .from('profiles').select('ativo').eq('id', authData.user.id).single();
 
-      if (vinculo) {
-        await adminClient.from('profiles').update({ academia_id: academia.id }).eq('id', authData.user.id);
+      if (!profileLogin?.ativo) {
+        await supabase.auth.signOut();
+        erro = 'Sua conta foi desativada. Entre em contato com o responsável pela academia.';
+      } else {
+        const { data: vinculo } = await adminClient
+          .from('aluno_academias').select('id')
+          .eq('profile_id', authData.user.id).eq('academia_id', academia.id).eq('ativo', true).maybeSingle();
+
+        if (vinculo) {
+          await adminClient.from('profiles').update({ academia_id: academia.id }).eq('id', authData.user.id);
+        }
+
+        return Astro.redirect('/dashboard');
       }
-
-      return Astro.redirect('/dashboard');
     }
   }
 }

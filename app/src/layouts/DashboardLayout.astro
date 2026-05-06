@@ -25,9 +25,7 @@ const { data: profile } = await supabase
   .single();
 
 if (!profile || !profile.ativo) {
-  // Encerra a sessão antes de redirecionar para evitar loop infinito
-  await supabase.auth.signOut();
-  return Astro.redirect('/login');
+  return Astro.redirect('/conta-desativada');
 }
 
 const { data: academia } = await supabase
