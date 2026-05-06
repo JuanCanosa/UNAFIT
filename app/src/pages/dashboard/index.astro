@@ -126,9 +126,9 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
   totalAulasNoMes     = aulasmes ?? 0;
   totalPresencasNoMes = checkinsmes ?? 0;
 
-  const agora = new Date();
-  const mes = String(agora.getMonth() + 1).padStart(2, '0');
-  const dia = String(agora.getDate()).padStart(2, '0');
+  // Usa horário de Brasília (já definido acima como hojeISO_BR)
+  const mes = hojeISO_BR.slice(5, 7);
+  const dia = hojeISO_BR.slice(8, 10);
 
   const { data: anivHoje } = await supabase
     .from('alunos').select('id, nome, data_nascimento')
