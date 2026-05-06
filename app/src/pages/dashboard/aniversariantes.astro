@@ -1,0 +1,221 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role === 'aluno' || profile.role === 'saas_admin') {
+  return Astro.redirect('/dashboard');
+}
+
+// Data atual em horário de Brasília
+const hojeISO_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const anoAtual   = parseInt(hojeISO_BR.slice(0, 4));
+const mesAtual   = hojeISO_BR.slice(5, 7);
+const diaAtual   = hojeISO_BR.slice(8, 10);
+const hojeMMDD   = `${mesAtual}-${diaAtual}`;
+
+// MM-DD dos próximos 7 dias (incluindo hoje)
+const agora = new Date();
+const diasDaSemana = Array.from({ length: 7 }, (_, i) => {
+  const d = new Date(agora.getTime() + i * 24 * 60 * 60 * 1000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d).slice(5, 10);
+});
+
+// Busca todos alunos ativos com data de nascimento
+const { data: todosAlunos } = await supabase
+  .from('alunos')
+  .select('id, nome, data_nascimento, categorias_alunos(nome, cor)')
+  .eq('academia_id', profile.academia_id!)
+  .eq('status', 'ativo')
+  .not('data_nascimento', 'is', null)
+  .order('nome');
+
+// Formata MM-DD para exibição (ex: "04 de maio")
+function fmtAniversario(mmdd: string): string {
+  const [mm, dd] = mmdd.split('-');
+  return new Date(`2000-${mm}-${dd}T12:00:00Z`).toLocaleDateString('pt-BR', {
+    day: '2-digit', month: 'long', timeZone: 'UTC',
+  });
+}
+
+// Dia da semana (ex: "segunda-feira")
+function diaDaSemana(mmdd: string): string {
+  const [mm, dd] = mmdd.split('-');
+  return new Date(`${anoAtual}-${mm}-${dd}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long' });
+}
+
+// Grupos
+const anivHoje   = (todosAlunos ?? []).filter(a =>
+  (a.data_nascimento as string).slice(5) === hojeMMDD
+);
+const anivSemana = (todosAlunos ?? [])
+  .filter(a => {
+    const mmdd = (a.data_nascimento as string).slice(5);
+    return diasDaSemana.includes(mmdd) && mmdd !== hojeMMDD;
+  })
+  .sort((a, b) =>
+    diasDaSemana.indexOf((a.data_nascimento as string).slice(5)) -
+    diasDaSemana.indexOf((b.data_nascimento as string).slice(5))
+  );
+const anivMes = (todosAlunos ?? [])
+  .filter(a => {
+    const mmdd = (a.data_nascimento as string).slice(5);
+    return mmdd.startsWith(mesAtual + '-') && !diasDaSemana.includes(mmdd);
+  })
+  .sort((a, b) =>
+    parseInt((a.data_nascimento as string).slice(8)) -
+    parseInt((b.data_nascimento as string).slice(8))
+  );
+
+const nomeMes = new Date(`${anoAtual}-${mesAtual}-01T12:00:00Z`).toLocaleDateString('pt-BR', {
+  month: 'long', timeZone: 'UTC',
+});
+---
+
+<DashboardLayout title="Aniversariantes">
+  <div class="space-y-6">
+
+    <!-- Header -->
+    <div>
+      <h1 class="text-2xl font-bold text-white">Aniversariantes</h1>
+      <p class="text-zinc-400 text-sm mt-0.5 capitalize">Alunos que fazem aniversário em {nomeMes}</p>
+    </div>
+
+    <!-- ── HOJE ── -->
+    {anivHoje.length > 0 && (
+      <div class="relative overflow-hidden rounded-2xl border border-primary/40 bg-gradient-to-br from-primary/15 via-primary/5 to-transparent p-6">
+        <div class="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/20 blur-3xl" />
+        <div class="relative">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-2xl">🎂</span>
+            <h2 class="text-lg font-bold text-primary uppercase tracking-wider">
+              {anivHoje.length === 1 ? 'Aniversário Hoje!' : `${anivHoje.length} Aniversários Hoje!`}
+            </h2>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {anivHoje.map((a: any) => {
+              const cat = a.categorias_alunos;
+              return (
+                <a href={`/dashboard/alunos/${a.id}`}
+                  class="flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 hover:bg-primary/20 transition-colors group">
+                  <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/20 border-2 border-primary/40 text-primary text-lg font-bold">
+                    {a.nome.charAt(0).toUpperCase()}
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="font-bold text-white truncate group-hover:text-primary transition-colors">{a.nome}</p>
+                    <p class="text-primary text-sm font-medium">🎉 Parabéns!</p>
+                    {cat && (
+                      <span class="inline-flex items-center gap-1 text-[10px] text-zinc-400 mt-0.5">
+                        <span class="w-1.5 h-1.5 rounded-full" style={`background:${cat.cor}`}></span>
+                        {cat.nome}
+                      </span>
+                    )}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    )}
+
+    <!-- ── ESTA SEMANA ── -->
+    {anivSemana.length > 0 && (
+      <div>
+        <h2 class="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <span class="text-base">📅</span> Esta Semana
+        </h2>
+        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {anivSemana.map((a: any) => {
+            const mmdd    = (a.data_nascimento as string).slice(5);
+            const cat     = a.categorias_alunos;
+            const diasAte = diasDaSemana.indexOf(mmdd);
+            return (
+              <a href={`/dashboard/alunos/${a.id}`}
+                class="flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 hover:border-zinc-500 transition-colors group">
+                <div class="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg bg-zinc-800 text-center">
+                  <span class="text-sm font-bold text-white leading-none">{mmdd.slice(3)}</span>
+                  <span class="text-[9px] text-zinc-500 uppercase">
+                    {fmtAniversario(mmdd).split(' de ')[1]}
+                  </span>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="font-medium text-white truncate group-hover:text-primary transition-colors text-sm">{a.nome}</p>
+                  <p class="text-xs text-zinc-500 capitalize">
+                    {diasAte === 1 ? 'Amanhã' : diaDaSemana(mmdd)}
+                  </p>
+                  {cat && (
+                    <span class="inline-flex items-center gap-1 text-[10px] text-zinc-500 mt-0.5">
+                      <span class="w-1.5 h-1.5 rounded-full" style={`background:${cat.cor}`}></span>
+                      {cat.nome}
+                    </span>
+                  )}
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    <!-- ── ESTE MÊS ── -->
+    {anivMes.length > 0 && (
+      <div>
+        <h2 class="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2 capitalize">
+          <span class="text-base">🎉</span> Restante de {nomeMes}
+        </h2>
+        <div class="border border-zinc-700 rounded-xl overflow-hidden">
+          {anivMes.map((a: any, i: number) => {
+            const mmdd = (a.data_nascimento as string).slice(5);
+            const cat  = a.categorias_alunos;
+            return (
+              <a href={`/dashboard/alunos/${a.id}`}
+                class:list={[
+                  'flex items-center gap-3 px-4 py-3 hover:bg-zinc-800/50 transition-colors group',
+                  i < anivMes.length - 1 ? 'border-b border-zinc-800' : '',
+                ]}>
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
+                  <span class="text-sm font-bold text-zinc-200">{mmdd.slice(3)}</span>
+                </div>
+                <div class="flex-1 min-w-0 flex items-center gap-3">
+                  <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-700 text-zinc-300 text-xs font-bold">
+                    {a.nome.charAt(0).toUpperCase()}
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-white truncate group-hover:text-primary transition-colors">{a.nome}</p>
+                    {cat && (
+                      <span class="inline-flex items-center gap-1 text-[10px] text-zinc-500">
+                        <span class="w-1.5 h-1.5 rounded-full" style={`background:${cat.cor}`}></span>
+                        {cat.nome}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p class="text-sm text-zinc-400 shrink-0">{fmtAniversario(mmdd)}</p>
+              </a>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    <!-- Empty state -->
+    {anivHoje.length === 0 && anivSemana.length === 0 && anivMes.length === 0 && (
+      <div class="border border-zinc-700 rounded-xl p-12 text-center">
+        <span class="text-4xl block mb-3">🎂</span>
+        <p class="text-zinc-400 text-lg">Nenhum aniversariante este mês</p>
+        <p class="text-zinc-600 text-sm mt-1">Certifique-se de cadastrar a data de nascimento dos alunos.</p>
+      </div>
+    )}
+
+  </div>
+</DashboardLayout>
