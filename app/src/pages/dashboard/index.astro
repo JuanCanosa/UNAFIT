@@ -294,45 +294,50 @@ const isSaasAdmin = profile?.role === 'saas_admin';
   <!-- DASHBOARD ACADEMIA (dono / colaborador / aluno) -->
   {!isSaasAdmin && (
     <div>
+      {/* ── Aniversário HOJE — destaque piscante ── */}
       {aniversariantesHoje.length > 0 && (
-        <div class="mb-4 bg-amber-900/30 border border-amber-500/50 rounded-xl px-5 py-4 flex items-start gap-4">
-          <span class="text-2xl shrink-0">🎂</span>
-          <div class="min-w-0">
-            <p class="text-amber-300 font-semibold text-sm">
+        <div class="bday-flash mb-4 relative overflow-hidden rounded-xl border-2 border-primary px-5 py-4 flex items-center gap-4">
+          <div class="pointer-events-none absolute inset-0 bday-glow rounded-xl" />
+          <span class="text-3xl shrink-0 bday-bounce">🎂</span>
+          <div class="min-w-0 flex-1 relative">
+            <p class="text-primary font-bold text-base">
               {aniversariantesHoje.length === 1 ? 'Aniversário hoje!' : `${aniversariantesHoje.length} aniversários hoje!`}
             </p>
-            <p class="text-amber-200/80 text-sm mt-0.5">
+            <p class="text-primary/80 text-sm mt-0.5 truncate">
               {aniversariantesHoje.map((a, i) => (
                 <>
-                  <a href={`/dashboard/alunos/${a.id}`} class="hover:text-amber-100 underline underline-offset-2">{a.nome}</a>
+                  <a href={`/dashboard/alunos/${a.id}`} class="hover:text-white underline underline-offset-2 font-medium">{a.nome}</a>
                   {i < aniversariantesHoje.length - 1 ? ', ' : ''}
                 </>
               ))}
             </p>
           </div>
+          <a href="/dashboard/aniversariantes"
+            class="shrink-0 text-xs text-primary/70 hover:text-primary border border-primary/30 px-3 py-1.5 rounded-lg transition-colors relative">
+            Ver todos →
+          </a>
         </div>
       )}
 
-      {aniversariantesMes.length > 0 && (
-        <div class="mb-6 bg-blue-900/20 border border-blue-600/30 rounded-xl px-5 py-4">
-          <div class="flex items-center gap-3 mb-3">
-            <span class="text-xl">🎉</span>
-            <p class="text-blue-300 font-semibold text-sm">
-              {aniversariantesMes.length} aniversariante{aniversariantesMes.length !== 1 ? 's' : ''} este mês
-            </p>
+      {/* ── Aniversariantes do MÊS ── */}
+      {profile?.role !== 'aluno' && (aniversariantesHoje.length > 0 || aniversariantesMes.length > 0) && (
+        <div class="mb-6 flex items-center justify-between rounded-xl border border-zinc-700 bg-zinc-900/60 px-5 py-3">
+          <div class="flex items-center gap-3">
+            <span class="text-lg">🎉</span>
+            <div>
+              <p class="text-sm font-semibold text-white">
+                {aniversariantesHoje.length + aniversariantesMes.length} aniversariante{(aniversariantesHoje.length + aniversariantesMes.length) !== 1 ? 's' : ''} este mês
+              </p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                {aniversariantesMes.slice(0, 3).map(a => a.nome.split(' ')[0]).join(', ')}
+                {aniversariantesMes.length > 3 ? ` e mais ${aniversariantesMes.length - 3}…` : ''}
+              </p>
+            </div>
           </div>
-          <div class="flex flex-wrap gap-2">
-            {aniversariantesMes.map(a => {
-              const diaAniv = a.data_nascimento.slice(8, 10);
-              return (
-                <a href={`/dashboard/alunos/${a.id}`}
-                  class="inline-flex items-center gap-1.5 rounded-lg border border-blue-600/30 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-800/40 transition-colors">
-                  <span class="font-semibold text-blue-300">dia {diaAniv}</span>
-                  {a.nome.split(' ')[0]}
-                </a>
-              );
-            })}
-          </div>
+          <a href="/dashboard/aniversariantes"
+            class="text-xs text-primary hover:text-primary/80 border border-primary/20 px-3 py-1.5 rounded-lg transition-colors">
+            Ver mural →
+          </a>
         </div>
       )}
 
@@ -437,3 +442,31 @@ const isSaasAdmin = profile?.role === 'saas_admin';
     </div>
   )}
 </DashboardLayout>
+
+<style>
+  /* Banner pisca-pisca para aniversário do dia */
+  @keyframes bday-border {
+    0%, 100% { border-color: hsl(var(--primary) / 0.5); box-shadow: 0 0 0 0 hsl(var(--primary) / 0); }
+    50%       { border-color: hsl(var(--primary) / 1);   box-shadow: 0 0 18px 4px hsl(var(--primary) / 0.25); }
+  }
+  @keyframes bday-bg {
+    0%, 100% { background: hsl(var(--primary) / 0.05); }
+    50%       { background: hsl(var(--primary) / 0.12); }
+  }
+  @keyframes bday-bounce {
+    0%, 100% { transform: translateY(0); }
+    40%       { transform: translateY(-6px); }
+    60%       { transform: translateY(-3px); }
+  }
+  .bday-flash {
+    animation: bday-border 1.6s ease-in-out infinite, bday-bg 1.6s ease-in-out infinite;
+  }
+  .bday-glow {
+    background: radial-gradient(ellipse at center, hsl(var(--primary) / 0.08) 0%, transparent 70%);
+    animation: bday-bg 1.6s ease-in-out infinite;
+  }
+  .bday-bounce {
+    display: inline-block;
+    animation: bday-bounce 1.6s ease-in-out infinite;
+  }
+</style>
