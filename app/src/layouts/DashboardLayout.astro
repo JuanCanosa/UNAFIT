@@ -18,9 +18,7 @@ if (authError || !user) {
   return Astro.redirect('/login');
 }
 
-// Admin client garante leitura do perfil sem bloqueio de RLS
-const adminForLayout = createSupabaseAdminClient();
-const { data: profile } = await adminForLayout
+const { data: profile } = await supabase
   .from('profiles')
   .select('role, nome_completo, academia_id, ativo')
   .eq('id', user.id)
