@@ -8,11 +8,15 @@ const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 if (!user) return Astro.redirect('/login');
 
-const { data: profile } = await supabase
+// Usa adminClient para garantir leitura do perfil independente de RLS
+const adminClientDash = createSupabaseAdminClient();
+const { data: profile } = await adminClientDash
   .from('profiles')
   .select('role, nome_completo, academia_id')
   .eq('id', user.id)
   .single();
+
+if (!profile) return Astro.redirect('/login');
 
 const hoje = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 const hojeISO = new Date().toISOString().split('T')[0];
