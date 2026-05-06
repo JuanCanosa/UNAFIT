@@ -43,20 +43,30 @@ if (Astro.request.method === 'POST') {
           ? 'E-mail ou senha incorretos.'
           : 'Erro ao entrar. Tente novamente.';
     } else {
-      // Verifica se o aluno pertence a múltiplas academias
       const { data: { user: loggedUser } } = await supabase.auth.getUser();
       if (loggedUser) {
         const adminClient = createSupabaseAdminClient();
-        const { count } = await adminClient
-          .from('aluno_academias')
-          .select('id', { count: 'exact', head: true })
-          .eq('profile_id', loggedUser.id)
-          .eq('ativo', true);
-        if ((count ?? 0) > 1) {
-          return Astro.redirect('/dashboard/selecionar-academia');
+
+        // Verifica se a conta está ativa
+        const { data: profileLogin, error: profileErr } = await adminClient
+          .from('profiles').select('ativo').eq('id', loggedUser.id).single();
+
+        if (profileLogin && !profileLogin.ativo) {
+          await supabase.auth.signOut();
+          errorMessage = 'Sua conta foi desativada. Entre em contato com o responsável pela academia.';
+        } else if (!profileErr) {
+          // Verifica se o aluno pertence a múltiplas academias
+          const { count } = await adminClient
+            .from('aluno_academias')
+            .select('id', { count: 'exact', head: true })
+            .eq('profile_id', loggedUser.id)
+            .eq('ativo', true);
+          if ((count ?? 0) > 1) {
+            return Astro.redirect('/dashboard/selecionar-academia');
+          }
+          return Astro.redirect('/dashboard');
         }
       }
-      return Astro.redirect('/dashboard');
     }
   }
 }
