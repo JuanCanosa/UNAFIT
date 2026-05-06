@@ -14,8 +14,8 @@ const { data: profile } = await supabase
   .eq('id', user.id)
   .single();
 
-// Guarda segura: evita crash se RLS bloquear a leitura do perfil
-if (!profile) return Astro.redirect('/login');
+// Nota: NÃO usar return Astro.redirect() aqui — DashboardLayout já iniciou
+// o streaming da resposta. Usar acesso null-safe nas queries abaixo.
 
 const hoje = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 const hojeISO = new Date().toISOString().split('T')[0];
@@ -104,7 +104,9 @@ let totalPresencasNoMes = 0;
 let aniversariantesHoje: { id: string; nome: string }[] = [];
 let aniversariantesMes:  { id: string; nome: string; data_nascimento: string }[] = [];
 
-if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
+const academiaId = profile?.academia_id ?? null;
+
+if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin' && academiaId) {
   const hojeISO_BR  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
   const inicioMesISO = hojeISO_BR.slice(0, 7) + '-01';
 
@@ -115,13 +117,13 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
     { count: checkinsmes },
   ] = await Promise.all([
     supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
-      .eq('academia_id', profile!.academia_id!).eq('data_aula', hojeISO),
+      .eq('academia_id', academiaId).eq('data_aula', hojeISO),
     supabase.from('checkins').select('id', { count: 'exact', head: true })
-      .eq('academia_id', profile!.academia_id!).gte('feito_em', `${hojeISO}T00:00:00`),
+      .eq('academia_id', academiaId).gte('feito_em', `${hojeISO}T00:00:00`),
     supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
-      .eq('academia_id', profile!.academia_id!).gte('data_aula', inicioMesISO).lte('data_aula', hojeISO_BR),
+      .eq('academia_id', academiaId).gte('data_aula', inicioMesISO).lte('data_aula', hojeISO_BR),
     supabase.from('checkins').select('id', { count: 'exact', head: true })
-      .eq('academia_id', profile!.academia_id!).gte('feito_em', `${inicioMesISO}T00:00:00`),
+      .eq('academia_id', academiaId).gte('feito_em', `${inicioMesISO}T00:00:00`),
   ]);
 
   totalAulasHoje      = aulas ?? 0;
@@ -137,7 +139,7 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
   const { data: alunosComAniv } = await supabase
     .from('alunos')
     .select('id, nome, data_nascimento')
-    .eq('academia_id', profile!.academia_id!)
+    .eq('academia_id', academiaId)
     .eq('status', 'ativo')
     .not('data_nascimento', 'is', null);
 
