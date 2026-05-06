@@ -126,25 +126,23 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin') {
   totalAulasNoMes     = aulasmes ?? 0;
   totalPresencasNoMes = checkinsmes ?? 0;
 
-  // Usa horário de Brasília (já definido acima como hojeISO_BR)
-  const mes = hojeISO_BR.slice(5, 7);
-  const dia = hojeISO_BR.slice(8, 10);
+  // Filtra aniversariantes em JS (igual à página /dashboard/aniversariantes)
+  const mes    = hojeISO_BR.slice(5, 7);
+  const dia    = hojeISO_BR.slice(8, 10);
+  const hojeMMDD = `${mes}-${dia}`;
 
-  const { data: anivHoje } = await supabase
-    .from('alunos').select('id, nome, data_nascimento')
-    .eq('academia_id', profile!.academia_id!).eq('status', 'ativo')
-    .not('data_nascimento', 'is', null).filter('data_nascimento', 'like', `%-${mes}-${dia}`);
-  aniversariantesHoje = anivHoje ?? [];
+  const { data: alunosComAniv } = await supabase
+    .from('alunos')
+    .select('id, nome, data_nascimento')
+    .eq('academia_id', profile!.academia_id!)
+    .eq('status', 'ativo')
+    .not('data_nascimento', 'is', null);
 
-  const { data: anivMes } = await supabase
-    .from('alunos').select('id, nome, data_nascimento')
-    .eq('academia_id', profile!.academia_id!).eq('status', 'ativo')
-    .not('data_nascimento', 'is', null)
-    .filter('data_nascimento', 'like', `%-${mes}-%`)
-    .not('data_nascimento', 'like', `%-${mes}-${dia}`);
-  aniversariantesMes = (anivMes ?? []).sort((a, b) =>
-    Number(a.data_nascimento.slice(8, 10)) - Number(b.data_nascimento.slice(8, 10))
-  );
+  const todos = alunosComAniv ?? [];
+  aniversariantesHoje = todos.filter(a => a.data_nascimento.slice(5) === hojeMMDD);
+  aniversariantesMes  = todos
+    .filter(a => a.data_nascimento.slice(5, 7) === mes && a.data_nascimento.slice(5) !== hojeMMDD)
+    .sort((a, b) => Number(a.data_nascimento.slice(8, 10)) - Number(b.data_nascimento.slice(8, 10)));
 }
 
 const statusFaturaStyle: Record<string, string> = {
