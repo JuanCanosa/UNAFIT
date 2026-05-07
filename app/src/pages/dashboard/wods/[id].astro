@@ -38,7 +38,7 @@ const { data: wodExercicios } = await supabase
 
 const { data: grupos } = await supabase
   .from('wod_grupos')
-  .select('id, rounds, ordem')
+  .select('id, rounds, nome, tempo, ordem')
   .eq('wod_id', wodId)
   .order('ordem');
 
