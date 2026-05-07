@@ -342,49 +342,46 @@ const statusCores: Record<string, string> = {
     </div>
   </div>
 
-  <script>
+  <script is:inline>
     function fecharModal() {
-      document.getElementById('modal-plano')!.classList.add('hidden');
+      document.getElementById('modal-plano').classList.add('hidden');
     }
 
     function abrirModalNovo() {
-      const modal = document.getElementById('modal-plano')!;
-      document.getElementById('modal-titulo')!.textContent = 'Novo Plano SaaS';
-      (document.getElementById('form-action') as HTMLInputElement).value = 'criar_plano';
-      (document.getElementById('form-plano-id') as HTMLInputElement).value = '';
-      (document.getElementById('f-nome') as HTMLInputElement).value = '';
-      (document.getElementById('f-descricao') as HTMLInputElement).value = '';
-      (document.getElementById('f-valor') as HTMLInputElement).value = '';
-      (document.getElementById('f-limite') as HTMLInputElement).value = '';
-      const cortesia = document.getElementById('f-cortesia') as HTMLInputElement;
-      cortesia.checked = false;
+      const modal = document.getElementById('modal-plano');
+      document.getElementById('modal-titulo').textContent = 'Novo Plano SaaS';
+      document.getElementById('form-action').value = 'criar_plano';
+      document.getElementById('form-plano-id').value = '';
+      document.getElementById('f-nome').value = '';
+      document.getElementById('f-descricao').value = '';
+      document.getElementById('f-valor').value = '';
+      document.getElementById('f-limite').value = '';
+      document.getElementById('f-cortesia').checked = false;
       toggleCortesia(false);
       modal.classList.remove('hidden');
     }
 
-    function abrirModalEditar(p: any) {
-      const modal = document.getElementById('modal-plano')!;
-      document.getElementById('modal-titulo')!.textContent = `Editar — ${p.nome}`;
-      (document.getElementById('form-action') as HTMLInputElement).value = 'editar_plano';
-      (document.getElementById('form-plano-id') as HTMLInputElement).value = p.id;
-      (document.getElementById('f-nome') as HTMLInputElement).value = p.nome ?? '';
-      (document.getElementById('f-descricao') as HTMLInputElement).value = p.descricao ?? '';
-      (document.getElementById('f-limite') as HTMLInputElement).value = p.limite_alunos ?? '';
+    function abrirModalEditar(p) {
+      const modal = document.getElementById('modal-plano');
+      document.getElementById('modal-titulo').textContent = 'Editar — ' + p.nome;
+      document.getElementById('form-action').value = 'editar_plano';
+      document.getElementById('form-plano-id').value = p.id;
+      document.getElementById('f-nome').value = p.nome || '';
+      document.getElementById('f-descricao').value = p.descricao || '';
+      document.getElementById('f-limite').value = p.limite_alunos || '';
 
       const isFree = Number(p.valor) === 0;
-      const cortesia = document.getElementById('f-cortesia') as HTMLInputElement;
-      cortesia.checked = isFree;
+      document.getElementById('f-cortesia').checked = isFree;
       toggleCortesia(isFree);
       if (!isFree) {
-        (document.getElementById('f-valor') as HTMLInputElement).value =
-          Number(p.valor).toFixed(2).replace('.', ',');
+        document.getElementById('f-valor').value = Number(p.valor).toFixed(2).replace('.', ',');
       }
       modal.classList.remove('hidden');
     }
 
-    function toggleCortesia(checked: boolean) {
-      const valorSection = document.getElementById('valor-section')!;
-      const valorInput   = document.getElementById('f-valor') as HTMLInputElement;
+    function toggleCortesia(checked) {
+      const valorSection = document.getElementById('valor-section');
+      const valorInput   = document.getElementById('f-valor');
       if (checked) {
         valorSection.style.opacity = '0.4';
         valorSection.style.pointerEvents = 'none';
@@ -398,9 +395,8 @@ const statusCores: Record<string, string> = {
       }
     }
 
-    // Fecha ao clicar fora
-    document.getElementById('modal-plano')?.addEventListener('click', e => {
-      if (e.target === e.currentTarget) fecharModal();
+    document.getElementById('modal-plano').addEventListener('click', function(e) {
+      if (e.target === this) fecharModal();
     });
   </script>
 </DashboardLayout>
