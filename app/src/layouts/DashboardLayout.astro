@@ -11,10 +11,11 @@ interface Props {
 
 const { title = 'UNAFIT' } = Astro.props;
 
-const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
-const { data: { user }, error: authError } = await supabase.auth.getUser();
+// Reusa o cliente e user criados no middleware — sem segundo getUser()
+const user     = Astro.locals.user;
+const supabase = Astro.locals.supabase ?? createSupabaseServerClient(Astro.request, Astro.cookies);
 
-if (authError || !user) {
+if (!user) {
   return Astro.redirect('/login');
 }
 

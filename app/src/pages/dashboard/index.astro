@@ -4,8 +4,9 @@ import Card from '@/components/ui/Card.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
-const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
-const { data: { user } } = await supabase.auth.getUser();
+// Reusa cliente e user do middleware — evita segundo getUser() durante streaming
+const user     = Astro.locals.user;
+const supabase = Astro.locals.supabase ?? createSupabaseServerClient(Astro.request, Astro.cookies);
 if (!user) return Astro.redirect('/login');
 
 const { data: profile } = await supabase
