@@ -22,23 +22,24 @@ if (Astro.request.method === 'POST') {
   const action = form.get('action') as string;
 
   if (action === 'criar_plano' || action === 'editar_plano') {
-    const nome          = (form.get('nome') as string)?.trim();
-    const descricao     = (form.get('descricao') as string)?.trim();
-    const valor         = parseFloat(form.get('valor') as string);
+    const nome           = (form.get('nome') as string)?.trim();
+    const descricao      = (form.get('descricao') as string)?.trim();
+    const valor          = parseFloat(form.get('valor') as string);
     const vencimento_dia = parseInt(form.get('vencimento_dia') as string);
+    const modalidade     = (form.get('modalidade') as string)?.trim() || null;
 
     if (!nome || isNaN(valor) || isNaN(vencimento_dia)) {
       formError = 'Preencha todos os campos obrigatórios.';
     } else if (action === 'criar_plano') {
       const { error } = await supabase.from('planos').insert({
-        academia_id: profile.academia_id, nome, descricao: descricao || null, valor, vencimento_dia,
+        academia_id: profile.academia_id, nome, descricao: descricao || null, valor, vencimento_dia, modalidade,
       });
       if (error) formError = error.message;
       else return Astro.redirect('/dashboard/planos?saved=1');
     } else {
       const id = form.get('plano_id') as string;
       const { error } = await supabase.from('planos')
-        .update({ nome, descricao: descricao || null, valor, vencimento_dia })
+        .update({ nome, descricao: descricao || null, valor, vencimento_dia, modalidade })
         .eq('id', id).eq('academia_id', profile.academia_id!);
       if (error) formError = error.message;
       else return Astro.redirect('/dashboard/planos?saved=1');
@@ -94,10 +95,13 @@ if (Astro.request.method === 'POST') {
 
 const saved = new URL(Astro.request.url).searchParams.get('saved');
 
-const [{ data: planos }, { data: categorias }] = await Promise.all([
+const [{ data: planos }, { data: categorias }, { data: modalRows }] = await Promise.all([
   supabase.from('planos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
   supabase.from('categorias_alunos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
+  supabase.from('aulas_agenda').select('modalidade').eq('academia_id', profile.academia_id!),
 ]);
+// Modalidades únicas usadas nas aulas desta academia
+const modalidadesUnicas = [...new Set((modalRows ?? []).map((m: any) => m.modalidade).filter(Boolean))].sort();
 ---
 
 <DashboardLayout title="Planos & Categorias">
@@ -146,6 +150,19 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
                 </span>
               </div>
 
+              <!-- Modalidade restrita -->
+              {(p as any).modalidade && (
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-primary/10 border border-primary/30 text-primary font-medium">
+                    🎯 {(p as any).modalidade}
+                  </span>
+                  <span class="text-[10px] text-zinc-500">apenas esta modalidade</span>
+                </div>
+              )}
+              {!(p as any).modalidade && (
+                <span class="text-[10px] text-zinc-600">✦ Acesso a todas as modalidades</span>
+              )}
+
               <!-- Valor / vencimento -->
               <div class="flex items-center justify-between text-sm border-t border-zinc-800 pt-2">
                 <span class="text-green-400 font-bold text-base">
@@ -162,7 +179,8 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
                   data-nome={p.nome}
                   data-descricao={p.descricao ?? ''}
                   data-valor={String(p.valor)}
-                  data-vencimento={String(p.vencimento_dia)}>
+                  data-vencimento={String(p.vencimento_dia)}
+                  data-modalidade={(p as any).modalidade ?? ''}>
                   Editar
                 </button>
                 <form method="POST" class="contents">
@@ -267,6 +285,17 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
               class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
           </div>
         </div>
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Modalidade restrita</label>
+          <input id="plano-modalidade" name="modalidade"
+            list="lista-modalidades"
+            placeholder="Ex: CrossFit  (vazio = acesso a todas)"
+            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
+          <datalist id="lista-modalidades">
+            {modalidadesUnicas.map((m: string) => <option value={m} />)}
+          </datalist>
+          <p class="text-xs text-zinc-600 mt-1">Alunos deste plano só verão check-ins desta modalidade.</p>
+        </div>
         <div class="flex gap-2 pt-2">
           <button id="btn-cancelar-plano" type="button"
             class="flex-1 py-2 border border-zinc-600 text-zinc-300 hover:border-zinc-400 rounded-lg text-sm">Cancelar</button>
@@ -336,12 +365,13 @@ const [{ data: planos }, { data: categorias }] = await Promise.all([
   document.querySelectorAll('.btn-editar-plano').forEach((btn) => {
     btn.addEventListener('click', () => {
       const b = btn as HTMLButtonElement;
-      val('plano-action',    'editar_plano');
-      val('plano-id',        b.dataset.id!);
-      val('plano-nome',      b.dataset.nome!);
-      val('plano-descricao', b.dataset.descricao!);
-      val('plano-valor',     b.dataset.valor!);
+      val('plano-action',     'editar_plano');
+      val('plano-id',         b.dataset.id!);
+      val('plano-nome',       b.dataset.nome!);
+      val('plano-descricao',  b.dataset.descricao!);
+      val('plano-valor',      b.dataset.valor!);
       val('plano-vencimento', b.dataset.vencimento!);
+      val('plano-modalidade', b.dataset.modalidade!);
       el('modal-plano-titulo').textContent = 'Editar Plano';
       abrirModalPlano();
     });
