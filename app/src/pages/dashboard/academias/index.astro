@@ -108,10 +108,12 @@ const { data: academias } = await adminClient
 // Conta por fontes de verdade: alunos e colaboradores nas suas tabelas; donos em profiles
 const [
   { data: alunosRows },
+  { data: alunosAtivosRows },
   { data: colaboradoresRows },
   { data: donosRows },
 ] = await Promise.all([
   adminClient.from('alunos').select('academia_id'),
+  adminClient.from('alunos').select('academia_id').eq('status', 'ativo'),
   adminClient.from('colaboradores').select('academia_id'),
   adminClient.from('profiles').select('academia_id').eq('role', 'dono'),
 ]);
@@ -123,9 +125,10 @@ function buildCountMap(rows: { academia_id: string }[] | null): Record<string, n
   }, {});
 }
 
-const alunosPorAcademia       = buildCountMap(alunosRows);
-const colaboradoresPorAcademia = buildCountMap(colaboradoresRows);
-const donosPorAcademia         = buildCountMap(donosRows);
+const alunosPorAcademia        = buildCountMap(alunosRows);
+const alunosAtivosPorAcademia  = buildCountMap(alunosAtivosRows);
+const colaboradoresPorAcademia  = buildCountMap(colaboradoresRows);
+const donosPorAcademia          = buildCountMap(donosRows);
 
 // Stats globais
 const totalAcademias = academias?.length ?? 0;
@@ -190,9 +193,10 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
       </Card>
     ) : academias.map((a: any) => {
       const assin = a.saas_assinaturas?.[0];
-      const nAlunos       = alunosPorAcademia[a.id] ?? 0;
-      const nColaboradores = colaboradoresPorAcademia[a.id] ?? 0;
-      const nDonos        = donosPorAcademia[a.id] ?? 0;
+      const nAlunos        = alunosPorAcademia[a.id] ?? 0;
+      const nAtivos        = alunosAtivosPorAcademia[a.id] ?? 0;
+      const nColaboradores  = colaboradoresPorAcademia[a.id] ?? 0;
+      const nDonos         = donosPorAcademia[a.id] ?? 0;
       return (
         <div class="rounded-xl border border-border bg-card p-4 hover:border-primary/20 transition-colors">
           <div class="flex items-start gap-4">
@@ -229,8 +233,12 @@ const mrr = (academias ?? []).reduce((sum: number, a: any) => {
                   <span>{[a.endereco_cidade, a.endereco_estado].filter(Boolean).join(' — ')}</span>
                 )}
               </div>
-              <div class="flex gap-4 mt-2 text-xs text-muted-foreground">
-                <span><strong class="text-foreground">{nAlunos}</strong> aluno{nAlunos !== 1 ? 's' : ''}</span>
+              <div class="flex gap-4 mt-2 text-xs text-muted-foreground flex-wrap">
+                <span>
+                  <strong class="text-foreground">{nAtivos}</strong>
+                  <span class="text-green-500"> ativos</span>
+                  <span class="text-muted-foreground/50"> / {nAlunos} aluno{nAlunos !== 1 ? 's' : ''}</span>
+                </span>
                 <span><strong class="text-foreground">{nColaboradores}</strong> colaborador{nColaboradores !== 1 ? 'es' : ''}</span>
                 <span><strong class="text-foreground">{nDonos}</strong> dono{nDonos !== 1 ? 's' : ''}</span>
                 <span class="text-muted-foreground/60">Criada {new Date(a.criado_em).toLocaleDateString('pt-BR')}</span>

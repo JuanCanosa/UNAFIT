@@ -1,0 +1,246 @@
+---
+/**
+ * /dashboard/planos-saas — Gestão dos planos SaaS (saas_admin only)
+ * Lista planos, academias por plano, uso e MRR por tier.
+ */
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseAdminClient } from '@/lib/supabase';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+if (!profile || profile.role !== 'saas_admin') return Astro.redirect('/dashboard');
+
+const admin = createSupabaseAdminClient();
+
+let sucesso = '';
+let erro = '';
+
+// ── POST handlers ─────────────────────────────────────────────────────────────
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'criar_plano') {
+    const nome         = (form.get('nome') as string)?.trim();
+    const descricao    = (form.get('descricao') as string)?.trim() || null;
+    const valor        = parseFloat((form.get('valor') as string)?.replace(',', '.'));
+    const limite_alunos = parseInt(form.get('limite_alunos') as string) || null;
+
+    if (!nome || isNaN(valor)) {
+      erro = 'Nome e valor são obrigatórios.';
+    } else {
+      const { error } = await admin.from('saas_planos').insert({ nome, descricao, valor, limite_alunos, ativo: true });
+      if (error) erro = error.message;
+      else sucesso = `Plano "${nome}" criado com sucesso!`;
+    }
+  }
+
+  if (action === 'toggle_plano') {
+    const plano_id = form.get('plano_id') as string;
+    const ativo    = form.get('ativo') === 'true';
+    await admin.from('saas_planos').update({ ativo: !ativo }).eq('id', plano_id);
+    sucesso = `Plano ${ativo ? 'desativado' : 'ativado'}.`;
+  }
+}
+
+// ── Dados ─────────────────────────────────────────────────────────────────────
+const [
+  { data: planos },
+  { data: assinaturas },
+] = await Promise.all([
+  admin.from('saas_planos').select('*').order('valor'),
+  admin.from('saas_assinaturas').select('saas_plano_id, status, academia_id'),
+]);
+
+// Agrupa assinaturas por plano
+const porPlano: Record<string, { total: number; ativas: number; mrr: number }> = {};
+for (const p of planos ?? []) {
+  porPlano[p.id] = { total: 0, ativas: 0, mrr: 0 };
+}
+for (const a of assinaturas ?? []) {
+  if (!porPlano[a.saas_plano_id]) continue;
+  porPlano[a.saas_plano_id].total++;
+  if (a.status === 'ativa') {
+    porPlano[a.saas_plano_id].ativas++;
+    const plano = (planos ?? []).find(p => p.id === a.saas_plano_id);
+    porPlano[a.saas_plano_id].mrr += Number(plano?.valor ?? 0);
+  }
+}
+
+const totalMRR = Object.values(porPlano).reduce((s, v) => s + v.mrr, 0);
+const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+const statusCores: Record<string, string> = {
+  ativa:     'border-green-600/40 text-green-400 bg-green-600/10',
+  trial:     'border-yellow-500/40 text-yellow-400 bg-yellow-500/10',
+  suspensa:  'border-red-600/40 text-red-400 bg-red-600/10',
+  cancelada: 'border-zinc-700 text-zinc-500 bg-zinc-800/50',
+};
+---
+
+<DashboardLayout title="Planos SaaS">
+  <div class="space-y-6">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-foreground">Planos SaaS</h1>
+        <p class="text-sm text-muted-foreground mt-0.5">Gerencie os planos de assinatura do UNAFIT</p>
+      </div>
+      <button onclick="document.getElementById('modal-novo-plano').classList.remove('hidden')"
+        class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+        + Novo Plano
+      </button>
+    </div>
+
+    {sucesso && <div class="rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">✓ {sucesso}</div>}
+    {erro    && <div class="rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">{erro}</div>}
+
+    <!-- MRR Global -->
+    <div class="rounded-xl border border-primary/20 bg-primary/5 p-5">
+      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">MRR Total</p>
+      <p class="text-4xl font-bold text-primary mt-1">{brl(totalMRR)}</p>
+      <p class="text-xs text-muted-foreground mt-1">
+        {(assinaturas ?? []).filter(a => a.status === 'ativa').length} assinaturas ativas
+      </p>
+    </div>
+
+    <!-- Grid de planos -->
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {(planos ?? []).map((p: any) => {
+        const stats = porPlano[p.id] ?? { total: 0, ativas: 0, mrr: 0 };
+        return (
+          <div class:list={[
+            'rounded-xl border p-5 space-y-4 transition-colors',
+            p.ativo ? 'border-border bg-card' : 'border-border/40 bg-card/50 opacity-60',
+          ]}>
+            <!-- Header do plano -->
+            <div class="flex items-start justify-between">
+              <div>
+                <h3 class="text-base font-bold text-foreground">{p.nome}</h3>
+                {p.descricao && <p class="text-xs text-muted-foreground mt-0.5">{p.descricao}</p>}
+              </div>
+              <span class={`text-xs px-2 py-0.5 rounded-full border ${p.ativo ? 'border-green-600/30 text-green-400 bg-green-600/10' : 'border-zinc-700 text-zinc-500'}`}>
+                {p.ativo ? 'Ativo' : 'Inativo'}
+              </span>
+            </div>
+
+            <!-- Valor -->
+            <div>
+              <p class="text-2xl font-bold text-primary">{brl(Number(p.valor))}</p>
+              <p class="text-xs text-muted-foreground">/mês · {p.limite_alunos ? `até ${p.limite_alunos} alunos` : 'alunos ilimitados'}</p>
+            </div>
+
+            <!-- Stats -->
+            <div class="grid grid-cols-3 gap-2 pt-2 border-t border-border/50">
+              <div class="text-center">
+                <p class="text-lg font-bold text-foreground">{stats.ativas}</p>
+                <p class="text-[10px] text-muted-foreground uppercase tracking-wider">Ativas</p>
+              </div>
+              <div class="text-center">
+                <p class="text-lg font-bold text-foreground">{stats.total}</p>
+                <p class="text-[10px] text-muted-foreground uppercase tracking-wider">Total</p>
+              </div>
+              <div class="text-center">
+                <p class="text-sm font-bold text-primary">{brl(stats.mrr)}</p>
+                <p class="text-[10px] text-muted-foreground uppercase tracking-wider">MRR</p>
+              </div>
+            </div>
+
+            <!-- Ação -->
+            <form method="POST">
+              <input type="hidden" name="action" value="toggle_plano" />
+              <input type="hidden" name="plano_id" value={p.id} />
+              <input type="hidden" name="ativo" value={String(p.ativo)} />
+              <button type="submit"
+                onclick={`return confirm('${p.ativo ? 'Desativar' : 'Ativar'} o plano ${p.nome}?')`}
+                class={`w-full text-xs py-1.5 rounded-lg border transition-colors ${p.ativo
+                  ? 'border-red-800/40 text-red-400/70 hover:text-red-400 hover:border-red-700'
+                  : 'border-green-800/40 text-green-400/70 hover:text-green-400 hover:border-green-700'
+                }`}>
+                {p.ativo ? 'Desativar' : 'Reativar'}
+              </button>
+            </form>
+          </div>
+        );
+      })}
+    </div>
+
+    <!-- Academias por status de assinatura -->
+    <div class="rounded-xl border border-border bg-card p-5">
+      <h2 class="text-sm font-semibold text-foreground mb-4">Distribuição de Assinaturas</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {(['ativa', 'trial', 'suspensa', 'cancelada'] as const).map(status => {
+          const count = (assinaturas ?? []).filter((a: any) => a.status === status).length;
+          return (
+            <div class={`rounded-lg border px-4 py-3 text-center ${statusCores[status]}`}>
+              <p class="text-2xl font-bold">{count}</p>
+              <p class="text-xs capitalize mt-0.5">{status}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Modal Novo Plano -->
+  <div id="modal-novo-plano" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 p-6">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-lg font-bold text-foreground">Novo Plano SaaS</h2>
+        <button onclick="document.getElementById('modal-novo-plano').classList.add('hidden')"
+          class="text-muted-foreground hover:text-foreground">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="criar_plano" />
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Nome do Plano *</label>
+          <input name="nome" required placeholder="ex: Starter, Pro, Enterprise"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">Descrição</label>
+          <input name="descricao" placeholder="Breve descrição do plano"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Valor (R$) *</label>
+            <input name="valor" required placeholder="99,90"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Limite de Alunos</label>
+            <input name="limite_alunos" type="number" min="0" placeholder="ilimitado"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+        </div>
+        <div class="flex gap-3 pt-2 border-t border-border">
+          <button type="button" onclick="document.getElementById('modal-novo-plano').classList.add('hidden')"
+            class="flex-1 rounded-lg border border-border py-2 text-sm text-muted-foreground hover:text-foreground">
+            Cancelar
+          </button>
+          <button type="submit"
+            class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+            Criar Plano
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('modal-novo-plano')?.addEventListener('click', e => {
+      if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
+    });
+  </script>
+</DashboardLayout>
