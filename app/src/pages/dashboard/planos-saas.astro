@@ -1,11 +1,9 @@
 ---
 /**
- * /dashboard/planos-saas — Gestão dos planos SaaS (saas_admin only)
- * Lista planos, academias por plano, uso e MRR por tier.
+ * /dashboard/planos-saas — CRUD completo dos planos SaaS (saas_admin only)
  */
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import { createSupabaseAdminClient } from '@/lib/supabase';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseAdminClient, createSupabaseServerClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -24,18 +22,54 @@ if (Astro.request.method === 'POST') {
   const form   = await Astro.request.formData();
   const action = form.get('action') as string;
 
-  if (action === 'criar_plano') {
-    const nome         = (form.get('nome') as string)?.trim();
-    const descricao    = (form.get('descricao') as string)?.trim() || null;
-    const valor        = parseFloat((form.get('valor') as string)?.replace(',', '.'));
+  function parsePlanoForm() {
+    const nome          = (form.get('nome') as string)?.trim();
+    const descricao     = (form.get('descricao') as string)?.trim() || null;
+    const valorRaw      = (form.get('valor') as string)?.replace(',', '.').trim();
+    const valor         = valorRaw === '' ? NaN : parseFloat(valorRaw);
     const limite_alunos = parseInt(form.get('limite_alunos') as string) || null;
+    const cortesia      = form.get('cortesia') === 'on';
+    return { nome, descricao, valor: cortesia ? 0 : valor, limite_alunos, cortesia };
+  }
 
+  if (action === 'criar_plano') {
+    const { nome, descricao, valor, limite_alunos } = parsePlanoForm();
     if (!nome || isNaN(valor)) {
       erro = 'Nome e valor são obrigatórios.';
     } else {
       const { error } = await admin.from('saas_planos').insert({ nome, descricao, valor, limite_alunos, ativo: true });
       if (error) erro = error.message;
       else sucesso = `Plano "${nome}" criado com sucesso!`;
+    }
+  }
+
+  if (action === 'editar_plano') {
+    const plano_id      = form.get('plano_id') as string;
+    const { nome, descricao, valor, limite_alunos } = parsePlanoForm();
+    if (!nome || isNaN(valor)) {
+      erro = 'Nome e valor são obrigatórios.';
+    } else {
+      const { error } = await admin.from('saas_planos')
+        .update({ nome, descricao, valor, limite_alunos })
+        .eq('id', plano_id);
+      if (error) erro = error.message;
+      else sucesso = `Plano "${nome}" atualizado!`;
+    }
+  }
+
+  if (action === 'excluir_plano') {
+    const plano_id = form.get('plano_id') as string;
+    // Verifica se há academias usando este plano
+    const { count } = await admin
+      .from('saas_assinaturas')
+      .select('id', { count: 'exact', head: true })
+      .eq('saas_plano_id', plano_id);
+    if ((count ?? 0) > 0) {
+      erro = 'Não é possível excluir: há academias vinculadas a este plano. Desative-o ao invés disso.';
+    } else {
+      const { error } = await admin.from('saas_planos').delete().eq('id', plano_id);
+      if (error) erro = error.message;
+      else sucesso = 'Plano excluído com sucesso.';
     }
   }
 
@@ -53,14 +87,11 @@ const [
   { data: assinaturas },
 ] = await Promise.all([
   admin.from('saas_planos').select('*').order('valor'),
-  admin.from('saas_assinaturas').select('saas_plano_id, status, academia_id'),
+  admin.from('saas_assinaturas').select('saas_plano_id, status'),
 ]);
 
-// Agrupa assinaturas por plano
 const porPlano: Record<string, { total: number; ativas: number; mrr: number }> = {};
-for (const p of planos ?? []) {
-  porPlano[p.id] = { total: 0, ativas: 0, mrr: 0 };
-}
+for (const p of planos ?? []) porPlano[p.id] = { total: 0, ativas: 0, mrr: 0 };
 for (const a of assinaturas ?? []) {
   if (!porPlano[a.saas_plano_id]) continue;
   porPlano[a.saas_plano_id].total++;
@@ -72,7 +103,9 @@ for (const a of assinaturas ?? []) {
 }
 
 const totalMRR = Object.values(porPlano).reduce((s, v) => s + v.mrr, 0);
-const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const brl = (v: number) => Number(v) === 0
+  ? 'Cortesia'
+  : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 const statusCores: Record<string, string> = {
   ativa:     'border-green-600/40 text-green-400 bg-green-600/10',
@@ -91,48 +124,74 @@ const statusCores: Record<string, string> = {
         <h1 class="text-2xl font-bold text-foreground">Planos SaaS</h1>
         <p class="text-sm text-muted-foreground mt-0.5">Gerencie os planos de assinatura do UNAFIT</p>
       </div>
-      <button onclick="document.getElementById('modal-novo-plano').classList.remove('hidden')"
+      <button onclick="abrirModalNovo()"
         class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
         + Novo Plano
       </button>
     </div>
 
     {sucesso && <div class="rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">✓ {sucesso}</div>}
-    {erro    && <div class="rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">{erro}</div>}
+    {erro    && <div class="rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">⚠ {erro}</div>}
 
     <!-- MRR Global -->
-    <div class="rounded-xl border border-primary/20 bg-primary/5 p-5">
-      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">MRR Total</p>
-      <p class="text-4xl font-bold text-primary mt-1">{brl(totalMRR)}</p>
-      <p class="text-xs text-muted-foreground mt-1">
-        {(assinaturas ?? []).filter(a => a.status === 'ativa').length} assinaturas ativas
-      </p>
+    <div class="rounded-xl border border-primary/20 bg-primary/5 p-5 flex items-center justify-between">
+      <div>
+        <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">MRR Total</p>
+        <p class="text-4xl font-bold text-primary mt-1">
+          {totalMRR.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+        </p>
+        <p class="text-xs text-muted-foreground mt-1">
+          {(assinaturas ?? []).filter(a => a.status === 'ativa').length} assinaturas ativas ·
+          {(planos ?? []).filter((p: any) => p.ativo).length} planos ativos
+        </p>
+      </div>
+      <div class="text-right hidden sm:block">
+        <p class="text-xs text-muted-foreground mb-1">Academias em cortesia</p>
+        <p class="text-2xl font-bold text-muted-foreground">
+          {(assinaturas ?? []).filter(a => {
+            const plano = (planos ?? []).find((p: any) => p.id === a.saas_plano_id);
+            return a.status === 'ativa' && Number(plano?.valor ?? 1) === 0;
+          }).length}
+        </p>
+      </div>
     </div>
 
     <!-- Grid de planos -->
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {(planos ?? []).map((p: any) => {
-        const stats = porPlano[p.id] ?? { total: 0, ativas: 0, mrr: 0 };
+        const stats    = porPlano[p.id] ?? { total: 0, ativas: 0, mrr: 0 };
+        const isFree   = Number(p.valor) === 0;
+        const podeExcluir = stats.total === 0;
         return (
           <div class:list={[
-            'rounded-xl border p-5 space-y-4 transition-colors',
+            'rounded-xl border p-5 space-y-4 transition-colors relative',
             p.ativo ? 'border-border bg-card' : 'border-border/40 bg-card/50 opacity-60',
           ]}>
-            <!-- Header do plano -->
-            <div class="flex items-start justify-between">
+            {/* Badge cortesia */}
+            {isFree && (
+              <div class="absolute top-3 right-3">
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-900/40 border border-blue-600/40 text-blue-300 uppercase tracking-wider">
+                  Cortesia
+                </span>
+              </div>
+            )}
+
+            <!-- Header -->
+            <div class="flex items-start justify-between pr-16">
               <div>
                 <h3 class="text-base font-bold text-foreground">{p.nome}</h3>
                 {p.descricao && <p class="text-xs text-muted-foreground mt-0.5">{p.descricao}</p>}
               </div>
-              <span class={`text-xs px-2 py-0.5 rounded-full border ${p.ativo ? 'border-green-600/30 text-green-400 bg-green-600/10' : 'border-zinc-700 text-zinc-500'}`}>
-                {p.ativo ? 'Ativo' : 'Inativo'}
-              </span>
             </div>
 
             <!-- Valor -->
             <div>
-              <p class="text-2xl font-bold text-primary">{brl(Number(p.valor))}</p>
-              <p class="text-xs text-muted-foreground">/mês · {p.limite_alunos ? `até ${p.limite_alunos} alunos` : 'alunos ilimitados'}</p>
+              <p class:list={['text-2xl font-bold', isFree ? 'text-blue-400' : 'text-primary']}>
+                {isFree ? 'Cortesia' : Number(p.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              </p>
+              <p class="text-xs text-muted-foreground">
+                {isFree ? 'Sem cobrança' : '/mês'} · {p.limite_alunos ? `até ${p.limite_alunos} alunos` : 'alunos ilimitados'}
+              </p>
             </div>
 
             <!-- Stats -->
@@ -146,31 +205,61 @@ const statusCores: Record<string, string> = {
                 <p class="text-[10px] text-muted-foreground uppercase tracking-wider">Total</p>
               </div>
               <div class="text-center">
-                <p class="text-sm font-bold text-primary">{brl(stats.mrr)}</p>
+                <p class:list={['text-sm font-bold', isFree ? 'text-muted-foreground' : 'text-primary']}>
+                  {isFree ? '—' : stats.mrr.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
                 <p class="text-[10px] text-muted-foreground uppercase tracking-wider">MRR</p>
               </div>
             </div>
 
-            <!-- Ação -->
-            <form method="POST">
-              <input type="hidden" name="action" value="toggle_plano" />
-              <input type="hidden" name="plano_id" value={p.id} />
-              <input type="hidden" name="ativo" value={String(p.ativo)} />
-              <button type="submit"
-                onclick={`return confirm('${p.ativo ? 'Desativar' : 'Ativar'} o plano ${p.nome}?')`}
-                class={`w-full text-xs py-1.5 rounded-lg border transition-colors ${p.ativo
-                  ? 'border-red-800/40 text-red-400/70 hover:text-red-400 hover:border-red-700'
-                  : 'border-green-800/40 text-green-400/70 hover:text-green-400 hover:border-green-700'
-                }`}>
-                {p.ativo ? 'Desativar' : 'Reativar'}
+            <!-- Ações -->
+            <div class="flex gap-2 pt-1">
+              <!-- Editar -->
+              <button
+                onclick={`abrirModalEditar(${JSON.stringify(p)})`}
+                class="flex-1 text-xs py-1.5 rounded-lg border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors">
+                Editar
               </button>
-            </form>
+
+              <!-- Toggle ativo -->
+              <form method="POST" class="flex-1">
+                <input type="hidden" name="action" value="toggle_plano" />
+                <input type="hidden" name="plano_id" value={p.id} />
+                <input type="hidden" name="ativo" value={String(p.ativo)} />
+                <button type="submit"
+                  onclick={`return confirm('${p.ativo ? 'Desativar' : 'Ativar'} o plano ${p.nome}?')`}
+                  class:list={[
+                    'w-full text-xs py-1.5 rounded-lg border transition-colors',
+                    p.ativo
+                      ? 'border-yellow-800/40 text-yellow-400/70 hover:text-yellow-400 hover:border-yellow-700'
+                      : 'border-green-800/40 text-green-400/70 hover:text-green-400 hover:border-green-700',
+                  ]}>
+                  {p.ativo ? 'Desativar' : 'Reativar'}
+                </button>
+              </form>
+
+              <!-- Excluir (só se não há academias) -->
+              {podeExcluir && (
+                <form method="POST">
+                  <input type="hidden" name="action" value="excluir_plano" />
+                  <input type="hidden" name="plano_id" value={p.id} />
+                  <button type="submit"
+                    onclick={`return confirm('Excluir permanentemente o plano "${p.nome}"?')`}
+                    class="px-2 py-1.5 rounded-lg border border-red-900/40 text-red-400/60 hover:text-red-400 hover:border-red-700 transition-colors"
+                    title="Excluir plano">
+                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </form>
+              )}
+            </div>
           </div>
         );
       })}
     </div>
 
-    <!-- Academias por status de assinatura -->
+    <!-- Distribuição de Assinaturas -->
     <div class="rounded-xl border border-border bg-card p-5">
       <h2 class="text-sm font-semibold text-foreground mb-4">Distribuição de Assinaturas</h2>
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -188,50 +277,65 @@ const statusCores: Record<string, string> = {
 
   </div>
 
-  <!-- Modal Novo Plano -->
-  <div id="modal-novo-plano" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+  <!-- Modal Criar / Editar Plano (reutilizável) -->
+  <div id="modal-plano" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
     <div class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 p-6">
       <div class="flex items-center justify-between mb-5">
-        <h2 class="text-lg font-bold text-foreground">Novo Plano SaaS</h2>
-        <button onclick="document.getElementById('modal-novo-plano').classList.add('hidden')"
-          class="text-muted-foreground hover:text-foreground">
+        <h2 id="modal-titulo" class="text-lg font-bold text-foreground">Novo Plano SaaS</h2>
+        <button onclick="fecharModal()" class="text-muted-foreground hover:text-foreground">
           <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
-      <form method="POST" class="space-y-4">
-        <input type="hidden" name="action" value="criar_plano" />
+      <form method="POST" class="space-y-4" id="form-plano">
+        <input type="hidden" name="action" id="form-action" value="criar_plano" />
+        <input type="hidden" name="plano_id" id="form-plano-id" value="" />
+
         <div>
           <label class="block text-xs text-muted-foreground mb-1">Nome do Plano *</label>
-          <input name="nome" required placeholder="ex: Starter, Pro, Enterprise"
+          <input id="f-nome" name="nome" required placeholder="ex: Starter, Cortesia, Enterprise"
             class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
+
         <div>
           <label class="block text-xs text-muted-foreground mb-1">Descrição</label>
-          <input name="descricao" placeholder="Breve descrição do plano"
+          <input id="f-descricao" name="descricao" placeholder="Breve descrição do plano"
             class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
-        <div class="grid grid-cols-2 gap-3">
+
+        <!-- Cortesia toggle -->
+        <div class="flex items-center gap-3 p-3 rounded-lg border border-blue-600/30 bg-blue-900/10">
+          <input type="checkbox" id="f-cortesia" name="cortesia"
+            onchange="toggleCortesia(this.checked)"
+            class="h-4 w-4 accent-blue-500 cursor-pointer" />
           <div>
-            <label class="block text-xs text-muted-foreground mb-1">Valor (R$) *</label>
-            <input name="valor" required placeholder="99,90"
+            <label for="f-cortesia" class="text-sm font-medium text-blue-300 cursor-pointer">Plano Cortesia (R$ 0,00)</label>
+            <p class="text-xs text-muted-foreground">Academia não será cobrada. Útil para parceiros e testes.</p>
+          </div>
+        </div>
+
+        <div id="valor-section" class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Valor Mensal (R$) *</label>
+            <input id="f-valor" name="valor" placeholder="99,90"
               class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
           </div>
           <div>
             <label class="block text-xs text-muted-foreground mb-1">Limite de Alunos</label>
-            <input name="limite_alunos" type="number" min="0" placeholder="ilimitado"
+            <input id="f-limite" name="limite_alunos" type="number" min="0" placeholder="ilimitado"
               class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
           </div>
         </div>
+
         <div class="flex gap-3 pt-2 border-t border-border">
-          <button type="button" onclick="document.getElementById('modal-novo-plano').classList.add('hidden')"
+          <button type="button" onclick="fecharModal()"
             class="flex-1 rounded-lg border border-border py-2 text-sm text-muted-foreground hover:text-foreground">
             Cancelar
           </button>
           <button type="submit"
             class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-            Criar Plano
+            Salvar
           </button>
         </div>
       </form>
@@ -239,8 +343,64 @@ const statusCores: Record<string, string> = {
   </div>
 
   <script>
-    document.getElementById('modal-novo-plano')?.addEventListener('click', e => {
-      if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
+    function fecharModal() {
+      document.getElementById('modal-plano')!.classList.add('hidden');
+    }
+
+    function abrirModalNovo() {
+      const modal = document.getElementById('modal-plano')!;
+      document.getElementById('modal-titulo')!.textContent = 'Novo Plano SaaS';
+      (document.getElementById('form-action') as HTMLInputElement).value = 'criar_plano';
+      (document.getElementById('form-plano-id') as HTMLInputElement).value = '';
+      (document.getElementById('f-nome') as HTMLInputElement).value = '';
+      (document.getElementById('f-descricao') as HTMLInputElement).value = '';
+      (document.getElementById('f-valor') as HTMLInputElement).value = '';
+      (document.getElementById('f-limite') as HTMLInputElement).value = '';
+      const cortesia = document.getElementById('f-cortesia') as HTMLInputElement;
+      cortesia.checked = false;
+      toggleCortesia(false);
+      modal.classList.remove('hidden');
+    }
+
+    function abrirModalEditar(p: any) {
+      const modal = document.getElementById('modal-plano')!;
+      document.getElementById('modal-titulo')!.textContent = `Editar — ${p.nome}`;
+      (document.getElementById('form-action') as HTMLInputElement).value = 'editar_plano';
+      (document.getElementById('form-plano-id') as HTMLInputElement).value = p.id;
+      (document.getElementById('f-nome') as HTMLInputElement).value = p.nome ?? '';
+      (document.getElementById('f-descricao') as HTMLInputElement).value = p.descricao ?? '';
+      (document.getElementById('f-limite') as HTMLInputElement).value = p.limite_alunos ?? '';
+
+      const isFree = Number(p.valor) === 0;
+      const cortesia = document.getElementById('f-cortesia') as HTMLInputElement;
+      cortesia.checked = isFree;
+      toggleCortesia(isFree);
+      if (!isFree) {
+        (document.getElementById('f-valor') as HTMLInputElement).value =
+          Number(p.valor).toFixed(2).replace('.', ',');
+      }
+      modal.classList.remove('hidden');
+    }
+
+    function toggleCortesia(checked: boolean) {
+      const valorSection = document.getElementById('valor-section')!;
+      const valorInput   = document.getElementById('f-valor') as HTMLInputElement;
+      if (checked) {
+        valorSection.style.opacity = '0.4';
+        valorSection.style.pointerEvents = 'none';
+        valorInput.value = '0';
+        valorInput.required = false;
+      } else {
+        valorSection.style.opacity = '1';
+        valorSection.style.pointerEvents = 'auto';
+        if (valorInput.value === '0') valorInput.value = '';
+        valorInput.required = true;
+      }
+    }
+
+    // Fecha ao clicar fora
+    document.getElementById('modal-plano')?.addEventListener('click', e => {
+      if (e.target === e.currentTarget) fecharModal();
     });
   </script>
 </DashboardLayout>
