@@ -1,37 +1,22 @@
 import { defineMiddleware } from 'astro:middleware';
-import { createServerClient, parseCookieHeader } from '@supabase/ssr';
-import { createSupabaseAdminClient } from '@/lib/supabase';
-
-const SUPABASE_URL      = import.meta.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.SUPABASE_ANON_KEY;
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 export const onRequest = defineMiddleware(async (context, next) => {
-  // Cria o cliente Supabase UMA VEZ por request e disponibiliza via Astro.locals
-  // Isso evita múltiplos getUser() / setAll() que causam o aviso de cookie
-  const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    cookies: {
-      getAll() {
-        return parseCookieHeader(context.request.headers.get('Cookie') ?? '');
-      },
-      setAll(cookiesToSet: { name: string; value: string; options: Record<string, unknown> }[]) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          context.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
+  // Cria o cliente Supabase UMA VEZ por request usando a função centralizada
+  // (que já tem os fallbacks process.env corretos)
+  const supabase = createSupabaseServerClient(context.request, context.cookies);
 
-  // getUser() aqui é o ÚNICO ponto onde cookies de sessão são renovados
+  // getUser() aqui é o ÚNICO ponto de renovação de token de sessão
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Guarda no locals para reusar em layouts e páginas sem nova chamada getUser()
+  // Disponibiliza para layouts e páginas — sem novo getUser() durante streaming
   context.locals.supabase = supabase as any;
   context.locals.user     = user ?? null;
 
+  // Verificação de onboarding apenas para donos em rotas do dashboard
   const { pathname } = new URL(context.request.url);
   const isDashboard   = pathname === '/dashboard' || pathname.startsWith('/dashboard/');
 
-  // Verifica onboarding apenas para donos em rotas do dashboard
   if (isDashboard && user) {
     try {
       const adminClient = createSupabaseAdminClient();
@@ -54,7 +39,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
         }
       }
     } catch {
-      // Não bloqueia a requisição em caso de erro
+      // Não bloqueia a requisição em caso de erro de admin
     }
   }
 
