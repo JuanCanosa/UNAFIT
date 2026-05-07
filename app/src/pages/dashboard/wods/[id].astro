@@ -68,11 +68,12 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'criar_grupo') {
     const rounds = parseInt(form.get('rounds') as string) || 1;
+    const nome   = (form.get('nome') as string)?.trim() || null;
     const { count } = await supabase
       .from('wod_grupos')
       .select('id', { count: 'exact', head: true })
       .eq('wod_id', wodId);
-    await supabase.from('wod_grupos').insert({ wod_id: wodId, rounds, ordem: (count ?? 0) + 1 });
+    await supabase.from('wod_grupos').insert({ wod_id: wodId, rounds, nome, ordem: (count ?? 0) + 1 });
     return Astro.redirect(`/dashboard/wods/${wodId}`);
   }
 
@@ -224,7 +225,7 @@ const totalEx      = (wodExercicios ?? []).length;
               <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              Grupo
+              Grupo de Rounds
             </button>
             <button id="btn-add-exercicio" data-grupo=""
               class="inline-flex items-center gap-1 rounded-lg bg-primary/10 border border-primary/20 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition-colors">
@@ -253,7 +254,7 @@ const totalEx      = (wodExercicios ?? []).length;
               <div class="rounded-xl border border-border/60 overflow-hidden">
                 <div class="flex items-center justify-between gap-2 px-3 py-2 bg-primary/10 border-b border-border/40">
                   <span class="text-xs font-bold text-primary uppercase tracking-wider">
-                    {grupo.rounds} {grupo.rounds === 1 ? 'ROUND' : 'ROUNDS'}
+                    {(grupo as any).nome ? `${(grupo as any).nome} · ` : ''}{grupo.rounds} {grupo.rounds === 1 ? 'ROUND' : 'ROUNDS'}
                   </span>
                   <div class="flex items-center gap-1">
                     {canEdit && (
@@ -405,11 +406,11 @@ const totalEx      = (wodExercicios ?? []).length;
 
 </DashboardLayout>
 
-<!-- Modal: Novo Grupo de Rounds -->
+<!-- Modal: Novo Grupo de Exercícios -->
 <div id="modal-novo-grupo" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
   <div class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-2xl">
     <div class="mb-5 flex items-center justify-between">
-      <h2 class="text-lg font-bold text-foreground">Novo Grupo de Rounds</h2>
+      <h2 class="text-lg font-bold text-foreground">Novo Grupo de Exercícios</h2>
       <button id="grupo-close" class="text-muted-foreground hover:text-foreground">
         <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -418,6 +419,12 @@ const totalEx      = (wodExercicios ?? []).length;
     </div>
     <form method="POST" class="space-y-4">
       <input type="hidden" name="action" value="criar_grupo" />
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Nome do Grupo</label>
+        <input name="nome" type="text" placeholder='ex: "Metcon", "Aquecimento"'
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        />
+      </div>
       <div>
         <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Quantidade de Rounds *</label>
         <input name="rounds" type="number" min="1" max="99" required placeholder="ex: 3"
