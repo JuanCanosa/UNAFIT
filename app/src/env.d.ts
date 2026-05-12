@@ -1,5 +1,6 @@
 /// <reference types="astro/client" />
 
+// Extensão das variáveis de ambiente — não sobrescreve ImportMeta do Astro
 interface ImportMetaEnv {
   readonly SUPABASE_URL:              string;
   readonly SUPABASE_ANON_KEY:         string;
@@ -12,13 +13,9 @@ interface ImportMetaEnv {
   readonly ASAAS_SANDBOX:             string;
 }
 
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
-}
-
 declare namespace App {
   interface Locals {
-    supabase: import('@supabase/supabase-js').SupabaseClient;
+    supabase: any;
     user:     import('@supabase/supabase-js').User | null;
   }
 }
