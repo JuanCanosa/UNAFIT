@@ -339,7 +339,7 @@ const { data: academia } = await adminClient
     endereco_cep, endereco_rua, endereco_numero, endereco_complemento,
     endereco_bairro, endereco_cidade, endereco_estado,
     asaas_customer_id,
-    saas_assinaturas(id, status, data_inicio, data_fim, asaas_subscription_id, saas_planos(id, nome, valor, limite_alunos))
+    saas_assinaturas(id, status, data_inicio, data_fim, asaas_subscription_id, saas_plano_id, saas_planos(id, nome, valor, limite_alunos))
   `)
   .eq('id', id!)
   .single();
@@ -728,7 +728,7 @@ const hoje = new Date().toISOString().split('T')[0];
             <select name="saas_plano_id"
               class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
               {planos?.map((p: any) => (
-                <option value={p.id} selected={p.id === assin?.saas_planos?.id}>
+                <option value={p.id} selected={p.id === (assin?.saas_plano_id ?? assin?.saas_planos?.id)}>
                   {p.nome} — {Number(p.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês
                 </option>
               ))}
