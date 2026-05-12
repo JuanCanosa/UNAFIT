@@ -6,6 +6,7 @@ import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
+import { buscarOuCriarCliente, gerarCobrancaCompleta } from '@/lib/asaas';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -143,41 +144,111 @@ if (Astro.request.method === 'POST') {
     }
   }
 
-  if (action === 'gerar_fatura') {
-    const descricao       = (form.get('descricao') as string)?.trim();
-    const valor           = parseFloat((form.get('valor') as string)?.replace(',', '.'));
-    const data_vencimento = form.get('data_vencimento') as string;
-    const assinatura_id   = form.get('assinatura_id') as string || null;
-
-    if (!descricao || isNaN(valor) || !data_vencimento) {
-      erro = 'Preencha todos os campos da fatura.';
-    } else {
-      const { error: fatErr } = await adminClient.from('saas_faturas').insert({
-        academia_id: id!,
-        saas_assinatura_id: assinatura_id,
-        descricao,
-        valor,
-        data_vencimento,
-        status: 'pendente',
-      });
-      if (fatErr) erro = fatErr.message;
-      else sucesso = 'Fatura gerada com sucesso!';
-    }
-  }
-
   if (action === 'atualizar_assinatura') {
     const saas_plano_id = form.get('saas_plano_id') as string;
     const status        = form.get('status') as string;
     const assinatura_id = form.get('assinatura_id') as string;
 
+    let novaAssinaturaId = assinatura_id;
     if (assinatura_id) {
       await adminClient.from('saas_assinaturas').update({ saas_plano_id, status }).eq('id', assinatura_id);
     } else {
-      await adminClient.from('saas_assinaturas').insert({
+      const { data: novaAssin } = await adminClient.from('saas_assinaturas').insert({
         academia_id: id!, saas_plano_id, status, data_inicio: new Date().toISOString().split('T')[0],
-      });
+      }).select('id').single();
+      novaAssinaturaId = novaAssin?.id ?? '';
     }
-    sucesso = 'Assinatura atualizada!';
+
+    // Auto-gerar cobrança ao ativar assinatura
+    if (status === 'ativa') {
+      const { data: planoData } = await adminClient
+        .from('saas_planos').select('id, nome, valor').eq('id', saas_plano_id).single();
+      const valor = Number(planoData?.valor ?? 0);
+
+      if (valor > 0) {
+        // Verifica se já existe fatura pendente/paga no mês atual
+        const primeiroDiaMes = new Date();
+        primeiroDiaMes.setDate(1);
+        const { data: faturaExistente } = await adminClient
+          .from('saas_faturas')
+          .select('id')
+          .eq('academia_id', id!)
+          .in('status', ['pendente', 'pago'])
+          .gte('data_vencimento', primeiroDiaMes.toISOString().split('T')[0])
+          .limit(1).maybeSingle();
+
+        if (!faturaExistente) {
+          const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+          const dataVenc = new Date();
+          dataVenc.setDate(dataVenc.getDate() + 3);
+          const dataVencStr = dataVenc.toISOString().split('T')[0];
+          const descricao = `Mensalidade ${planoData?.nome} — ${mes}`;
+
+          const { data: faturaData } = await adminClient.from('saas_faturas').insert({
+            academia_id: id!,
+            saas_assinatura_id: novaAssinaturaId,
+            descricao,
+            valor,
+            data_vencimento: dataVencStr,
+            status: 'pendente',
+          }).select('id').single();
+
+          if (faturaData?.id) {
+            try {
+              const { data: acadInfo } = await adminClient
+                .from('academias')
+                .select('nome, email, responsavel_cpf_cnpj, telefone, asaas_customer_id')
+                .eq('id', id!).single();
+
+              if (acadInfo?.email) {
+                let customerId = acadInfo.asaas_customer_id;
+                if (!customerId) {
+                  const cliente = await buscarOuCriarCliente({
+                    nome: acadInfo.nome,
+                    email: acadInfo.email,
+                    cpfCnpj: acadInfo.responsavel_cpf_cnpj,
+                    telefone: acadInfo.telefone,
+                  });
+                  customerId = cliente.id;
+                  await adminClient.from('academias').update({ asaas_customer_id: customerId }).eq('id', id!);
+                }
+
+                const cobranca = await gerarCobrancaCompleta({
+                  customerId,
+                  valor,
+                  descricao,
+                  vencimento: dataVencStr,
+                  externalRef: faturaData.id,
+                });
+
+                await adminClient.from('saas_faturas').update({
+                  asaas_payment_id: cobranca.paymentId,
+                  invoice_url:      cobranca.invoiceUrl,
+                  boleto_url:       cobranca.boletoUrl,
+                  boleto_linha:     cobranca.boletoCodigo,
+                  pix_qr_code_base64: cobranca.pixQrCodeBase64,
+                  pix_copia_cola:   cobranca.pixCopiaCola,
+                }).eq('id', faturaData.id);
+
+                sucesso = 'Assinatura ativada! Cobrança gerada — PIX, Boleto e Cartão disponíveis.';
+              } else {
+                sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança Asaas não gerada)';
+              }
+            } catch (e: any) {
+              sucesso = `Assinatura atualizada. Fatura criada, mas erro no Asaas: ${e.message}`;
+            }
+          } else {
+            sucesso = 'Assinatura atualizada!';
+          }
+        } else {
+          sucesso = 'Assinatura atualizada! (Já existe fatura pendente para este mês)';
+        }
+      } else {
+        sucesso = 'Assinatura atualizada! (Plano cortesia — sem cobrança)';
+      }
+    } else {
+      sucesso = 'Assinatura atualizada!';
+    }
   }
 
   if (action === 'marcar_pago') {
@@ -435,10 +506,7 @@ const hoje = new Date().toISOString().split('T')[0];
       <div class="rounded-xl border border-border bg-card p-5">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-semibold text-foreground">Faturas</h2>
-          <button onclick="document.getElementById('modal-fatura').classList.remove('hidden')"
-            class="rounded-lg bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 text-xs font-medium hover:bg-primary/20">
-            + Gerar Fatura
-          </button>
+          <p class="text-xs text-muted-foreground">Geradas automaticamente ao ativar o plano</p>
         </div>
 
         {!faturas || faturas.length === 0 ? (
@@ -745,62 +813,8 @@ const hoje = new Date().toISOString().split('T')[0];
     </div>
   </div>
 
-  <!-- Modal Gerar Fatura -->
-  <div id="modal-fatura" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-    <div class="w-full max-w-md rounded-xl bg-zinc-900 border border-zinc-700 p-6">
-      <div class="flex items-center justify-between mb-5">
-        <h2 class="text-lg font-bold text-foreground">Gerar Fatura</h2>
-        <button onclick="document.getElementById('modal-fatura').classList.add('hidden')"
-          class="text-muted-foreground hover:text-foreground">
-          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <form method="POST" class="space-y-4">
-        <input type="hidden" name="action" value="gerar_fatura" />
-        <input type="hidden" name="assinatura_id" value={assin?.id ?? ''} />
-        <div>
-          <label class="block text-xs text-muted-foreground mb-1">Descrição *</label>
-          <input name="descricao"
-            value={assin ? `Mensalidade ${assin.saas_planos?.nome} — ${new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}` : ''}
-            required
-            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-xs text-muted-foreground mb-1">Valor (R$) *</label>
-            <input name="valor"
-              value={assin ? String(assin.saas_planos?.valor ?? '') : ''}
-              required
-              placeholder="0,00"
-              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-          <div>
-            <label class="block text-xs text-muted-foreground mb-1">Vencimento *</label>
-            <input name="data_vencimento" type="date" required value={hoje}
-              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          </div>
-        </div>
-        <div class="flex gap-3 pt-2">
-          <button type="button" onclick="document.getElementById('modal-fatura').classList.add('hidden')"
-            class="flex-1 rounded-lg border border-border py-2 text-sm text-muted-foreground hover:text-foreground">
-            Cancelar
-          </button>
-          <button type="submit"
-            class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-            Gerar Fatura
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
 
   <script>
-    document.getElementById('modal-fatura')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) (e.currentTarget as HTMLElement).classList.add('hidden');
-    });
-
     // ── Logo upload via fetch ─────────────────────────────────────────────────
     const logoInput    = document.getElementById('logo-input')    as HTMLInputElement;
     const logoDrop     = document.getElementById('logo-drop')     as HTMLElement;
