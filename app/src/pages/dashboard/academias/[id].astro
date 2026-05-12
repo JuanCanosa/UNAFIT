@@ -348,12 +348,16 @@ if (!academia) return Astro.redirect('/dashboard/academias');
 
 const { data: planos } = await adminClient.from('saas_planos').select('id, nome, valor, limite_alunos').eq('ativo', true).order('valor');
 
+// Mostra: mês atual + mês seguinte (pending/future) + pagas + vencidas. Exclui canceladas antigas.
+const primeiroDiaMesAtual = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+
 const { data: faturas } = await adminClient
   .from('saas_faturas')
   .select('id, descricao, valor, data_vencimento, pago_em, status, asaas_payment_id, invoice_url, boleto_url, boleto_linha, pix_qr_code_base64, pix_copia_cola, metodo_pagamento')
   .eq('academia_id', id!)
+  .or(`data_vencimento.gte.${primeiroDiaMesAtual},status.in.(pago,vencido)`)
   .order('data_vencimento', { ascending: false })
-  .limit(20);
+  .limit(18);
 
 const [
   { data: membros },

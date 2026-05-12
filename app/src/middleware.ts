@@ -40,18 +40,40 @@ export const onRequest = defineMiddleware(async (context, next) => {
         }
       }
 
-      // ── Bloqueio por assinatura SaaS suspensa/cancelada ─────────────────────
+      // ── Bloqueio por assinatura SaaS suspensa/cancelada ou fatura vencida ────
       if ((profile.role === 'dono' || profile.role === 'colaborador') && profile.academia_id) {
         const { data: assinatura } = await adminClient
           .from('saas_assinaturas')
-          .select('status')
+          .select('id, status')
           .eq('academia_id', profile.academia_id)
-          .order('data_inicio', { ascending: false })
-          .limit(1)
           .maybeSingle();
 
-        if (assinatura && (assinatura.status === 'suspensa' || assinatura.status === 'cancelada')) {
+        if (assinatura?.status === 'suspensa' || assinatura?.status === 'cancelada') {
           return context.redirect('/assinatura-pendente');
+        }
+
+        // Carência de 10 dias: bloqueia se há fatura pendente/vencida com
+        // data_vencimento < (hoje - 10 dias)
+        if (assinatura && (assinatura.status === 'ativa' || assinatura.status === 'trial')) {
+          const carencia = new Date();
+          carencia.setDate(carencia.getDate() - 10);
+          const carenciaStr = carencia.toISOString().split('T')[0];
+
+          const { data: faturaAtraso } = await adminClient
+            .from('saas_faturas')
+            .select('id')
+            .eq('academia_id', profile.academia_id)
+            .in('status', ['pendente', 'vencido'])
+            .lt('data_vencimento', carenciaStr)
+            .limit(1)
+            .maybeSingle();
+
+          if (faturaAtraso) {
+            // Suspende automaticamente após carência
+            await adminClient.from('saas_assinaturas')
+              .update({ status: 'suspensa' }).eq('id', assinatura.id);
+            return context.redirect('/assinatura-pendente');
+          }
         }
       }
 

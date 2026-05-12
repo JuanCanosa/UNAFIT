@@ -1,19 +1,44 @@
 ---
 import '@/styles/globals.css';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
-
-// Se não estiver logado, manda para o login
 if (!user) return Astro.redirect('/login');
 
-// Busca o nome da academia para personalizar a mensagem
-const { data: profile } = await supabase
+const admin = createSupabaseAdminClient();
+
+const { data: profile } = await admin
   .from('profiles')
-  .select('nome_completo, academia_id')
+  .select('nome_completo, academia_id, role')
   .eq('id', user.id)
   .single();
+
+if (!profile || profile.role === 'saas_admin') return Astro.redirect('/dashboard');
+
+const { data: academia } = profile?.academia_id
+  ? await admin.from('academias').select('nome, logo_url').eq('id', profile.academia_id).single()
+  : { data: null };
+
+// Busca faturas em atraso (pendente ou vencida)
+const { data: faturas } = profile?.academia_id
+  ? await admin
+      .from('saas_faturas')
+      .select('id, descricao, valor, data_vencimento, status, invoice_url, boleto_url, boleto_linha, pix_qr_code_base64, pix_copia_cola, asaas_payment_id')
+      .eq('academia_id', profile.academia_id)
+      .in('status', ['pendente', 'vencido'])
+      .order('data_vencimento', { ascending: false })
+  : { data: [] };
+
+const hoje = new Date();
+const carenciaData = new Date();
+carenciaData.setDate(carenciaData.getDate() - 10);
+
+function diasAtraso(dataVenc: string): number {
+  const venc = new Date(dataVenc + 'T12:00:00');
+  const diff = hoje.getTime() - venc.getTime();
+  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+}
 ---
 
 <!DOCTYPE html>
@@ -22,77 +47,133 @@ const { data: profile } = await supabase
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" type="image/png" href="/favicon.png" />
-  <title>Assinatura Pendente — UNAFIT</title>
+  <title>Pagamento Pendente — UNAFIT</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 </head>
-<body class="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-4">
+<body class="min-h-screen bg-zinc-950 text-white font-[Inter,sans-serif]">
 
-  <div class="w-full max-w-md text-center space-y-8">
+  <!-- Header mínimo -->
+  <header class="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+    <img src="/logo-unafit.png" alt="UNAFIT" class="h-8 w-auto" />
+    <a href="/logout" class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">Sair</a>
+  </header>
 
-    <!-- Logo -->
-    <img src="/logo-unafit.png" alt="UNAFIT" class="h-10 w-auto mx-auto" />
+  <main class="max-w-2xl mx-auto px-4 py-10 space-y-8">
 
-    <!-- Ícone de bloqueio -->
-    <div class="flex justify-center">
-      <div class="relative flex h-24 w-24 items-center justify-center rounded-full bg-yellow-900/20 border-2 border-yellow-600/50">
-        <svg class="h-12 w-12 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+    <!-- Alerta de bloqueio -->
+    <div class="rounded-2xl border border-red-600/40 bg-red-900/10 p-6 flex gap-4">
+      <div class="shrink-0 flex h-12 w-12 items-center justify-center rounded-full bg-red-900/30 border border-red-600/40">
+        <svg class="h-6 w-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
         </svg>
-        <!-- Pulso -->
-        <div class="absolute inset-0 rounded-full bg-yellow-500/10 animate-ping"></div>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold text-red-400">Acesso bloqueado — pagamento em atraso</h1>
+        <p class="text-sm text-zinc-400 mt-1">
+          {academia?.nome ?? 'Sua academia'} possui {faturas?.length ?? 0} fatura{(faturas?.length ?? 0) !== 1 ? 's' : ''} em aberto.
+          Realize o pagamento para reativar o acesso imediatamente.
+        </p>
       </div>
     </div>
 
-    <!-- Mensagem -->
-    <div class="space-y-3">
-      <h1 class="text-2xl font-bold text-white">Assinatura Suspensa</h1>
-      <p class="text-zinc-400 leading-relaxed">
-        O acesso ao sistema da sua academia foi <span class="text-yellow-400 font-semibold">temporariamente suspenso</span>
-        por pendência na assinatura do UNAFIT.
-      </p>
-      <p class="text-zinc-500 text-sm">
-        Entre em contato com o suporte para regularizar e reativar o acesso imediatamente.
-      </p>
-    </div>
+    <!-- Faturas em atraso -->
+    {faturas && faturas.length > 0 ? (
+      <div class="space-y-5">
+        {faturas.map((f: any) => {
+          const atraso = diasAtraso(f.data_vencimento);
+          return (
+            <div class="rounded-2xl border border-red-700/30 bg-zinc-900 overflow-hidden">
+              <!-- Cabeçalho da fatura -->
+              <div class="px-5 py-4 flex items-center justify-between gap-3 border-b border-zinc-800">
+                <div>
+                  <p class="font-semibold text-white">{f.descricao}</p>
+                  <p class="text-xs text-red-400 mt-0.5">
+                    Venceu em {new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                    {atraso > 0 && ` · ${atraso} dia${atraso !== 1 ? 's' : ''} em atraso`}
+                  </p>
+                </div>
+                <span class="text-xl font-bold text-white shrink-0">
+                  {Number(f.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+              </div>
 
-    <!-- Card de contato -->
-    <div class="rounded-xl border border-yellow-600/30 bg-yellow-900/10 p-5 text-left space-y-3">
-      <p class="text-xs font-semibold uppercase tracking-wider text-yellow-500">Contato do Suporte</p>
-      <div class="space-y-2 text-sm text-zinc-300">
-        <div class="flex items-center gap-2">
-          <svg class="h-4 w-4 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
-          <span>suporte@unafit.com.br</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <svg class="h-4 w-4 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-          </svg>
-          <span>(11) 9 0000-0000</span>
-        </div>
+              <!-- Métodos de pagamento -->
+              <div class="p-5 space-y-4">
+
+                {f.invoice_url && (
+                  <a href={f.invoice_url} target="_blank"
+                    class="flex items-center justify-center gap-2 w-full rounded-xl bg-primary py-3 text-sm font-bold text-white hover:bg-primary/90 transition-colors">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    Pagar agora (PIX · Boleto · Cartão)
+                  </a>
+                )}
+
+                <div class="grid sm:grid-cols-2 gap-4">
+                  {f.pix_qr_code_base64 && (
+                    <div class="rounded-xl border border-zinc-800 p-4 text-center space-y-3">
+                      <p class="text-xs font-bold text-zinc-400 uppercase tracking-wider">PIX — pagamento instantâneo</p>
+                      <img src={`data:image/png;base64,${f.pix_qr_code_base64}`}
+                        alt="QR Code PIX" class="h-36 w-36 mx-auto rounded-lg" />
+                      {f.pix_copia_cola && (
+                        <button id={`pix-${f.id}`}
+                          onclick={`navigator.clipboard.writeText('${f.pix_copia_cola}').then(()=>{document.getElementById('pix-${f.id}').textContent='Copiado!';setTimeout(()=>document.getElementById('pix-${f.id}').textContent='Copiar código PIX',2000)})`}
+                          class="w-full py-2 rounded-lg border border-zinc-700 text-xs text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
+                          Copiar código PIX
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {f.boleto_linha && (
+                    <div class="rounded-xl border border-zinc-800 p-4 space-y-3">
+                      <p class="text-xs font-bold text-zinc-400 uppercase tracking-wider">Boleto bancário</p>
+                      <p class="text-[11px] font-mono text-zinc-500 break-all leading-relaxed bg-zinc-950 rounded-lg p-2">
+                        {f.boleto_linha}
+                      </p>
+                      <button id={`bol-${f.id}`}
+                        onclick={`navigator.clipboard.writeText('${f.boleto_linha}').then(()=>{document.getElementById('bol-${f.id}').textContent='Copiado!';setTimeout(()=>document.getElementById('bol-${f.id}').textContent='Copiar código de barras',2000)})`}
+                        class="w-full py-2 rounded-lg border border-zinc-700 text-xs text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
+                        Copiar código de barras
+                      </button>
+                      {f.boleto_url && (
+                        <a href={f.boleto_url} target="_blank"
+                          class="block text-center text-xs text-primary hover:underline">
+                          Ver boleto (PDF)
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {!f.invoice_url && !f.pix_qr_code_base64 && !f.boleto_linha && (
+                  <p class="text-sm text-zinc-500 text-center py-2">
+                    Cobrança sendo processada. Entre em contato com o suporte.
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
+    ) : (
+      <div class="text-center py-10 text-zinc-500">
+        <p>Nenhuma fatura pendente encontrada.</p>
+        <a href="/dashboard" class="mt-4 inline-block text-sm text-primary hover:underline">
+          Voltar ao painel
+        </a>
+      </div>
+    )}
+
+    <!-- Rodapé de suporte -->
+    <div class="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-400 text-center space-y-1">
+      <p>Após o pagamento, o acesso é reativado automaticamente em até <strong class="text-white">5 minutos</strong>.</p>
+      <p>Dúvidas? <a href="mailto:suporte@unafit.com.br" class="text-primary hover:underline">suporte@unafit.com.br</a></p>
     </div>
 
-    <!-- Ações -->
-    <div class="flex flex-col gap-3">
-      <a href="https://wa.me/5511900000000?text=Olá! Preciso regularizar a assinatura da minha academia no UNAFIT."
-        target="_blank"
-        class="flex items-center justify-center gap-2 w-full py-3 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold transition-colors">
-        <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-        </svg>
-        Falar no WhatsApp
-      </a>
-      <a href="/logout"
-        class="flex items-center justify-center gap-2 w-full py-3 px-6 rounded-xl border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 font-medium transition-colors">
-        Sair da conta
-      </a>
-    </div>
-
-  </div>
+  </main>
 
 </body>
 </html>
