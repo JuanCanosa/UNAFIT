@@ -32,6 +32,14 @@ function gerarSenha(len = 12): string {
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
+/** Próximo dia 10: este mês se ainda não chegou, senão próximo mês. */
+function proximoDia10(): string {
+  const hoje = new Date();
+  const mes  = hoje.getDate() < 10 ? hoje.getMonth() : hoje.getMonth() + 1;
+  const ano  = mes > 11 ? hoje.getFullYear() + 1 : hoje.getFullYear();
+  return new Date(ano, mes % 12, 10).toISOString().split('T')[0];
+}
+
 // ── POST handlers ─────────────────────────────────────────────────────────────
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -201,80 +209,88 @@ if (Astro.request.method === 'POST') {
       novaAssinaturaId = novaAssin?.id ?? '';
     }
 
-    if (status === 'ativa' && (!assinAtual?.asaas_subscription_id || planoMudou)) {
-      const { data: planoData } = await adminClient
-        .from('saas_planos').select('id, nome, valor').eq('id', saas_plano_id).single();
-      const valor = Number(planoData?.valor ?? 0);
+    if (status === 'ativa') {
+      // Re-fetch após o update para pegar o asaas_subscription_id mais recente
+      const { data: assinFresh } = await adminClient
+        .from('saas_assinaturas').select('asaas_subscription_id').eq('id', novaAssinaturaId).single();
 
-      if (valor > 0) {
-        try {
-          const { data: acadInfo } = await adminClient
-            .from('academias')
-            .select('nome, email, responsavel_cpf_cnpj, telefone, asaas_customer_id')
-            .eq('id', id!).single();
+      const jaTemSubscription = !!assinFresh?.asaas_subscription_id && !planoMudou;
 
-          if (!acadInfo?.email) {
-            sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança não gerada)';
-          } else {
-            let customerId = acadInfo.asaas_customer_id;
-            if (!customerId) {
-              const cliente = await buscarOuCriarCliente({
-                nome: acadInfo.nome, email: acadInfo.email,
-                cpfCnpj: acadInfo.responsavel_cpf_cnpj, telefone: acadInfo.telefone,
-              });
-              customerId = cliente.id;
-              await adminClient.from('academias').update({ asaas_customer_id: customerId }).eq('id', id!);
-            }
+      if (!jaTemSubscription) {
+        const { data: planoData } = await adminClient
+          .from('saas_planos').select('id, nome, valor').eq('id', saas_plano_id).single();
+        const valor = Number(planoData?.valor ?? 0);
 
-            const dataVenc = new Date();
-            dataVenc.setDate(dataVenc.getDate() + 3);
-            const dataVencStr = dataVenc.toISOString().split('T')[0];
-            const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        if (valor > 0) {
+          try {
+            const { data: acadInfo } = await adminClient
+              .from('academias')
+              .select('nome, email, responsavel_cpf_cnpj, telefone, asaas_customer_id')
+              .eq('id', id!).single();
 
-            // Cria assinatura recorrente mensal no Asaas
-            const assinAsaas = await criarAssinatura({
-              customerId,
-              valor,
-              descricao: `Assinatura ${planoData?.nome} — UNAFIT`,
-              nextDueDate: dataVencStr,
-              externalRef: novaAssinaturaId,
-            });
-
-            await adminClient.from('saas_assinaturas')
-              .update({ asaas_subscription_id: assinAsaas.id })
-              .eq('id', novaAssinaturaId);
-
-            // Busca o primeiro pagamento gerado automaticamente pela assinatura
-            const pag = await buscarPrimeiroPagamentoAssinatura(assinAsaas.id);
-            if (pag) {
-              const pix  = await buscarPixQrCode(pag.id);
-              const linha = await buscarLinhaDigitavel(pag.id);
-
-              await adminClient.from('saas_faturas').insert({
-                academia_id:        id!,
-                saas_assinatura_id: novaAssinaturaId,
-                descricao:          `Mensalidade ${planoData?.nome} — ${mes}`,
-                valor,
-                data_vencimento:    dataVencStr,
-                status:             'pendente',
-                asaas_payment_id:   pag.id,
-                invoice_url:        pag.invoiceUrl,
-                boleto_url:         pag.bankSlipUrl ?? null,
-                boleto_linha:       linha,
-                pix_qr_code_base64: pix?.encodedImage ?? null,
-                pix_copia_cola:     pix?.payload ?? null,
-              });
-
-              sucesso = 'Assinatura mensal ativada! Cobrança gerada — PIX, Boleto e Cartão disponíveis.';
+            if (!acadInfo?.email) {
+              sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança não gerada)';
             } else {
-              sucesso = 'Assinatura mensal ativada! (Cobrança sendo processada pelo Asaas)';
+              let customerId = acadInfo.asaas_customer_id;
+              if (!customerId) {
+                const cliente = await buscarOuCriarCliente({
+                  nome: acadInfo.nome, email: acadInfo.email,
+                  cpfCnpj: acadInfo.responsavel_cpf_cnpj, telefone: acadInfo.telefone,
+                });
+                customerId = cliente.id;
+                await adminClient.from('academias').update({ asaas_customer_id: customerId }).eq('id', id!);
+              }
+
+              const dataVencStr = proximoDia10();
+              const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+
+              // Cria assinatura recorrente mensal no Asaas (vence todo dia 10)
+              const assinAsaas = await criarAssinatura({
+                customerId,
+                valor,
+                descricao:   `Assinatura ${planoData?.nome} — UNAFIT`,
+                nextDueDate: dataVencStr,
+                externalRef: novaAssinaturaId,
+              });
+
+              await adminClient.from('saas_assinaturas')
+                .update({ asaas_subscription_id: assinAsaas.id })
+                .eq('id', novaAssinaturaId);
+
+              // Busca o primeiro pagamento gerado automaticamente pela assinatura
+              const pag = await buscarPrimeiroPagamentoAssinatura(assinAsaas.id);
+              if (pag) {
+                const pix   = await buscarPixQrCode(pag.id);
+                const linha = await buscarLinhaDigitavel(pag.id);
+
+                await adminClient.from('saas_faturas').insert({
+                  academia_id:        id!,
+                  saas_assinatura_id: novaAssinaturaId,
+                  descricao:          `Mensalidade ${planoData?.nome} — ${mes}`,
+                  valor,
+                  data_vencimento:    dataVencStr,
+                  status:             'pendente',
+                  asaas_payment_id:   pag.id,
+                  invoice_url:        pag.invoiceUrl,
+                  boleto_url:         pag.bankSlipUrl ?? null,
+                  boleto_linha:       linha,
+                  pix_qr_code_base64: pix?.encodedImage ?? null,
+                  pix_copia_cola:     pix?.payload ?? null,
+                });
+
+                sucesso = 'Assinatura mensal ativada! Cobrança gerada — vence todo dia 10.';
+              } else {
+                sucesso = 'Assinatura mensal ativada! (Cobrança sendo processada pelo Asaas)';
+              }
             }
+          } catch (e: any) {
+            sucesso = `Assinatura atualizada. Erro no Asaas: ${e.message}`;
           }
-        } catch (e: any) {
-          sucesso = `Assinatura atualizada. Erro no Asaas: ${e.message}`;
+        } else {
+          sucesso = 'Assinatura atualizada! (Plano cortesia — sem cobrança)';
         }
       } else {
-        sucesso = 'Assinatura atualizada! (Plano cortesia — sem cobrança)';
+        sucesso = 'Assinatura já ativa — cobrança mensal em andamento.';
       }
     } else {
       sucesso = 'Assinatura atualizada!';
