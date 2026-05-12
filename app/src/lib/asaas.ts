@@ -56,6 +56,17 @@ export interface PixQrCode {
   expirationDate: string;
 }
 
+export interface AsaasSubscription {
+  id: string;
+  status: string;
+  value: number;
+  nextDueDate: string;
+  cycle: string;
+  billingType: BillingType;
+  description: string;
+  externalReference?: string;
+}
+
 // ── Clientes ──────────────────────────────────────────────────────────────────
 
 /** Busca cliente pelo e-mail ou cria novo. */
@@ -110,6 +121,48 @@ export async function consultarPagamento(paymentId: string): Promise<AsaasPaymen
 
 export async function cancelarPagamento(paymentId: string): Promise<void> {
   await req('DELETE', `/payments/${paymentId}`);
+}
+
+/** Atualiza dados de um cliente existente no Asaas. */
+export async function atualizarCliente(customerId: string, params: {
+  nome: string; email: string; cpfCnpj?: string | null; telefone?: string | null;
+}): Promise<AsaasCustomer> {
+  return req<AsaasCustomer>('PUT', `/customers/${customerId}`, {
+    name:    params.nome,
+    email:   params.email,
+    cpfCnpj: params.cpfCnpj?.replace(/\D/g, '') || undefined,
+    phone:   params.telefone?.replace(/\D/g, '') || undefined,
+  });
+}
+
+// ── Assinaturas recorrentes ───────────────────────────────────────────────────
+
+/** Cria assinatura mensal recorrente. */
+export async function criarAssinatura(params: {
+  customerId: string; valor: number; descricao: string;
+  nextDueDate: string; externalRef?: string;
+}): Promise<AsaasSubscription> {
+  return req<AsaasSubscription>('POST', '/subscriptions', {
+    customer:          params.customerId,
+    billingType:       'UNDEFINED',
+    value:             params.valor,
+    nextDueDate:       params.nextDueDate,
+    cycle:             'MONTHLY',
+    description:       params.descricao,
+    externalReference: params.externalRef,
+  });
+}
+
+export async function cancelarAssinatura(subscriptionId: string): Promise<void> {
+  await req('DELETE', `/subscriptions/${subscriptionId}`);
+}
+
+/** Retorna o primeiro pagamento gerado por uma assinatura. */
+export async function buscarPrimeiroPagamentoAssinatura(subscriptionId: string): Promise<AsaasPayment | null> {
+  try {
+    const r = await req<{ data: AsaasPayment[] }>('GET', `/subscriptions/${subscriptionId}/payments?limit=1`);
+    return r.data?.[0] ?? null;
+  } catch { return null; }
 }
 
 /**

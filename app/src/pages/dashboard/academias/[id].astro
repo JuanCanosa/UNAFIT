@@ -6,7 +6,11 @@ import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
-import { buscarOuCriarCliente, gerarCobrancaCompleta } from '@/lib/asaas';
+import {
+  buscarOuCriarCliente, atualizarCliente,
+  criarAssinatura, cancelarAssinatura, buscarPrimeiroPagamentoAssinatura,
+  buscarPixQrCode, buscarLinhaDigitavel,
+} from '@/lib/asaas';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -50,8 +54,30 @@ if (Astro.request.method === 'POST') {
       endereco_estado:       (form.get('endereco_estado') as string)?.trim().toUpperCase() || null,
     };
     const { error: updErr } = await adminClient.from('academias').update(patch).eq('id', id!);
-    if (updErr) erro = updErr.message;
-    else sucesso = 'Academia atualizada com sucesso!';
+    if (updErr) {
+      erro = updErr.message;
+    } else {
+      // Sincroniza cliente no Asaas silenciosamente
+      if (patch.email) {
+        try {
+          const { data: acadAtual } = await adminClient
+            .from('academias').select('asaas_customer_id').eq('id', id!).single();
+          if (acadAtual?.asaas_customer_id) {
+            await atualizarCliente(acadAtual.asaas_customer_id, {
+              nome: patch.nome, email: patch.email,
+              cpfCnpj: patch.responsavel_cpf_cnpj, telefone: patch.telefone,
+            });
+          } else {
+            const cliente = await buscarOuCriarCliente({
+              nome: patch.nome, email: patch.email,
+              cpfCnpj: patch.responsavel_cpf_cnpj, telefone: patch.telefone,
+            });
+            await adminClient.from('academias').update({ asaas_customer_id: cliente.id }).eq('id', id!);
+          }
+        } catch (_) {}
+      }
+      sucesso = 'Academia atualizada com sucesso!';
+    }
   }
 
   if (action === 'upload_logo') {
@@ -149,6 +175,22 @@ if (Astro.request.method === 'POST') {
     const status        = form.get('status') as string;
     const assinatura_id = form.get('assinatura_id') as string;
 
+    // Busca assinatura atual para cancelar subscription Asaas se necessário
+    const { data: assinAtual } = assinatura_id
+      ? await adminClient.from('saas_assinaturas')
+          .select('asaas_subscription_id, saas_plano_id, status').eq('id', assinatura_id).single()
+      : { data: null };
+
+    const planoMudou = assinAtual?.saas_plano_id !== saas_plano_id;
+    const desativando = status !== 'ativa';
+
+    // Cancela subscription Asaas anterior quando plano muda ou desativa
+    if (assinAtual?.asaas_subscription_id && (planoMudou || desativando)) {
+      try { await cancelarAssinatura(assinAtual.asaas_subscription_id); } catch (_) {}
+      await adminClient.from('saas_assinaturas')
+        .update({ asaas_subscription_id: null }).eq('id', assinatura_id);
+    }
+
     let novaAssinaturaId = assinatura_id;
     if (assinatura_id) {
       await adminClient.from('saas_assinaturas').update({ saas_plano_id, status }).eq('id', assinatura_id);
@@ -159,89 +201,77 @@ if (Astro.request.method === 'POST') {
       novaAssinaturaId = novaAssin?.id ?? '';
     }
 
-    // Auto-gerar cobrança ao ativar assinatura
-    if (status === 'ativa') {
+    if (status === 'ativa' && (!assinAtual?.asaas_subscription_id || planoMudou)) {
       const { data: planoData } = await adminClient
         .from('saas_planos').select('id, nome, valor').eq('id', saas_plano_id).single();
       const valor = Number(planoData?.valor ?? 0);
 
       if (valor > 0) {
-        // Verifica se já existe fatura pendente/paga no mês atual
-        const primeiroDiaMes = new Date();
-        primeiroDiaMes.setDate(1);
-        const { data: faturaExistente } = await adminClient
-          .from('saas_faturas')
-          .select('id')
-          .eq('academia_id', id!)
-          .in('status', ['pendente', 'pago'])
-          .gte('data_vencimento', primeiroDiaMes.toISOString().split('T')[0])
-          .limit(1).maybeSingle();
+        try {
+          const { data: acadInfo } = await adminClient
+            .from('academias')
+            .select('nome, email, responsavel_cpf_cnpj, telefone, asaas_customer_id')
+            .eq('id', id!).single();
 
-        if (!faturaExistente) {
-          const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-          const dataVenc = new Date();
-          dataVenc.setDate(dataVenc.getDate() + 3);
-          const dataVencStr = dataVenc.toISOString().split('T')[0];
-          const descricao = `Mensalidade ${planoData?.nome} — ${mes}`;
-
-          const { data: faturaData } = await adminClient.from('saas_faturas').insert({
-            academia_id: id!,
-            saas_assinatura_id: novaAssinaturaId,
-            descricao,
-            valor,
-            data_vencimento: dataVencStr,
-            status: 'pendente',
-          }).select('id').single();
-
-          if (faturaData?.id) {
-            try {
-              const { data: acadInfo } = await adminClient
-                .from('academias')
-                .select('nome, email, responsavel_cpf_cnpj, telefone, asaas_customer_id')
-                .eq('id', id!).single();
-
-              if (acadInfo?.email) {
-                let customerId = acadInfo.asaas_customer_id;
-                if (!customerId) {
-                  const cliente = await buscarOuCriarCliente({
-                    nome: acadInfo.nome,
-                    email: acadInfo.email,
-                    cpfCnpj: acadInfo.responsavel_cpf_cnpj,
-                    telefone: acadInfo.telefone,
-                  });
-                  customerId = cliente.id;
-                  await adminClient.from('academias').update({ asaas_customer_id: customerId }).eq('id', id!);
-                }
-
-                const cobranca = await gerarCobrancaCompleta({
-                  customerId,
-                  valor,
-                  descricao,
-                  vencimento: dataVencStr,
-                  externalRef: faturaData.id,
-                });
-
-                await adminClient.from('saas_faturas').update({
-                  asaas_payment_id: cobranca.paymentId,
-                  invoice_url:      cobranca.invoiceUrl,
-                  boleto_url:       cobranca.boletoUrl,
-                  boleto_linha:     cobranca.boletoCodigo,
-                  pix_qr_code_base64: cobranca.pixQrCodeBase64,
-                  pix_copia_cola:   cobranca.pixCopiaCola,
-                }).eq('id', faturaData.id);
-
-                sucesso = 'Assinatura ativada! Cobrança gerada — PIX, Boleto e Cartão disponíveis.';
-              } else {
-                sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança Asaas não gerada)';
-              }
-            } catch (e: any) {
-              sucesso = `Assinatura atualizada. Fatura criada, mas erro no Asaas: ${e.message}`;
-            }
+          if (!acadInfo?.email) {
+            sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança não gerada)';
           } else {
-            sucesso = 'Assinatura atualizada!';
+            let customerId = acadInfo.asaas_customer_id;
+            if (!customerId) {
+              const cliente = await buscarOuCriarCliente({
+                nome: acadInfo.nome, email: acadInfo.email,
+                cpfCnpj: acadInfo.responsavel_cpf_cnpj, telefone: acadInfo.telefone,
+              });
+              customerId = cliente.id;
+              await adminClient.from('academias').update({ asaas_customer_id: customerId }).eq('id', id!);
+            }
+
+            const dataVenc = new Date();
+            dataVenc.setDate(dataVenc.getDate() + 3);
+            const dataVencStr = dataVenc.toISOString().split('T')[0];
+            const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+
+            // Cria assinatura recorrente mensal no Asaas
+            const assinAsaas = await criarAssinatura({
+              customerId,
+              valor,
+              descricao: `Assinatura ${planoData?.nome} — UNAFIT`,
+              nextDueDate: dataVencStr,
+              externalRef: novaAssinaturaId,
+            });
+
+            await adminClient.from('saas_assinaturas')
+              .update({ asaas_subscription_id: assinAsaas.id })
+              .eq('id', novaAssinaturaId);
+
+            // Busca o primeiro pagamento gerado automaticamente pela assinatura
+            const pag = await buscarPrimeiroPagamentoAssinatura(assinAsaas.id);
+            if (pag) {
+              const pix  = await buscarPixQrCode(pag.id);
+              const linha = await buscarLinhaDigitavel(pag.id);
+
+              await adminClient.from('saas_faturas').insert({
+                academia_id:        id!,
+                saas_assinatura_id: novaAssinaturaId,
+                descricao:          `Mensalidade ${planoData?.nome} — ${mes}`,
+                valor,
+                data_vencimento:    dataVencStr,
+                status:             'pendente',
+                asaas_payment_id:   pag.id,
+                invoice_url:        pag.invoiceUrl,
+                boleto_url:         pag.bankSlipUrl ?? null,
+                boleto_linha:       linha,
+                pix_qr_code_base64: pix?.encodedImage ?? null,
+                pix_copia_cola:     pix?.payload ?? null,
+              });
+
+              sucesso = 'Assinatura mensal ativada! Cobrança gerada — PIX, Boleto e Cartão disponíveis.';
+            } else {
+              sucesso = 'Assinatura mensal ativada! (Cobrança sendo processada pelo Asaas)';
+            }
           }
-        } else {
-          sucesso = 'Assinatura atualizada! (Já existe fatura pendente para este mês)';
+        } catch (e: any) {
+          sucesso = `Assinatura atualizada. Erro no Asaas: ${e.message}`;
         }
       } else {
         sucesso = 'Assinatura atualizada! (Plano cortesia — sem cobrança)';
@@ -276,7 +306,7 @@ const { data: academia } = await adminClient
     endereco_cep, endereco_rua, endereco_numero, endereco_complemento,
     endereco_bairro, endereco_cidade, endereco_estado,
     asaas_customer_id,
-    saas_assinaturas(id, status, data_inicio, data_fim, saas_planos(id, nome, valor, limite_alunos))
+    saas_assinaturas(id, status, data_inicio, data_fim, asaas_subscription_id, saas_planos(id, nome, valor, limite_alunos))
   `)
   .eq('id', id!)
   .single();
