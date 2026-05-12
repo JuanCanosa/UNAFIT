@@ -1,108 +1,135 @@
 /**
- * Integração Asaas — stub pronto para ativar quando a chave API for configurada.
- * Para ativar: adicione ASAAS_API_KEY no .env (sandbox: https://sandbox.asaas.com/api/v3)
+ * Cliente Asaas — integração com a API de pagamentos brasileira.
+ * Sandbox: https://sandbox.asaas.com/api/v3
+ * Produção: https://api.asaas.com/api/v3
+ *
+ * .env: ASAAS_API_KEY=sua_chave   ASAAS_SANDBOX=true
  */
 
-const ASAAS_API_KEY = import.meta.env.ASAAS_API_KEY ?? process.env.ASAAS_API_KEY ?? null;
-const ASAAS_BASE_URL = process.env.ASAAS_ENV === 'production'
-  ? 'https://api.asaas.com/v3'
-  : 'https://sandbox.asaas.com/api/v3';
+const API_KEY  = process.env.ASAAS_API_KEY  ?? import.meta.env.ASAAS_API_KEY  ?? '';
+const SANDBOX  = (process.env.ASAAS_SANDBOX ?? import.meta.env.ASAAS_SANDBOX ?? 'true') !== 'false';
+const BASE_URL = SANDBOX
+  ? 'https://sandbox.asaas.com/api/v3'
+  : 'https://api.asaas.com/api/v3';
 
-function isConfigured(): boolean {
-  return !!ASAAS_API_KEY;
-}
+// ── Request helper ────────────────────────────────────────────────────────────
 
-async function asaasRequest(method: string, path: string, body?: object) {
-  if (!isConfigured()) return null;
-  const res = await fetch(`${ASAAS_BASE_URL}${path}`, {
+async function req<T = any>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: object,
+): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: {
-      'access_token': ASAAS_API_KEY!,
+      'access_token': API_KEY,
       'Content-Type': 'application/json',
+      'User-Agent': 'UNAFIT/1.0',
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Asaas ${method} ${path}: ${err}`);
+    const msg = (json as any).errors?.[0]?.description ?? `Asaas ${res.status}`;
+    throw new Error(msg);
   }
-  return res.json();
+  return json as T;
 }
 
-/** Cria cliente no Asaas e retorna o customerId */
-export async function criarClienteAsaas(aluno: {
-  nome: string;
-  email: string;
-  cpf: string;
-  telefone: string;
-  endereco_cep?: string | null;
-  endereco_rua?: string | null;
-  endereco_numero?: string | null;
-  endereco_bairro?: string | null;
-  endereco_cidade?: string | null;
-  endereco_estado?: string | null;
-}): Promise<string | null> {
-  if (!isConfigured()) return null;
-  const data = await asaasRequest('POST', '/customers', {
-    name: aluno.nome,
-    email: aluno.email,
-    cpfCnpj: aluno.cpf.replace(/\D/g, ''),
-    mobilePhone: aluno.telefone.replace(/\D/g, ''),
-    postalCode: aluno.endereco_cep?.replace(/\D/g, ''),
-    address: aluno.endereco_rua,
-    addressNumber: aluno.endereco_numero,
-    province: aluno.endereco_bairro,
-    city: aluno.endereco_cidade,
+// ── Tipos ─────────────────────────────────────────────────────────────────────
+
+export type BillingType = 'BOLETO' | 'PIX' | 'CREDIT_CARD' | 'UNDEFINED';
+export type PaymentStatus =
+  | 'PENDING' | 'RECEIVED' | 'CONFIRMED' | 'OVERDUE'
+  | 'REFUNDED' | 'RECEIVED_IN_CASH' | 'CANCELLED';
+
+export interface AsaasCustomer { id: string; name: string; email: string; }
+export interface AsaasPayment  {
+  id: string; status: PaymentStatus; value: number;
+  dueDate: string; invoiceUrl: string; bankSlipUrl?: string;
+  billingType: BillingType;
+}
+export interface PixQrCode {
+  encodedImage: string;   // base64 PNG
+  payload: string;        // copia e cola
+  expirationDate: string;
+}
+
+// ── Clientes ──────────────────────────────────────────────────────────────────
+
+/** Busca cliente pelo e-mail ou cria novo. */
+export async function buscarOuCriarCliente(params: {
+  nome: string; email: string; cpfCnpj?: string | null; telefone?: string | null;
+}): Promise<AsaasCustomer> {
+  const lista = await req<{ data: AsaasCustomer[] }>(
+    'GET', `/customers?email=${encodeURIComponent(params.email)}&limit=1`
+  );
+  if (lista.data?.length > 0) return lista.data[0]!;
+  return req<AsaasCustomer>('POST', '/customers', {
+    name:     params.nome,
+    email:    params.email,
+    cpfCnpj:  params.cpfCnpj?.replace(/\D/g, '') || undefined,
+    phone:    params.telefone?.replace(/\D/g, '') || undefined,
+    notificationDisabled: false,
   });
-  return data?.id ?? null;
 }
 
-/** Cria cobrança avulsa (mensalidade manual) */
-export async function criarCobrancaAsaas(params: {
-  customerId: string;
-  valor: number;
-  dataVencimento: string; // YYYY-MM-DD
-  descricao: string;
-}): Promise<{ id: string; invoiceUrl: string } | null> {
-  if (!isConfigured()) return null;
-  const data = await asaasRequest('POST', '/payments', {
-    customer: params.customerId,
-    billingType: 'UNDEFINED', // aceita PIX, boleto ou cartão
-    value: params.valor,
-    dueDate: params.dataVencimento,
-    description: params.descricao,
+// ── Cobranças ─────────────────────────────────────────────────────────────────
+
+export async function criarCobranca(params: {
+  customerId: string; valor: number; descricao: string;
+  vencimento: string; externalRef?: string; billingType?: BillingType;
+}): Promise<AsaasPayment> {
+  return req<AsaasPayment>('POST', '/payments', {
+    customer:          params.customerId,
+    billingType:       params.billingType ?? 'UNDEFINED',
+    value:             params.valor,
+    dueDate:           params.vencimento,
+    description:       params.descricao,
+    externalReference: params.externalRef,
+    postalService:     false,
   });
-  return data ? { id: data.id, invoiceUrl: data.invoiceUrl } : null;
 }
 
-/** Cria assinatura recorrente */
-export async function criarAssinaturaAsaas(params: {
-  customerId: string;
-  valor: number;
-  vencimentoDia: number;
-  descricao: string;
-}): Promise<string | null> {
-  if (!isConfigured()) return null;
-  const hoje = new Date();
-  const ano = hoje.getFullYear();
-  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
-  const dia = String(params.vencimentoDia).padStart(2, '0');
-  const data = await asaasRequest('POST', '/subscriptions', {
-    customer: params.customerId,
-    billingType: 'UNDEFINED',
-    value: params.valor,
-    nextDueDate: `${ano}-${mes}-${dia}`,
-    cycle: 'MONTHLY',
-    description: params.descricao,
-  });
-  return data?.id ?? null;
+export async function buscarPixQrCode(paymentId: string): Promise<PixQrCode | null> {
+  try { return await req<PixQrCode>('GET', `/payments/${paymentId}/pixQrCode`); }
+  catch { return null; }
 }
 
-/** Cancela assinatura */
-export async function cancelarAssinaturaAsaas(subscriptionId: string): Promise<boolean> {
-  if (!isConfigured()) return false;
-  await asaasRequest('DELETE', `/subscriptions/${subscriptionId}`);
-  return true;
+export async function buscarLinhaDigitavel(paymentId: string): Promise<string | null> {
+  try {
+    const d = await req<{ identificationField: string }>('GET', `/payments/${paymentId}/identificationField`);
+    return d.identificationField ?? null;
+  } catch { return null; }
 }
 
-export { isConfigured as asaasConfigurado };
+export async function consultarPagamento(paymentId: string): Promise<AsaasPayment> {
+  return req<AsaasPayment>('GET', `/payments/${paymentId}`);
+}
+
+export async function cancelarPagamento(paymentId: string): Promise<void> {
+  await req('DELETE', `/payments/${paymentId}`);
+}
+
+/**
+ * Gera cobrança completa: UNDEFINED (cliente escolhe método no checkout)
+ * + busca PIX QR Code automaticamente.
+ */
+export async function gerarCobrancaCompleta(params: {
+  customerId: string; valor: number; descricao: string;
+  vencimento: string; externalRef: string;
+}) {
+  const pag = await criarCobranca({ ...params, billingType: 'UNDEFINED' });
+  const pix = await buscarPixQrCode(pag.id);
+  const linha = pag.billingType !== 'PIX' ? await buscarLinhaDigitavel(pag.id) : null;
+
+  return {
+    paymentId:       pag.id,
+    status:          pag.status,
+    invoiceUrl:      pag.invoiceUrl,       // link universal (PIX + Boleto + Cartão)
+    boletoUrl:       pag.bankSlipUrl ?? null,
+    boletoCodigo:    linha,
+    pixQrCodeBase64: pix?.encodedImage ?? null,
+    pixCopiaCola:    pix?.payload ?? null,
+  };
+}
