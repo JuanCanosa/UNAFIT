@@ -6,8 +6,9 @@
  * .env: ASAAS_API_KEY=sua_chave   ASAAS_SANDBOX=true
  */
 
-const API_KEY  = process.env.ASAAS_API_KEY  ?? import.meta.env.ASAAS_API_KEY  ?? '';
-const SANDBOX  = (process.env.ASAAS_SANDBOX ?? import.meta.env.ASAAS_SANDBOX ?? 'true') !== 'false';
+// Usar process.env em SSR Node.js — seguro e sem dependência de import.meta.env
+const API_KEY  = process.env.ASAAS_API_KEY  ?? '';
+const SANDBOX  = (process.env.ASAAS_SANDBOX ?? 'true') !== 'false';
 const BASE_URL = SANDBOX
   ? 'https://sandbox.asaas.com/api/v3'
   : 'https://api.asaas.com/api/v3';
