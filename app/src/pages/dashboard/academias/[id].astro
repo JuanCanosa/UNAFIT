@@ -181,42 +181,56 @@ if (Astro.request.method === 'POST') {
   if (action === 'atualizar_assinatura') {
     const saas_plano_id = form.get('saas_plano_id') as string;
     const status        = form.get('status') as string;
-    const assinatura_id = form.get('assinatura_id') as string;
 
-    // Busca assinatura atual para cancelar subscription Asaas se necessário
-    const { data: assinAtual } = assinatura_id
-      ? await adminClient.from('saas_assinaturas')
-          .select('asaas_subscription_id, saas_plano_id, status').eq('id', assinatura_id).single()
-      : { data: null };
+    // Fonte de verdade: busca por academia_id (não depende do hidden input do form)
+    const { data: assinAtual } = await adminClient
+      .from('saas_assinaturas')
+      .select('id, asaas_subscription_id, saas_plano_id, status')
+      .eq('academia_id', id!)
+      .maybeSingle();
 
-    const planoMudou = assinAtual?.saas_plano_id !== saas_plano_id;
+    const planoMudou  = !!assinAtual && assinAtual.saas_plano_id !== saas_plano_id;
     const desativando = status !== 'ativa';
 
-    // Cancela subscription Asaas anterior quando plano muda ou desativa
+    // Cancela subscription Asaas anterior se plano muda ou status sai de ativa
     if (assinAtual?.asaas_subscription_id && (planoMudou || desativando)) {
       try { await cancelarAssinatura(assinAtual.asaas_subscription_id); } catch (_) {}
       await adminClient.from('saas_assinaturas')
-        .update({ asaas_subscription_id: null }).eq('id', assinatura_id);
+        .update({ asaas_subscription_id: null }).eq('id', assinAtual.id);
     }
 
-    let novaAssinaturaId = assinatura_id;
-    if (assinatura_id) {
-      await adminClient.from('saas_assinaturas').update({ saas_plano_id, status }).eq('id', assinatura_id);
-    } else {
-      const { data: novaAssin } = await adminClient.from('saas_assinaturas').insert({
-        academia_id: id!, saas_plano_id, status, data_inicio: new Date().toISOString().split('T')[0],
-      }).select('id').single();
-      novaAssinaturaId = novaAssin?.id ?? '';
-    }
+    // Upsert garante 1 row por academia — único(academia_id) no banco
+    const { data: assinSalva } = await adminClient
+      .from('saas_assinaturas')
+      .upsert(
+        {
+          ...(assinAtual?.id ? { id: assinAtual.id } : {}),
+          academia_id:  id!,
+          saas_plano_id,
+          status,
+          ...(!assinAtual ? { data_inicio: new Date().toISOString().split('T')[0] } : {}),
+        },
+        { onConflict: 'academia_id' }
+      )
+      .select('id')
+      .single();
+
+    const assinaturaId = assinSalva?.id ?? '';
 
     if (status === 'ativa') {
-      // Re-fetch após o update para pegar o asaas_subscription_id mais recente
-      const { data: assinFresh } = await adminClient
-        .from('saas_assinaturas').select('asaas_subscription_id').eq('id', novaAssinaturaId).single();
+      // Atomic claim: só avança se conseguir setar __PENDING__ onde era null.
+      // Evita duplicação mesmo com cliques simultâneos.
+      const { data: claimed } = await adminClient
+        .from('saas_assinaturas')
+        .update({ asaas_subscription_id: '__PENDING__' })
+        .eq('id', assinaturaId)
+        .is('asaas_subscription_id', null)
+        .select('id')
+        .maybeSingle();
 
-      const jaTemSubscription = !!assinFresh?.asaas_subscription_id && !planoMudou;
-
-      if (!jaTemSubscription) {
+      if (!claimed) {
+        sucesso = 'Assinatura já ativa — cobrança mensal em andamento.';
+      } else {
         const { data: planoData } = await adminClient
           .from('saas_planos').select('id, nome, valor').eq('id', saas_plano_id).single();
         const valor = Number(planoData?.valor ?? 0);
@@ -229,6 +243,9 @@ if (Astro.request.method === 'POST') {
               .eq('id', id!).single();
 
             if (!acadInfo?.email) {
+              // Libera o claim sem criar subscription
+              await adminClient.from('saas_assinaturas')
+                .update({ asaas_subscription_id: null }).eq('id', assinaturaId);
               sucesso = 'Assinatura atualizada. (Academia sem e-mail — cobrança não gerada)';
             } else {
               let customerId = acadInfo.asaas_customer_id;
@@ -244,53 +261,53 @@ if (Astro.request.method === 'POST') {
               const dataVencStr = proximoDia10();
               const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
-              // Cria assinatura recorrente mensal no Asaas (vence todo dia 10)
+              // Cria assinatura recorrente mensal (vence todo dia 10)
               const assinAsaas = await criarAssinatura({
                 customerId,
                 valor,
                 descricao:   `Assinatura ${planoData?.nome} — UNAFIT`,
                 nextDueDate: dataVencStr,
-                externalRef: novaAssinaturaId,
+                externalRef: assinaturaId,
               });
 
+              // Substitui __PENDING__ pelo ID real da subscription
               await adminClient.from('saas_assinaturas')
                 .update({ asaas_subscription_id: assinAsaas.id })
-                .eq('id', novaAssinaturaId);
+                .eq('id', assinaturaId);
 
-              // Busca o primeiro pagamento gerado automaticamente pela assinatura
-              const pag = await buscarPrimeiroPagamentoAssinatura(assinAsaas.id);
-              if (pag) {
-                const pix   = await buscarPixQrCode(pag.id);
-                const linha = await buscarLinhaDigitavel(pag.id);
+              const pag   = await buscarPrimeiroPagamentoAssinatura(assinAsaas.id);
+              const pix   = pag ? await buscarPixQrCode(pag.id) : null;
+              const linha = pag ? await buscarLinhaDigitavel(pag.id) : null;
 
-                await adminClient.from('saas_faturas').insert({
-                  academia_id:        id!,
-                  saas_assinatura_id: novaAssinaturaId,
-                  descricao:          `Mensalidade ${planoData?.nome} — ${mes}`,
-                  valor,
-                  data_vencimento:    dataVencStr,
-                  status:             'pendente',
-                  asaas_payment_id:   pag.id,
-                  invoice_url:        pag.invoiceUrl,
-                  boleto_url:         pag.bankSlipUrl ?? null,
-                  boleto_linha:       linha,
-                  pix_qr_code_base64: pix?.encodedImage ?? null,
-                  pix_copia_cola:     pix?.payload ?? null,
-                });
+              await adminClient.from('saas_faturas').insert({
+                academia_id:        id!,
+                saas_assinatura_id: assinaturaId,
+                descricao:          `Mensalidade ${planoData?.nome} — ${mes}`,
+                valor,
+                data_vencimento:    dataVencStr,
+                status:             'pendente',
+                asaas_payment_id:   pag?.id ?? null,
+                invoice_url:        pag?.invoiceUrl ?? null,
+                boleto_url:         pag?.bankSlipUrl ?? null,
+                boleto_linha:       linha,
+                pix_qr_code_base64: pix?.encodedImage ?? null,
+                pix_copia_cola:     pix?.payload ?? null,
+              });
 
-                sucesso = 'Assinatura mensal ativada! Cobrança gerada — vence todo dia 10.';
-              } else {
-                sucesso = 'Assinatura mensal ativada! (Cobrança sendo processada pelo Asaas)';
-              }
+              sucesso = 'Assinatura mensal ativada! Cobrança gerada — vence todo dia 10.';
             }
           } catch (e: any) {
-            sucesso = `Assinatura atualizada. Erro no Asaas: ${e.message}`;
+            // Em caso de falha libera o claim para permitir nova tentativa
+            await adminClient.from('saas_assinaturas')
+              .update({ asaas_subscription_id: null }).eq('id', assinaturaId);
+            sucesso = `Assinatura atualizada. Erro no Asaas: ${(e as any).message}`;
           }
         } else {
+          // Plano cortesia: libera claim e marca ativo sem cobrança
+          await adminClient.from('saas_assinaturas')
+            .update({ asaas_subscription_id: null }).eq('id', assinaturaId);
           sucesso = 'Assinatura atualizada! (Plano cortesia — sem cobrança)';
         }
-      } else {
-        sucesso = 'Assinatura já ativa — cobrança mensal em andamento.';
       }
     } else {
       sucesso = 'Assinatura atualizada!';
