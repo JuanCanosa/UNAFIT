@@ -383,7 +383,9 @@ const [
     .eq('academia_id', id!),
 ]);
 
-const assin       = (academia as any).saas_assinaturas?.[0];
+// UNIQUE(academia_id) faz o PostgREST retornar objeto único, não array
+const assinRaw = (academia as any).saas_assinaturas;
+const assin    = Array.isArray(assinRaw) ? assinRaw[0] : (assinRaw ?? null);
 const totalAlunos = totalAlunos_count ?? 0;
 const totalColabs = totalColabs_count ?? 0;
 const donos       = membros?.filter((m: any) => m.role === 'dono') ?? [];
