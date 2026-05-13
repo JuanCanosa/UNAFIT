@@ -1,0 +1,172 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+import { createAsaasClient } from '@/lib/asaas';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles').select('role, academia_id').eq('id', user.id).single();
+
+if (!profile || profile.role !== 'dono') return Astro.redirect('/dashboard');
+
+const admin = createSupabaseAdminClient();
+const { data: academia } = await admin
+  .from('academias')
+  .select('id, nome, asaas_api_key, asaas_sandbox')
+  .eq('id', profile.academia_id!)
+  .single();
+
+let sucesso = '';
+let erro = '';
+
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'salvar_asaas') {
+    const api_key = (form.get('asaas_api_key') as string)?.trim();
+    const sandbox = form.get('asaas_sandbox') === 'true';
+
+    if (!api_key) {
+      // Limpa a integração
+      await admin.from('academias')
+        .update({ asaas_api_key: null, asaas_sandbox: true })
+        .eq('id', academia!.id);
+      sucesso = 'Integração Asaas removida.';
+    } else {
+      // Testa a chave antes de salvar
+      const cli = createAsaasClient(api_key, sandbox);
+      const ok  = await cli.testarConexao();
+      if (!ok) {
+        erro = 'Chave inválida ou sem acesso à API Asaas. Verifique e tente novamente.';
+      } else {
+        await admin.from('academias')
+          .update({ asaas_api_key: api_key, asaas_sandbox: sandbox })
+          .eq('id', academia!.id);
+        sucesso = 'Integração Asaas salva e testada com sucesso!';
+      }
+    }
+  }
+}
+
+// Recarrega após POST
+const { data: acad } = await admin
+  .from('academias').select('asaas_api_key, asaas_sandbox').eq('id', profile.academia_id!).single();
+
+const temChave  = !!(acad?.asaas_api_key);
+const isSandbox = acad?.asaas_sandbox !== false;
+const chaveExibida = acad?.asaas_api_key
+  ? acad.asaas_api_key.slice(0, 12) + '••••••••••••••••••••••••' + acad.asaas_api_key.slice(-4)
+  : '';
+---
+
+<DashboardLayout title="Configurações">
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-foreground">Configurações</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Integrações e preferências da academia</p>
+  </div>
+
+  {sucesso && (
+    <div class="mb-6 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">✓ {sucesso}</div>
+  )}
+  {erro && (
+    <div class="mb-6 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">{erro}</div>
+  )}
+
+  <!-- Integração Asaas -->
+  <div class="rounded-xl border border-border bg-card p-6 max-w-2xl">
+    <div class="flex items-start gap-4 mb-6">
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 border border-blue-500/20">
+        <svg class="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+        </svg>
+      </div>
+      <div class="flex-1">
+        <div class="flex items-center gap-2">
+          <h2 class="text-sm font-semibold text-foreground">Integração Asaas</h2>
+          {temChave ? (
+            <span class={`text-xs px-2 py-0.5 rounded-full border ${isSandbox ? 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10' : 'border-green-600/30 text-green-400 bg-green-600/10'}`}>
+              {isSandbox ? 'Sandbox' : 'Produção'}
+            </span>
+          ) : (
+            <span class="text-xs px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-500">Não configurado</span>
+          )}
+        </div>
+        <p class="text-xs text-muted-foreground mt-1">
+          Conecte sua conta Asaas para gerar cobranças automáticas (PIX, Boleto, Cartão) para os alunos ao atribuir planos.
+        </p>
+        {temChave && (
+          <p class="text-xs text-zinc-500 mt-2 font-mono">{chaveExibida}</p>
+        )}
+      </div>
+    </div>
+
+    <form method="POST" class="space-y-4">
+      <input type="hidden" name="action" value="salvar_asaas" />
+
+      <div>
+        <label class="block text-xs text-muted-foreground mb-1">
+          API Key do Asaas
+          <a href="https://www.asaas.com/config/permissoes" target="_blank"
+            class="ml-1 text-primary hover:underline">onde encontrar →</a>
+        </label>
+        <input
+          name="asaas_api_key"
+          type="password"
+          autocomplete="off"
+          placeholder={temChave ? 'Digite para substituir a chave atual' : '$aact_...'}
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        <p class="text-xs text-zinc-600 mt-1">Deixe em branco para remover a integração.</p>
+      </div>
+
+      <div>
+        <label class="block text-xs text-muted-foreground mb-2">Ambiente</label>
+        <div class="flex gap-3">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="asaas_sandbox" value="true"
+              checked={isSandbox}
+              class="accent-primary" />
+            <span class="text-sm text-foreground">Sandbox <span class="text-xs text-muted-foreground">(testes)</span></span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="asaas_sandbox" value="false"
+              checked={!isSandbox}
+              class="accent-primary" />
+            <span class="text-sm text-foreground">Produção <span class="text-xs text-muted-foreground">(real)</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="pt-2">
+        <button type="submit"
+          class="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
+          Salvar e testar conexão
+        </button>
+      </div>
+    </form>
+
+    {temChave && (
+      <div class="mt-6 pt-5 border-t border-border">
+        <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Webhook Asaas</h3>
+        <p class="text-xs text-zinc-400 mb-2">
+          Configure no painel Asaas em <strong class="text-zinc-300">Configurações → Integrações → Webhooks</strong> com a URL abaixo para receber atualizações de pagamento automáticas:
+        </p>
+        <div class="flex items-center gap-2 rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2">
+          <code class="text-xs text-primary flex-1 font-mono break-all">
+            https://unafit.com.br/api/webhooks/asaas-academia
+          </code>
+          <button
+            onclick="navigator.clipboard.writeText('https://unafit.com.br/api/webhooks/asaas-academia').then(()=>this.textContent='✓').catch(()=>{}); setTimeout(()=>this.textContent='Copiar',2000)"
+            class="text-xs text-zinc-500 hover:text-primary shrink-0 transition-colors">
+            Copiar
+          </button>
+        </div>
+        <p class="text-xs text-zinc-600 mt-2">Eventos necessários: PAYMENT_CREATED, PAYMENT_RECEIVED, PAYMENT_CONFIRMED, PAYMENT_OVERDUE, PAYMENT_CANCELLED.</p>
+      </div>
+    )}
+  </div>
+</DashboardLayout>

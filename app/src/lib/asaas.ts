@@ -13,7 +13,7 @@ const BASE_URL = SANDBOX
   ? 'https://sandbox.asaas.com/api/v3'
   : 'https://api.asaas.com/api/v3';
 
-// ── Request helper ────────────────────────────────────────────────────────────
+// ── Request helper (conta UNAFIT) ─────────────────────────────────────────────
 
 async function req<T = any>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -35,6 +35,78 @@ async function req<T = any>(
     throw new Error(msg);
   }
   return json as T;
+}
+
+// ── Client por academia (chave própria) ───────────────────────────────────────
+
+export function createAsaasClient(apiKey: string, sandbox = true) {
+  const base = sandbox
+    ? 'https://sandbox.asaas.com/api/v3'
+    : 'https://api.asaas.com/api/v3';
+
+  async function r<T = any>(method: 'GET'|'POST'|'PUT'|'DELETE', path: string, body?: object): Promise<T> {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { 'access_token': apiKey, 'Content-Type': 'application/json', 'User-Agent': 'UNAFIT/1.0' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json as any).errors?.[0]?.description ?? `Asaas ${res.status}`);
+    return json as T;
+  }
+
+  return {
+    async testarConexao(): Promise<boolean> {
+      try { await r('GET', '/myAccount'); return true; } catch { return false; }
+    },
+
+    async buscarOuCriarCliente(params: {
+      nome: string; email: string; cpfCnpj?: string | null; telefone?: string | null;
+    }): Promise<AsaasCustomer> {
+      const lista = await r<{ data: AsaasCustomer[] }>('GET', `/customers?email=${encodeURIComponent(params.email)}&limit=1`);
+      if (lista.data?.length > 0) return lista.data[0]!;
+      return r<AsaasCustomer>('POST', '/customers', {
+        name: params.nome, email: params.email,
+        cpfCnpj: params.cpfCnpj?.replace(/\D/g, '') || undefined,
+        phone:   params.telefone?.replace(/\D/g, '') || undefined,
+        notificationDisabled: false,
+      });
+    },
+
+    async criarAssinatura(params: {
+      customerId: string; valor: number; descricao: string;
+      nextDueDate: string; externalRef?: string;
+    }): Promise<AsaasSubscription> {
+      return r<AsaasSubscription>('POST', '/subscriptions', {
+        customer: params.customerId, billingType: 'UNDEFINED',
+        value: params.valor, nextDueDate: params.nextDueDate,
+        cycle: 'MONTHLY', description: params.descricao,
+        externalReference: params.externalRef,
+      });
+    },
+
+    async cancelarAssinatura(subscriptionId: string): Promise<void> {
+      await r('DELETE', `/subscriptions/${subscriptionId}`);
+    },
+
+    async buscarPrimeiroPagamento(subscriptionId: string): Promise<AsaasPayment | null> {
+      try {
+        const res = await r<{ data: AsaasPayment[] }>('GET', `/subscriptions/${subscriptionId}/payments?limit=1`);
+        return res.data?.[0] ?? null;
+      } catch { return null; }
+    },
+
+    async buscarPixQrCode(paymentId: string): Promise<PixQrCode | null> {
+      try { return await r<PixQrCode>('GET', `/payments/${paymentId}/pixQrCode`); } catch { return null; }
+    },
+
+    async buscarLinhaDigitavel(paymentId: string): Promise<string | null> {
+      try {
+        const d = await r<{ identificationField: string }>('GET', `/payments/${paymentId}/identificationField`);
+        return d.identificationField ?? null;
+      } catch { return null; }
+    },
+  };
 }
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────

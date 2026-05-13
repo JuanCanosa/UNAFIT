@@ -2,6 +2,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { enviarEmailNovaSenha, enviarEmailAtualizacaoCadastro, emailConfigurado } from '@/lib/email';
+import { createAsaasClient } from '@/lib/asaas';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -120,19 +121,127 @@ if (Astro.request.method === 'POST') {
   if (action === 'adicionar_plano') {
     const plano_id = form.get('plano_id') as string;
     if (plano_id) {
-      // Cancela planos ativos anteriores
-      await supabase.from('aluno_planos').update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
+      const adminPlano = createSupabaseAdminClient();
+
+      // Cancela planos ativos e suas assinaturas Asaas
+      const { data: planosAtivos } = await adminPlano
+        .from('aluno_planos').select('id, asaas_subscription_id')
         .eq('aluno_id', alunoId!).eq('status', 'ativo');
-      await supabase.from('aluno_planos').insert({
+
+      if (planosAtivos?.length) {
+        const { data: acad } = await adminPlano
+          .from('academias').select('asaas_api_key, asaas_sandbox').eq('id', profile.academia_id!).single();
+        if (acad?.asaas_api_key) {
+          const cli = createAsaasClient(acad.asaas_api_key, acad.asaas_sandbox !== false);
+          for (const pa of planosAtivos) {
+            if (pa.asaas_subscription_id) {
+              try { await cli.cancelarAssinatura(pa.asaas_subscription_id); } catch (_) {}
+            }
+          }
+        }
+        await adminPlano.from('aluno_planos')
+          .update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
+          .eq('aluno_id', alunoId!).eq('status', 'ativo');
+      }
+
+      // Insere novo plano e busca ID
+      const { data: novoPlano } = await adminPlano.from('aluno_planos').insert({
         academia_id: profile.academia_id, aluno_id: alunoId, plano_id,
-      });
+      }).select('id').single();
+
+      // Auto-cobrança Asaas se a academia tiver API key
+      if (novoPlano?.id) {
+        try {
+          const [{ data: acad }, { data: planoData }, { data: alunoData }] = await Promise.all([
+            adminPlano.from('academias').select('asaas_api_key, asaas_sandbox, nome').eq('id', profile.academia_id!).single(),
+            adminPlano.from('planos').select('nome, valor, vencimento_dia').eq('id', plano_id).single(),
+            adminPlano.from('alunos').select('nome, email, cpf, telefone, asaas_customer_id').eq('id', alunoId!).single(),
+          ]);
+
+          if (acad?.asaas_api_key && Number(planoData?.valor ?? 0) > 0) {
+            const cli = createAsaasClient(acad.asaas_api_key, acad.asaas_sandbox !== false);
+
+            // Cria/localiza cliente Asaas do aluno
+            let customerId = alunoData?.asaas_customer_id;
+            if (!customerId) {
+              const authEmail = alunoData?.email || `${(alunoData?.cpf ?? '').replace(/\D/g,'')}@aluno.unafit.com.br`;
+              const cliente = await cli.buscarOuCriarCliente({
+                nome: alunoData?.nome ?? '', email: authEmail,
+                cpfCnpj: alunoData?.cpf, telefone: alunoData?.telefone,
+              });
+              customerId = cliente.id;
+              await adminPlano.from('alunos').update({ asaas_customer_id: customerId }).eq('id', alunoId!);
+            }
+
+            // Data de vencimento: próximo dia configurado no plano (padrão 10)
+            const diaVenc = planoData?.vencimento_dia ?? 10;
+            const hoje    = new Date();
+            let dataVenc  = new Date(hoje.getFullYear(), hoje.getMonth(), diaVenc);
+            if (dataVenc <= hoje) dataVenc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, diaVenc);
+            const dataVencStr = dataVenc.toISOString().split('T')[0];
+
+            // Assinatura recorrente mensal
+            const sub = await cli.criarAssinatura({
+              customerId,
+              valor:       Number(planoData!.valor),
+              descricao:   `Mensalidade ${planoData!.nome} — ${acad.nome}`,
+              nextDueDate: dataVencStr,
+              externalRef: novoPlano.id,
+            });
+
+            await adminPlano.from('aluno_planos')
+              .update({ asaas_subscription_id: sub.id }).eq('id', novoPlano.id);
+
+            // Primeiro pagamento
+            const pag = await cli.buscarPrimeiroPagamento(sub.id);
+            if (pag) {
+              const [pix, linha] = await Promise.all([
+                cli.buscarPixQrCode(pag.id),
+                cli.buscarLinhaDigitavel(pag.id),
+              ]);
+              const mes = dataVenc.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+              await adminPlano.from('pagamentos').insert({
+                academia_id:        profile.academia_id,
+                aluno_id:           alunoId,
+                aluno_plano_id:     novoPlano.id,
+                valor:              planoData!.valor,
+                data_vencimento:    dataVencStr,
+                status:             'pendente',
+                asaas_payment_id:   pag.id,
+                link_pagamento:     pag.invoiceUrl ?? null,
+                descricao:          `Mensalidade ${planoData!.nome} — ${mes}`,
+                mes_referencia:     dataVencStr,
+                pix_qr_code_base64: pix?.encodedImage ?? null,
+                pix_copia_cola:     pix?.payload ?? null,
+                boleto_url:         (pag as any).bankSlipUrl ?? null,
+                boleto_linha:       linha,
+              });
+            }
+          }
+        } catch (_) {} // não falha a atribuição de plano se Asaas falhar
+      }
     }
     return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
   }
 
   if (action === 'cancelar_plano') {
-    const ap_id = form.get('aluno_plano_id') as string;
-    await supabase.from('aluno_planos').update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
+    const ap_id      = form.get('aluno_plano_id') as string;
+    const adminCanc  = createSupabaseAdminClient();
+    const { data: ap } = await adminCanc
+      .from('aluno_planos').select('asaas_subscription_id').eq('id', ap_id).single();
+
+    if (ap?.asaas_subscription_id) {
+      const { data: acad } = await adminCanc
+        .from('academias').select('asaas_api_key, asaas_sandbox').eq('id', profile.academia_id!).single();
+      if (acad?.asaas_api_key) {
+        try {
+          await createAsaasClient(acad.asaas_api_key, acad.asaas_sandbox !== false)
+            .cancelarAssinatura(ap.asaas_subscription_id);
+        } catch (_) {}
+      }
+    }
+    await supabase.from('aluno_planos')
+      .update({ status: 'cancelado', data_fim: new Date().toISOString().split('T')[0] })
       .eq('id', ap_id).eq('academia_id', profile.academia_id!);
     return Astro.redirect(`/dashboard/alunos/${alunoId}`);
   }
