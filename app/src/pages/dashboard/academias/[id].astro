@@ -355,6 +355,7 @@ const { data: faturas } = await adminClient
   .from('saas_faturas')
   .select('id, descricao, valor, data_vencimento, pago_em, status, asaas_payment_id, invoice_url, boleto_url, boleto_linha, pix_qr_code_base64, pix_copia_cola, metodo_pagamento')
   .eq('academia_id', id!)
+  .neq('status', 'cancelado')
   .or(`data_vencimento.gte.${primeiroDiaMesAtual},status.in.(pago,vencido)`)
   .order('data_vencimento', { ascending: false })
   .limit(18);
