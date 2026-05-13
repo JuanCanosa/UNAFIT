@@ -406,3 +406,41 @@ export async function enviarEmailNovaSenha(params: {
     return { ok: false, erro: e.message };
   }
 }
+
+/** Notifica o dono da academia que um pagamento de aluno foi recebido. */
+export async function enviarEmailPagamentoRecebido(params: {
+  emailDono: string;
+  nomeAcademia: string;
+  logoUrl: string | null;
+  nomeAluno: string;
+  descricao: string;
+  valor: number;
+  dataPagamento: string;
+}): Promise<void> {
+  if (!emailConfigurado()) return;
+  const { emailDono, nomeAcademia, logoUrl, nomeAluno, descricao, valor, dataPagamento } = params;
+  const valorFmt = valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const dataFmt  = new Date(dataPagamento + 'T12:00:00').toLocaleDateString('pt-BR');
+  const corpo = `
+    <p style="margin:0 0 16px;font-size:15px;color:#a1a1aa;">
+      Um pagamento foi <strong style="color:#22c55e;">confirmado</strong> na sua academia.
+    </p>
+    <div style="background:#27272a;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+      <p style="margin:0 0 8px;font-size:13px;color:#71717a;text-transform:uppercase;letter-spacing:.05em;">Detalhes</p>
+      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">Aluno: <strong style="color:#fff;">${nomeAluno}</strong></p>
+      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">Referência: <strong style="color:#fff;">${descricao}</strong></p>
+      <p style="margin:0 0 6px;font-size:14px;color:#a1a1aa;">Valor: <strong style="color:#22c55e;font-size:18px;">${valorFmt}</strong></p>
+      <p style="margin:0;font-size:14px;color:#a1a1aa;">Data: <strong style="color:#fff;">${dataFmt}</strong></p>
+    </div>
+  `;
+  const html = templateBase({ nomeAcademia, logoUrl, titulo: `Pagamento recebido — ${valorFmt}`, corpo });
+  try {
+    const resend = getResend();
+    await resend.emails.send({
+      from:    `UNAFIT <${FROM_EMAIL}>`,
+      to:      emailDono,
+      subject: `✓ Pagamento recebido — ${nomeAluno} (${valorFmt})`,
+      html,
+    });
+  } catch (_) {}
+}

@@ -9,6 +9,7 @@
 import type { APIRoute } from 'astro';
 import { createSupabaseAdminClient } from '@/lib/supabase';
 import { createAsaasClient } from '@/lib/asaas';
+import { enviarEmailPagamentoRecebido } from '@/lib/email';
 
 export const POST: APIRoute = async ({ request }) => {
   let body: any;
@@ -84,12 +85,37 @@ export const POST: APIRoute = async ({ request }) => {
   switch (event) {
     case 'PAYMENT_RECEIVED':
     case 'PAYMENT_CONFIRMED':
-    case 'PAYMENT_RECEIVED_IN_CASH':
-      await admin.from('pagamentos').update({
-        status:         'pago',
-        data_pagamento: payment.paymentDate ?? new Date().toISOString().split('T')[0],
-      }).eq('id', pag.id);
+    case 'PAYMENT_RECEIVED_IN_CASH': {
+      const dataPag = payment.paymentDate ?? new Date().toISOString().split('T')[0];
+      await admin.from('pagamentos').update({ status: 'pago', data_pagamento: dataPag }).eq('id', pag.id);
+
+      // Notifica o dono por e-mail
+      try {
+        const { data: pagFull } = await admin
+          .from('pagamentos')
+          .select('valor, descricao, aluno_id, academia_id')
+          .eq('id', pag.id).single();
+        if (pagFull) {
+          const [{ data: aluno }, { data: acad }, { data: donoPerfil }] = await Promise.all([
+            admin.from('alunos').select('nome').eq('id', pagFull.aluno_id).single(),
+            admin.from('academias').select('nome, email, logo_url').eq('id', pagFull.academia_id).single(),
+            admin.from('profiles').select('nome_completo').eq('academia_id', pagFull.academia_id).eq('role', 'dono').limit(1).single(),
+          ]);
+          if (acad?.email) {
+            await enviarEmailPagamentoRecebido({
+              emailDono:     acad.email,
+              nomeAcademia:  acad.nome,
+              logoUrl:       acad.logo_url ?? null,
+              nomeAluno:     aluno?.nome ?? 'Aluno',
+              descricao:     pagFull.descricao ?? 'Mensalidade',
+              valor:         Number(pagFull.valor),
+              dataPagamento: dataPag,
+            });
+          }
+        }
+      } catch (_) {}
       break;
+    }
 
     case 'PAYMENT_OVERDUE':
       await admin.from('pagamentos').update({ status: 'vencido' }).eq('id', pag.id);

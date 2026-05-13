@@ -85,6 +85,16 @@ export function createAsaasClient(apiKey: string, sandbox = true) {
       });
     },
 
+    async atualizarAssinatura(subscriptionId: string, params: {
+      valor?: number; nextDueDate?: string; descricao?: string;
+    }): Promise<void> {
+      await r('PUT', `/subscriptions/${subscriptionId}`, {
+        ...(params.valor      !== undefined ? { value: params.valor }           : {}),
+        ...(params.nextDueDate             ? { nextDueDate: params.nextDueDate } : {}),
+        ...(params.descricao               ? { description: params.descricao }  : {}),
+      });
+    },
+
     async cancelarAssinatura(subscriptionId: string): Promise<void> {
       await r('DELETE', `/subscriptions/${subscriptionId}`);
     },
