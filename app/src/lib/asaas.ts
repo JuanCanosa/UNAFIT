@@ -11,7 +11,7 @@ const API_KEY  = process.env.ASAAS_API_KEY  ?? '';
 const SANDBOX  = (process.env.ASAAS_SANDBOX ?? 'true') !== 'false';
 const BASE_URL = SANDBOX
   ? 'https://sandbox.asaas.com/api/v3'
-  : 'https://api.asaas.com/api/v3';
+  : 'https://www.asaas.com/api/v3';
 
 // ── Request helper (conta UNAFIT) ─────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ async function req<T = any>(
 export function createAsaasClient(apiKey: string, sandbox = true) {
   const base = sandbox
     ? 'https://sandbox.asaas.com/api/v3'
-    : 'https://api.asaas.com/api/v3';
+    : 'https://www.asaas.com/api/v3';
 
   async function r<T = any>(method: 'GET'|'POST'|'PUT'|'DELETE', path: string, body?: object): Promise<T> {
     const res = await fetch(`${base}${path}`, {
