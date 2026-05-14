@@ -15,7 +15,7 @@ if (!profile || profile.role !== 'dono') return Astro.redirect('/dashboard');
 const admin = createSupabaseAdminClient();
 const { data: academia } = await admin
   .from('academias')
-  .select('id, nome, asaas_api_key, asaas_sandbox')
+  .select('id, nome, asaas_api_key, asaas_sandbox, asaas_webhook_token')
   .eq('id', profile.academia_id!)
   .single();
 
@@ -27,24 +27,23 @@ if (Astro.request.method === 'POST') {
   const action = form.get('action') as string;
 
   if (action === 'salvar_asaas') {
-    const api_key = (form.get('asaas_api_key') as string)?.trim();
-    const sandbox = form.get('asaas_sandbox') === 'true';
+    const api_key       = (form.get('asaas_api_key') as string)?.trim();
+    const sandbox       = form.get('asaas_sandbox') === 'true';
+    const webhook_token = (form.get('asaas_webhook_token') as string)?.trim() || null;
 
     if (!api_key) {
-      // Limpa a integração
       await admin.from('academias')
-        .update({ asaas_api_key: null, asaas_sandbox: true })
+        .update({ asaas_api_key: null, asaas_sandbox: true, asaas_webhook_token: null })
         .eq('id', academia!.id);
       sucesso = 'Integração Asaas removida.';
     } else {
-      // Testa a chave antes de salvar
       const cli = createAsaasClient(api_key, sandbox);
       const ok  = await cli.testarConexao();
       if (!ok) {
         erro = 'Chave inválida ou sem acesso à API Asaas. Verifique e tente novamente.';
       } else {
         await admin.from('academias')
-          .update({ asaas_api_key: api_key, asaas_sandbox: sandbox })
+          .update({ asaas_api_key: api_key, asaas_sandbox: sandbox, asaas_webhook_token: webhook_token })
           .eq('id', academia!.id);
         sucesso = 'Integração Asaas salva e testada com sucesso!';
       }
@@ -121,6 +120,22 @@ const chaveExibida = acad?.asaas_api_key
           class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
         <p class="text-xs text-zinc-600 mt-1">Deixe em branco para remover a integração.</p>
+      </div>
+
+      <div>
+        <label class="block text-xs text-muted-foreground mb-1">
+          Token de autenticação do Webhook
+          <span class="text-zinc-600 ml-1">(recomendado)</span>
+        </label>
+        <input
+          name="asaas_webhook_token"
+          type="text"
+          autocomplete="off"
+          value={(acad as any)?.asaas_webhook_token ?? ''}
+          placeholder="Cole aqui o token gerado no painel Asaas"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        <p class="text-xs text-zinc-600 mt-1">Gere em: Asaas → Configurações → Webhooks → Token de autenticação → Gerar Token.</p>
       </div>
 
       <div>

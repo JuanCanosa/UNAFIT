@@ -20,6 +20,24 @@ export const POST: APIRoute = async ({ request }) => {
 
   const admin = createSupabaseAdminClient();
 
+  // Valida token da academia (se configurado)
+  const receivedToken = request.headers.get('asaas-access-token') ?? '';
+  if (receivedToken && payment.subscription) {
+    // Token validado via assinatura → academia
+    const { data: ap } = await admin
+      .from('aluno_planos')
+      .select('academia_id')
+      .eq('asaas_subscription_id', payment.subscription)
+      .maybeSingle();
+    if (ap?.academia_id) {
+      const { data: acad } = await admin
+        .from('academias').select('asaas_webhook_token').eq('id', ap.academia_id).single();
+      if (acad?.asaas_webhook_token && receivedToken !== acad.asaas_webhook_token) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+    }
+  }
+
   // ── PAYMENT_CREATED: novo ciclo mensal da assinatura do aluno ────────────────
   if (event === 'PAYMENT_CREATED' && payment.subscription) {
     const { data: existente } = await admin

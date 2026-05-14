@@ -8,6 +8,15 @@ import { createSupabaseAdminClient } from '@/lib/supabase';
 import { buscarPixQrCode, buscarLinhaDigitavel } from '@/lib/asaas';
 
 export const POST: APIRoute = async ({ request }) => {
+  // Valida token de autenticação do Asaas
+  const WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN ?? '';
+  if (WEBHOOK_TOKEN) {
+    const receivedToken = request.headers.get('asaas-access-token') ?? '';
+    if (receivedToken !== WEBHOOK_TOKEN) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+  }
+
   let body: any;
   try {
     body = await request.json();
