@@ -42,32 +42,20 @@ const statusConfig: Record<string, { label: string; variant: 'success' | 'warnin
   cancelado: { label: 'Cancelado', variant: 'muted' },
 };
 
-const emAberto = pagamentos?.filter(p => p.status === 'pendente' || p.status === 'vencido')
-  .reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
-const totalPago = pagamentos?.filter(p => p.status === 'pago')
-  .reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
+const emAberto = pagamentos?.filter(p => p.status === 'pendente' || p.status === 'vencido') ?? [];
 ---
 
 <DashboardLayout title="Minhas Faturas">
-  <div class="mb-6">
-    <h1 class="text-2xl font-bold text-foreground">Minhas Faturas</h1>
-    <p class="mt-1 text-sm text-muted-foreground">Histórico de pagamentos e cobranças</p>
-  </div>
-
-  <!-- Stats -->
-  <div class="grid grid-cols-2 gap-4 mb-6">
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Em aberto</p>
-      <p class="mt-1 text-2xl font-bold text-destructive">
-        {emAberto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-      </p>
+  <div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">Minhas Faturas</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Mensalidades do seu plano</p>
     </div>
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total pago</p>
-      <p class="mt-1 text-2xl font-bold text-primary">
-        {totalPago.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-      </p>
-    </div>
+    {emAberto.length > 0 && (
+      <div class="rounded-lg border border-red-600/30 bg-red-900/10 px-4 py-2 text-sm text-red-400 shrink-0">
+        {emAberto.length} fatura{emAberto.length > 1 ? 's' : ''} em aberto
+      </div>
+    )}
   </div>
 
   {!pagamentos || pagamentos.length === 0 ? (
