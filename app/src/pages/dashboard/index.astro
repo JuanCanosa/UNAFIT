@@ -56,8 +56,14 @@ if (profile?.role === 'saas_admin') {
   saasStats.totalAtivas    = academias?.filter((a: any) => a.ativo).length ?? 0;
   saasStats.totalAlunos    = (contagens ?? []).length;
 
+  // UNIQUE(academia_id) → PostgREST retorna objeto único, não array
+  function getAssin(a: any) {
+    const raw = a.saas_assinaturas;
+    return Array.isArray(raw) ? raw[0] : (raw ?? null);
+  }
+
   saasStats.mrr = (academias ?? []).reduce((sum: number, a: any) => {
-    const assin = a.saas_assinaturas?.[0];
+    const assin = getAssin(a);
     if (assin?.status === 'ativa') sum += Number(assin.saas_planos?.valor ?? 0);
     return sum;
   }, 0);
@@ -65,14 +71,14 @@ if (profile?.role === 'saas_admin') {
   // Inadimplentes: academias ativas SEM assinatura ativa
   saasStats.inadimplentes = (academias ?? []).filter((a: any) => {
     if (!a.ativo) return false;
-    const assin = a.saas_assinaturas?.[0];
+    const assin = getAssin(a);
     return !assin || assin.status !== 'ativa';
   }).length;
 
   // Academias por plano
   const planoMap: Record<string, { nome: string; valor: number; count: number }> = {};
   for (const a of academias ?? []) {
-    const assin = (a as any).saas_assinaturas?.[0];
+    const assin = getAssin(a);
     if (assin?.status === 'ativa' && assin.saas_planos) {
       const k = assin.saas_planos.nome;
       planoMap[k] = planoMap[k] ?? { nome: k, valor: Number(assin.saas_planos.valor), count: 0 };
@@ -93,7 +99,7 @@ if (profile?.role === 'saas_admin') {
   saasStats.academiasLista = (academias ?? []).map((a: any) => ({
     ...a,
     totalAlunos: contagemAlunos[a.id] ?? 0,
-    assin: a.saas_assinaturas?.[0] ?? null,
+    assin: getAssin(a),
   }));
 }
 
