@@ -300,7 +300,7 @@ if (Astro.request.method === 'POST') {
             // Em caso de falha libera o claim para permitir nova tentativa
             await adminClient.from('saas_assinaturas')
               .update({ asaas_subscription_id: null }).eq('id', assinaturaId);
-            sucesso = `Assinatura atualizada. Erro no Asaas: ${(e as any).message}`;
+            erro = `Erro Asaas: ${(e as any).message}`;
           }
         } else {
           // Plano cortesia: libera claim e marca ativo sem cobrança
