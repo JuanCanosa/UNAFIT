@@ -84,7 +84,7 @@ const chaveExibida = acad?.asaas_api_key
         </svg>
       </div>
       <div class="flex-1">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <h2 class="text-sm font-semibold text-foreground">Integração Asaas</h2>
           {temChave ? (
             <span class={`text-xs px-2 py-0.5 rounded-full border ${isSandbox ? 'border-yellow-500/30 text-yellow-400 bg-yellow-500/10' : 'border-green-600/30 text-green-400 bg-green-600/10'}`}>
@@ -93,6 +93,16 @@ const chaveExibida = acad?.asaas_api_key
           ) : (
             <span class="text-xs px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-500">Não configurado</span>
           )}
+          <!-- Botão tutorial -->
+          <button
+            id="btn-tutorial-asaas"
+            type="button"
+            class="ml-auto flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 rounded-lg px-2.5 py-1 transition-colors">
+            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Ver tutorial passo a passo
+          </button>
         </div>
         <p class="text-xs text-muted-foreground mt-1">
           Conecte sua conta Asaas para gerar cobranças automáticas (PIX, Boleto, Cartão) para os alunos ao atribuir planos.
@@ -184,4 +194,156 @@ const chaveExibida = acad?.asaas_api_key
       </div>
     )}
   </div>
+  <!-- ── Modal Tutorial Asaas ──────────────────────────────────────────────── -->
+  <div id="modal-tutorial-asaas"
+    class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div class="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+
+      <!-- Header fixo -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
+        <div class="flex items-center gap-2.5">
+          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 border border-blue-500/20">
+            <svg class="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-foreground">Tutorial: Configurar o Asaas</h2>
+            <p class="text-xs text-muted-foreground">Passo a passo para integrar os pagamentos</p>
+          </div>
+        </div>
+        <button id="btn-fechar-tutorial" type="button"
+          class="text-zinc-500 hover:text-zinc-300 transition-colors p-1 rounded-lg hover:bg-zinc-800">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Corpo com scroll -->
+      <div class="overflow-y-auto px-6 py-5 space-y-6 text-sm">
+
+        <!-- Intro -->
+        <div class="rounded-xl border border-blue-500/20 bg-blue-500/5 px-4 py-3">
+          <p class="text-blue-300 text-xs leading-relaxed">
+            O <strong class="text-blue-200">Asaas</strong> é a plataforma de pagamentos que o UNAFIT usa para cobrar seus alunos via PIX, Boleto e Cartão. Siga os passos abaixo para conectar sua conta ao sistema.
+          </p>
+        </div>
+
+        <!-- PASSO 1 -->
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold shrink-0">1</span>
+            <h3 class="text-sm font-semibold text-foreground">Crie sua conta no Asaas</h3>
+          </div>
+          <div class="ml-8 space-y-2 text-zinc-400 text-xs leading-relaxed">
+            <p>Se você ainda não tem uma conta, acesse <strong class="text-zinc-200">www.asaas.com</strong> e clique em <em>"Criar conta grátis"</em>.</p>
+            <div class="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2.5">
+              <p class="text-zinc-300 font-medium mb-1">Há dois ambientes:</p>
+              <ul class="space-y-1">
+                <li class="flex gap-2"><span class="text-yellow-400 shrink-0">⚠</span> <span><strong class="text-yellow-300">Sandbox</strong> — para testes. Nenhuma cobrança real é feita. Use enquanto está configurando.</span></li>
+                <li class="flex gap-2"><span class="text-green-400 shrink-0">✓</span> <span><strong class="text-green-300">Produção</strong> — cobranças reais dos seus alunos. Ative apenas quando tudo estiver funcionando.</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- PASSO 2 -->
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold shrink-0">2</span>
+            <h3 class="text-sm font-semibold text-foreground">Gere sua API Key (chave de acesso)</h3>
+          </div>
+          <ol class="ml-8 space-y-2 text-zinc-400 text-xs leading-relaxed list-none">
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">①</span> Faça login no painel Asaas.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">②</span> No menu lateral, clique em <strong class="text-zinc-200">Configurações</strong> (ícone de engrenagem).</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">③</span> Acesse <strong class="text-zinc-200">Integrações</strong> → <strong class="text-zinc-200">API Keys</strong>.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">④</span> Clique em <strong class="text-zinc-200">"Gerar nova chave"</strong> ou copie a chave já existente.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">⑤</span> A chave começa com <code class="bg-zinc-800 text-primary px-1 py-0.5 rounded font-mono">$aact_</code>. Copie-a e cole no campo <em>"API Key do Asaas"</em> aqui no UNAFIT.</li>
+          </ol>
+          <div class="ml-8 mt-2 rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2">
+            <p class="text-yellow-300 text-xs">⚠ <strong>Atenção:</strong> A chave de Sandbox e a de Produção são <em>diferentes</em>. Use a chave certa para cada ambiente.</p>
+          </div>
+        </div>
+
+        <!-- PASSO 3 -->
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold shrink-0">3</span>
+            <h3 class="text-sm font-semibold text-foreground">Gere o Token do Webhook</h3>
+          </div>
+          <p class="ml-8 text-zinc-500 text-xs mb-2">O Webhook avisa o UNAFIT quando um pagamento é confirmado. O Token garante que só o Asaas pode enviar essas notificações.</p>
+          <ol class="ml-8 space-y-2 text-zinc-400 text-xs leading-relaxed list-none">
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">①</span> No painel Asaas, vá em <strong class="text-zinc-200">Configurações</strong> → <strong class="text-zinc-200">Integrações</strong> → <strong class="text-zinc-200">Webhooks</strong>.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">②</span> Clique em <strong class="text-zinc-200">"Adicionar webhook"</strong> ou edite o existente.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">③</span> No campo <strong class="text-zinc-200">"URL"</strong>, cole a URL abaixo:
+              <div class="mt-1 rounded bg-zinc-950 border border-zinc-800 px-2 py-1.5 font-mono text-primary text-xs break-all select-all">
+                https://unafit.com.br/api/webhooks/asaas-academia
+              </div>
+            </li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">④</span> Clique em <strong class="text-zinc-200">"Token de autenticação"</strong> → <strong class="text-zinc-200">"Gerar Token"</strong>.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">⑤</span> Copie o token gerado e cole no campo <em>"Token de autenticação do Webhook"</em> aqui no UNAFIT.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">⑥</span> Ative os seguintes eventos no webhook:
+              <div class="mt-1 flex flex-wrap gap-1">
+                {['PAYMENT_CREATED','PAYMENT_RECEIVED','PAYMENT_CONFIRMED','PAYMENT_OVERDUE','PAYMENT_CANCELLED'].map(e => (
+                  <code class="bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded text-xs font-mono">{e}</code>
+                ))}
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <!-- PASSO 4 -->
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold shrink-0">4</span>
+            <h3 class="text-sm font-semibold text-foreground">Salve e teste a conexão</h3>
+          </div>
+          <ol class="ml-8 space-y-2 text-zinc-400 text-xs leading-relaxed list-none">
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">①</span> Aqui no UNAFIT, cole a <strong class="text-zinc-200">API Key</strong> e o <strong class="text-zinc-200">Token do Webhook</strong>.</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">②</span> Selecione o ambiente correto (<strong class="text-yellow-300">Sandbox</strong> para testes ou <strong class="text-green-300">Produção</strong>).</li>
+            <li class="flex gap-2.5"><span class="text-primary shrink-0 font-bold">③</span> Clique em <strong class="text-zinc-200">"Salvar e testar conexão"</strong>.</li>
+            <li class="flex gap-2.5"><span class="text-green-400 shrink-0">✓</span> Se aparecer a mensagem <em class="text-green-400">"Integração salva e testada com sucesso!"</em>, está tudo certo!</li>
+          </ol>
+        </div>
+
+        <!-- Dúvidas -->
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+          <p class="text-xs text-zinc-500 leading-relaxed">
+            Dúvidas sobre o Asaas? Acesse a
+            <a href="https://docs.asaas.com" target="_blank" rel="noopener"
+              class="text-blue-400 hover:text-blue-300 underline underline-offset-2">documentação oficial</a>
+            ou o
+            <a href="https://suporte.asaas.com" target="_blank" rel="noopener"
+              class="text-blue-400 hover:text-blue-300 underline underline-offset-2">suporte do Asaas</a>.
+          </p>
+        </div>
+
+      </div>
+
+      <!-- Footer fixo -->
+      <div class="shrink-0 px-6 py-4 border-t border-zinc-800">
+        <button id="btn-fechar-tutorial-footer" type="button"
+          class="w-full rounded-xl bg-primary py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
+          Entendi, vou configurar agora
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const modal  = document.getElementById('modal-tutorial-asaas')!;
+    const open   = document.getElementById('btn-tutorial-asaas')!;
+    const close1 = document.getElementById('btn-fechar-tutorial')!;
+    const close2 = document.getElementById('btn-fechar-tutorial-footer')!;
+
+    function abrirModal()  { modal.classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+    function fecharModal() { modal.classList.add('hidden');    document.body.style.overflow = ''; }
+
+    open.addEventListener('click',   abrirModal);
+    close1.addEventListener('click', fecharModal);
+    close2.addEventListener('click', fecharModal);
+    modal.addEventListener('click',  e => { if (e.target === modal) fecharModal(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharModal(); });
+  </script>
 </DashboardLayout>
