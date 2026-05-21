@@ -8,6 +8,7 @@ import { Resend } from 'resend';
 
 const RESEND_KEY = import.meta.env.RESEND_API_KEY ?? process.env.RESEND_API_KEY ?? null;
 const FROM_EMAIL = import.meta.env.FROM_EMAIL ?? process.env.FROM_EMAIL ?? 'noreply@unafit.com.br';
+const APP_URL    = (import.meta.env.PUBLIC_APP_URL ?? process.env.PUBLIC_APP_URL ?? 'https://unafit.com.br').replace(/\/$/, '');
 
 export function emailConfigurado(): boolean {
   return !!RESEND_KEY;
@@ -257,7 +258,7 @@ export async function enviarEmailResetSenha(params: {
     <p style="margin:0;font-size:12px;color:#52525b;">
       Este link expira em <strong style="color:#a1a1aa;">24 horas</strong>.
       Após criar sua senha, acesse o sistema em
-      <a href="https://unafit.com.br/login" style="color:#dc2626;">unafit.com.br/login</a>
+      <a href="${APP_URL}/login" style="color:#dc2626;">${APP_URL.replace('https://', '')}/login</a>
       com seu e-mail e a senha escolhida.
     </p>
   `;

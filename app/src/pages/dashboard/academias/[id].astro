@@ -6,6 +6,7 @@ import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
+import { gerarSenha } from '@/lib/password';
 import {
   buscarOuCriarCliente, atualizarCliente,
   criarAssinatura, cancelarAssinatura, buscarPrimeiroPagamentoAssinatura,
@@ -26,11 +27,6 @@ let sucesso = '';
 let erro = '';
 
 const appUrl = import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br';
-
-function gerarSenha(len = 12): string {
-  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
 
 /** Próximo dia 10: este mês se ainda não chegou, senão próximo mês. */
 function proximoDia10(): string {

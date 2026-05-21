@@ -2,6 +2,7 @@
 import '@/styles/globals.css';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { emailConfigurado, enviarEmailNovaSenha } from '@/lib/email';
+import { gerarSenha } from '@/lib/password';
 
 const { slug } = Astro.params;
 
@@ -62,24 +63,42 @@ if (Astro.request.method === 'POST') {
       emailEnvio = authEmail;
     }
 
-    // Verifica se o usuário existe no Supabase Auth
-    const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
-    const authUser = users.find(u => u.email?.toLowerCase() === authEmail?.toLowerCase());
+    // Busca profile_id via aluno + aluno_academias (sem varrer todos os auth users)
+    const { data: alunoLookup } = await adminClient
+      .from('alunos')
+      .select('id')
+      .eq('academia_id', academia.id)
+      .or(authEmail.endsWith('@aluno.unafit.com.br')
+        ? `cpf.eq.${authEmail.split('@')[0]}`
+        : `email.eq.${authEmail}`)
+      .limit(1)
+      .maybeSingle();
+
+    let authUserId: string | null = null;
+    if (alunoLookup) {
+      const { data: vinc } = await adminClient
+        .from('aluno_academias')
+        .select('profile_id')
+        .eq('aluno_id', alunoLookup.id)
+        .eq('ativo', true)
+        .limit(1)
+        .maybeSingle();
+      authUserId = vinc?.profile_id ?? null;
+    }
+    const authUser = authUserId ? { id: authUserId } : null;
 
     if (!authUser) {
       erroEsqueci = 'Não encontramos nenhuma conta com esse e-mail ou CPF nesta academia.';
     } else {
       const { data: profileEsqueci } = await adminClient
-        .from('profiles').select('ativo').eq('id', authUser.id).single();
+        .from('profiles').select('ativo, nome_completo').eq('id', authUser.id).single();
 
       if (!profileEsqueci?.ativo) {
         erroEsqueci = 'Esta conta foi desativada. Entre em contato com o responsável pela academia.';
       } else if (!emailEnvio) {
-        // CPF sem e-mail cadastrado — não é possível enviar sem expor a senha na tela
         erroEsqueci = 'Sua conta não possui e-mail cadastrado. Fale com o responsável pela academia para redefinir sua senha.';
       } else {
-      const chars    = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-      const senhaTemp = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+      const senhaTemp = gerarSenha(12);
 
       const { error: updErr } = await adminClient.auth.admin.updateUserById(authUser.id, { password: senhaTemp });
 
@@ -88,7 +107,7 @@ if (Astro.request.method === 'POST') {
       } else if (!emailConfigurado()) {
         erroEsqueci = 'Serviço de e-mail não configurado. Contate o responsável pela academia.';
       } else {
-        const nomeAluno = authUser.user_metadata?.nome_completo ?? '';
+        const nomeAluno = profileEsqueci?.nome_completo ?? '';
         await enviarEmailNovaSenha({
           email: emailEnvio,
           nomeAluno,

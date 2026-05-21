@@ -2,6 +2,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { enviarEmailNovaSenha, emailConfigurado } from '@/lib/email';
+import { gerarSenha } from '@/lib/password';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -70,8 +71,8 @@ if (Astro.request.method === 'POST') {
     if (!colab?.email) {
       formError = 'Colaborador sem e-mail cadastrado.';
     } else {
-      const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
-      const authUser = users.find(u => u.email?.toLowerCase() === colab.email!.toLowerCase());
+      // Usa profile_id da tabela colaboradores (já carregado acima) — sem listUsers
+      const authUser = colab.profile_id ? { id: colab.profile_id as string } : null;
 
       if (action === 'definir_senha') {
         const nova_senha = (form.get('nova_senha') as string)?.trim();
@@ -90,9 +91,7 @@ if (Astro.request.method === 'POST') {
         if (!authUser) {
           formError = 'Usuário de acesso não encontrado.';
         } else {
-          const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-          let senhaTemp = '';
-          for (let i = 0; i < 10; i++) senhaTemp += chars[Math.floor(Math.random() * chars.length)];
+          const senhaTemp = gerarSenha(12);
 
           const { error: upErr } = await adminClient.auth.admin.updateUserById(authUser.id, { password: senhaTemp });
           if (upErr) {

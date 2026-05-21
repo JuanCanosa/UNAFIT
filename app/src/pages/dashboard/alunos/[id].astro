@@ -3,6 +3,7 @@ import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { enviarEmailNovaSenha, enviarEmailAtualizacaoCadastro, emailConfigurado } from '@/lib/email';
 import { createAsaasClient } from '@/lib/asaas';
+import { gerarSenha } from '@/lib/password';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -264,9 +265,16 @@ if (Astro.request.method === 'POST') {
     const cpfDigits = (alunoAcesso.cpf ?? '').replace(/\D/g, '');
     const authEmailAcesso = alunoAcesso.email || `${cpfDigits}@aluno.unafit.com.br`;
 
-    // Encontra auth user pelo email correto
-    const { data: { users } } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 50000 });
-    const authUser = users.find(u => u.email?.toLowerCase() === authEmailAcesso.toLowerCase());
+    // Busca profile_id do aluno via aluno_academias (O(1) — sem carregar todos os usuários)
+    const { data: vincAluno } = await adminClient
+      .from('aluno_academias')
+      .select('profile_id')
+      .eq('aluno_id', alunoId)
+      .eq('ativo', true)
+      .limit(1)
+      .maybeSingle();
+    const authUserId = vincAluno?.profile_id ?? null;
+    const authUser = authUserId ? { id: authUserId } : null;
 
     if (action === 'definir_senha') {
       const nova_senha = (form.get('nova_senha') as string)?.trim();
@@ -306,10 +314,7 @@ if (Astro.request.method === 'POST') {
       if (!authUser) {
         formError = 'Este aluno ainda não tem conta de acesso. Defina uma senha primeiro.';
       } else {
-        // Gera senha temporária aleatória (10 chars: letras + números)
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-        let senhaTemp = '';
-        for (let i = 0; i < 10; i++) senhaTemp += chars[Math.floor(Math.random() * chars.length)];
+        const senhaTemp = gerarSenha(12);
 
         // Atualiza a senha no Supabase Auth via admin
         const { error: updateErr } = await adminClient.auth.admin.updateUserById(authUser.id, {

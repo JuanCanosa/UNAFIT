@@ -3,6 +3,7 @@ import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Badge from '@/components/ui/Badge.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 import { emailConfigurado, enviarEmailBoasVindasAcademia } from '@/lib/email';
+import { gerarSenha } from '@/lib/password';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -15,11 +16,6 @@ const adminClient = createSupabaseAdminClient();
 
 let sucesso = '';
 let erro = '';
-
-function gerarSenha(len = 16): string {
-  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
 
 const appUrl = import.meta.env.PUBLIC_APP_URL ?? 'https://unafit.com.br';
 
