@@ -49,17 +49,35 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'excluir_aula') {
     const aula_id = form.get('aula_id') as string;
-    // Verifica se há check-ins antes de excluir
-    const { data: chks } = await supabase
-      .from('checkins').select('id').eq('aula_id', aula_id).limit(1);
-    if ((chks?.length ?? 0) > 0) {
-      alertError = 'Esta aula possui check-ins registrados e não pode ser excluída.';
-    } else {
-      await supabase.from('aulas_agenda')
-        .delete()
-        .eq('id', aula_id)
-        .eq('academia_id', profile.academia_id!);
-      return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+
+    // Busca data e horário da aula para checar o limite de 24h
+    const { data: aulaChk } = await supabase
+      .from('aulas_agenda')
+      .select('data_aula, horario_inicio')
+      .eq('id', aula_id)
+      .eq('academia_id', profile.academia_id!)
+      .single();
+
+    if (aulaChk) {
+      const aulaDateTime = new Date(`${aulaChk.data_aula}T${aulaChk.horario_inicio}`);
+      const diffHoras = (Date.now() - aulaDateTime.getTime()) / 3_600_000;
+      if (diffHoras > 24) {
+        alertError = 'Não é possível excluir aulas que ocorreram há mais de 24 horas.';
+      }
+    }
+
+    if (!alertError) {
+      const { data: chks } = await supabase
+        .from('checkins').select('id').eq('aula_id', aula_id).limit(1);
+      if ((chks?.length ?? 0) > 0) {
+        alertError = 'Esta aula possui check-ins registrados e não pode ser excluída.';
+      } else {
+        await supabase.from('aulas_agenda')
+          .delete()
+          .eq('id', aula_id)
+          .eq('academia_id', profile.academia_id!);
+        return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+      }
     }
   } else {
     // Criar nova aula
@@ -224,9 +242,15 @@ const modalidadeCoresHoje: Record<string, string> = {
             </div>
 
             {aulasHoje.map((aula) => {
-              const wodNome  = (aula.wods as any)?.nome;
-              const label    = wodNome ?? aula.modalidade;
+              const wodNome   = (aula.wods as any)?.nome;
+              const label     = wodNome ?? aula.modalidade;
               const nCheckins = (aula.checkins as any[])?.length ?? 0;
+              const aulaDateTime = new Date(`${aula.data_aula}T${aula.horario_inicio}`);
+              const passouMais24h = (Date.now() - aulaDateTime.getTime()) / 3_600_000 > 24;
+              const bloqueado = nCheckins > 0 || passouMais24h;
+              const bloqueadoMsg = nCheckins > 0
+                ? `${nCheckins} check-in(s) — não pode excluir`
+                : 'Aula com mais de 24h — não pode excluir';
               const cores    = isHoje
                 ? (modalidadeCoresHoje[aula.modalidade] ?? modalidadeCoresHoje['CrossFit'])
                 : (modalidadeCores[aula.modalidade]     ?? modalidadeCores['CrossFit']);
@@ -243,15 +267,15 @@ const modalidadeCoresHoje: Record<string, string> = {
                       <input type="hidden" name="aula_id" value={aula.id} />
                       <button
                         type="submit"
-                        title={nCheckins > 0 ? `${nCheckins} check-in(s) — não pode excluir` : 'Excluir aula'}
-                        onclick={nCheckins > 0
-                          ? `alert('Esta aula tem ${nCheckins} check-in(s) e não pode ser excluída.'); return false;`
+                        title={bloqueado ? bloqueadoMsg : 'Excluir aula'}
+                        onclick={bloqueado
+                          ? `alert('${bloqueadoMsg}.'); return false;`
                           : `return confirm('Excluir a aula "${label}" (${aula.horario_inicio.slice(0,5)})?\\nEsta ação não pode ser desfeita.')`
                         }
                         class:list={[
                           'flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-sm font-bold leading-none',
-                          nCheckins > 0
-                            ? 'cursor-not-allowed text-current/40'
+                          bloqueado
+                            ? 'cursor-not-allowed bg-zinc-600/50 text-zinc-400'
                             : 'bg-red-600/80 hover:bg-red-600 text-white'
                         ]}>
                         ×
