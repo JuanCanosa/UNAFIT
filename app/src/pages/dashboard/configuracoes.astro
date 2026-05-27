@@ -31,23 +31,23 @@ if (Astro.request.method === 'POST') {
     const sandbox       = form.get('asaas_sandbox') === 'true';
     const webhook_token = (form.get('asaas_webhook_token') as string)?.trim() || null;
 
-    if (!api_key) {
-      await admin.from('academias')
-        .update({ asaas_api_key: null, asaas_sandbox: true, asaas_webhook_token: null })
-        .eq('id', academia!.id);
-      sucesso = 'Integração Asaas removida.';
+    const cli = createAsaasClient(api_key, sandbox);
+    const ok  = await cli.testarConexao();
+    if (!ok) {
+      erro = 'Chave inválida ou sem acesso à API Asaas. Verifique e tente novamente.';
     } else {
-      const cli = createAsaasClient(api_key, sandbox);
-      const ok  = await cli.testarConexao();
-      if (!ok) {
-        erro = 'Chave inválida ou sem acesso à API Asaas. Verifique e tente novamente.';
-      } else {
-        await admin.from('academias')
-          .update({ asaas_api_key: api_key, asaas_sandbox: sandbox, asaas_webhook_token: webhook_token })
-          .eq('id', academia!.id);
-        sucesso = 'Integração Asaas salva e testada com sucesso!';
-      }
+      await admin.from('academias')
+        .update({ asaas_api_key: api_key, asaas_sandbox: sandbox, asaas_webhook_token: webhook_token })
+        .eq('id', academia!.id);
+      sucesso = 'Integração Asaas salva e testada com sucesso!';
     }
+  }
+
+  if (action === 'excluir_asaas') {
+    await admin.from('academias')
+      .update({ asaas_api_key: null, asaas_sandbox: true, asaas_webhook_token: null })
+      .eq('id', academia!.id);
+    sucesso = 'Integração Asaas removida com sucesso.';
   }
 }
 
@@ -130,66 +130,104 @@ if (temChave) {
       </div>
     </div>
 
-    <form method="POST" class="space-y-4">
-      <input type="hidden" name="action" value="salvar_asaas" />
-
-      <div>
-        <label class="block text-xs text-muted-foreground mb-1">
-          API Key do Asaas
-          <a href="https://www.asaas.com/config/permissoes" target="_blank"
-            class="ml-1 text-primary hover:underline">onde encontrar →</a>
-        </label>
-        <input
-          name="asaas_api_key"
-          type="password"
-          autocomplete="off"
-          placeholder={temChave ? 'Digite para substituir a chave atual' : '$aact_...'}
-          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
-        />
-        <p class="text-xs text-zinc-600 mt-1">Deixe em branco para remover a integração.</p>
-      </div>
-
-      <div>
-        <label class="block text-xs text-muted-foreground mb-1">
-          Token de autenticação do Webhook
-          <span class="text-zinc-600 ml-1">(recomendado)</span>
-        </label>
-        <input
-          name="asaas_webhook_token"
-          type="text"
-          autocomplete="off"
-          value={(acad as any)?.asaas_webhook_token ?? ''}
-          placeholder="Cole aqui o token gerado no painel Asaas"
-          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
-        />
-        <p class="text-xs text-zinc-600 mt-1">Gere em: Asaas → Configurações → Webhooks → Token de autenticação → Gerar Token.</p>
-      </div>
-
-      <div>
-        <label class="block text-xs text-muted-foreground mb-2">Ambiente</label>
-        <div class="flex gap-3">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="asaas_sandbox" value="true"
-              checked={isSandbox}
-              class="accent-primary" />
-            <span class="text-sm text-foreground">Sandbox <span class="text-xs text-muted-foreground">(testes)</span></span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="asaas_sandbox" value="false"
-              checked={!isSandbox}
-              class="accent-primary" />
-            <span class="text-sm text-foreground">Produção <span class="text-xs text-muted-foreground">(real)</span></span>
-          </label>
+    {temChave ? (
+      <!-- Estado: conectado — apenas exibe info + botão de excluir -->
+      <div class="space-y-4">
+        <div class="rounded-lg border border-border bg-zinc-950/60 p-4 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs text-muted-foreground">API Key</span>
+            <span class="text-xs font-mono text-zinc-300">{chaveExibida}</span>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs text-muted-foreground">Ambiente</span>
+            <span class={`text-xs font-medium ${isSandbox ? 'text-yellow-400' : 'text-green-400'}`}>
+              {isSandbox ? 'Sandbox (testes)' : 'Produção (real)'}
+            </span>
+          </div>
+          {(acad as any)?.asaas_webhook_token && (
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs text-muted-foreground">Webhook Token</span>
+              <span class="text-xs text-green-400 flex items-center gap-1">
+                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                Configurado
+              </span>
+            </div>
+          )}
         </div>
-      </div>
 
-      <div class="pt-2">
-        <button type="submit"
-          class="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
-          Salvar e testar conexão
-        </button>
+        <form method="POST" id="form-excluir-asaas">
+          <input type="hidden" name="action" value="excluir_asaas" />
+          <button
+            type="button"
+            id="btn-excluir-asaas"
+            class="flex items-center gap-2 rounded-lg border border-red-600/40 bg-red-900/10 px-4 py-2.5 text-sm font-medium text-red-400 hover:bg-red-900/20 hover:border-red-600/60 transition-colors">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            Excluir integração
+          </button>
+        </form>
       </div>
-    </form>
+    ) : (
+      <!-- Estado: não configurado — exibe formulário de nova integração -->
+      <form method="POST" class="space-y-4">
+        <input type="hidden" name="action" value="salvar_asaas" />
+
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">
+            API Key do Asaas
+            <a href="https://www.asaas.com/config/permissoes" target="_blank"
+              class="ml-1 text-primary hover:underline">onde encontrar →</a>
+          </label>
+          <input
+            name="asaas_api_key"
+            type="password"
+            autocomplete="off"
+            placeholder="$aact_..."
+            required
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted-foreground mb-1">
+            Token de autenticação do Webhook
+            <span class="text-zinc-600 ml-1">(recomendado)</span>
+          </label>
+          <input
+            name="asaas_webhook_token"
+            type="text"
+            autocomplete="off"
+            placeholder="Cole aqui o token gerado no painel Asaas"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+          <p class="text-xs text-zinc-600 mt-1">Gere em: Asaas → Configurações → Webhooks → Token de autenticação → Gerar Token.</p>
+        </div>
+
+        <div>
+          <label class="block text-xs text-muted-foreground mb-2">Ambiente</label>
+          <div class="flex gap-3">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="asaas_sandbox" value="true" checked class="accent-primary" />
+              <span class="text-sm text-foreground">Sandbox <span class="text-xs text-muted-foreground">(testes)</span></span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="asaas_sandbox" value="false" class="accent-primary" />
+              <span class="text-sm text-foreground">Produção <span class="text-xs text-muted-foreground">(real)</span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <button type="submit"
+            class="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
+            Salvar e testar conexão
+          </button>
+        </div>
+      </form>
+    )}
 
     {temChave && (
       <div class="mt-6 pt-5 border-t border-border">
@@ -415,6 +453,14 @@ if (temChave) {
   </div>
 
   <script>
+    // Confirmação antes de excluir integração Asaas
+    const btnExcluir = document.getElementById('btn-excluir-asaas');
+    btnExcluir?.addEventListener('click', () => {
+      if (confirm('Tem certeza que deseja excluir a integração com o Asaas?\n\nNovos alunos não gerarão cobranças automáticas e as assinaturas existentes não serão canceladas no Asaas.')) {
+        (document.getElementById('form-excluir-asaas') as HTMLFormElement)?.submit();
+      }
+    });
+
     const modal  = document.getElementById('modal-tutorial-asaas')!;
     const open   = document.getElementById('btn-tutorial-asaas')!;
     const close1 = document.getElementById('btn-fechar-tutorial')!;
