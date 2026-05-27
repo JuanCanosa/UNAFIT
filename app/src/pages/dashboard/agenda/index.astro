@@ -249,10 +249,10 @@ const modalidadeCoresHoje: Record<string, string> = {
                           : `return confirm('Excluir a aula "${label}" (${aula.horario_inicio.slice(0,5)})?\\nEsta ação não pode ser desfeita.')`
                         }
                         class:list={[
-                          'flex h-4 w-4 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold',
+                          'flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-sm font-bold leading-none',
                           nCheckins > 0
                             ? 'cursor-not-allowed text-current/40'
-                            : 'hover:bg-black/30 hover:text-red-300 text-current'
+                            : 'hover:bg-black/40 hover:text-red-300 text-current'
                         ]}>
                         ×
                       </button>
