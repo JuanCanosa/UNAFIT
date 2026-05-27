@@ -68,33 +68,33 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
     <!-- Header -->
     <div class="flex items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl sm:text-2xl font-bold text-white">Alunos</h1>
-        <p class="text-zinc-400 text-xs sm:text-sm mt-0.5">
+        <h1 class="text-2xl font-bold text-white">Alunos</h1>
+        <p class="text-zinc-400 text-sm mt-0.5">
           {alunos.length} aluno{alunos.length !== 1 ? 's' : ''} encontrado{alunos.length !== 1 ? 's' : ''}
         </p>
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <button id="btn-csv" title="Exportar CSV"
-          class="inline-flex items-center gap-1 px-2.5 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-xs rounded-lg transition-colors no-print">
-          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          class="inline-flex items-center gap-1.5 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-sm rounded-xl transition-colors no-print">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
           <span class="hidden sm:inline">CSV</span>
         </button>
         <button id="btn-pdf" title="Exportar PDF"
-          class="inline-flex items-center gap-1 px-2.5 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-xs rounded-lg transition-colors no-print">
-          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          class="inline-flex items-center gap-1.5 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white text-sm rounded-xl transition-colors no-print">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
           </svg>
           <span class="hidden sm:inline">PDF</span>
         </button>
         {canEdit && (
           <a href="/dashboard/alunos/novo"
-            class="inline-flex items-center gap-1.5 px-3 py-2 bg-primary hover:bg-primary/90 text-black text-xs sm:text-sm font-bold rounded-lg transition-colors">
-            <svg class="h-3.5 w-3.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+            class="inline-flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-black text-sm font-bold rounded-xl transition-colors">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
             </svg>
-            <span class="hidden sm:inline">+ Novo Aluno</span>
+            <span class="hidden sm:inline">Novo Aluno</span>
             <span class="sm:hidden">Novo</span>
           </a>
         )}
@@ -103,38 +103,38 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
 
     <!-- Filtros -->
     <form method="GET" class="space-y-2">
-      <!-- Busca (linha 1) -->
+      <!-- Busca -->
       <input
         name="q" value={busca}
         placeholder="Buscar por nome, email ou CPF..."
-        class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-white text-sm placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50"
+        class="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-white text-base placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50"
       />
-      <!-- Filtros secundários (linha 2) -->
+      <!-- Filtros secundários -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <select name="categoria" class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
+        <select name="categoria" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
           <option value="">Categorias</option>
           {categorias?.map(c => (
             <option value={c.id} selected={filtroCat === c.id}>{c.nome}</option>
           ))}
         </select>
-        <select name="plano" class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
+        <select name="plano" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
           <option value="">Planos</option>
           {planos?.map(p => (
             <option value={p.id} selected={filtroPlano === p.id}>{p.nome}</option>
           ))}
         </select>
-        <select name="status" class="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
+        <select name="status" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
           <option value="">Status</option>
           <option value="ativo"    selected={filtroStatus === 'ativo'}>Ativo</option>
           <option value="pendente" selected={filtroStatus === 'pendente'}>Pendente</option>
           <option value="inativo"  selected={filtroStatus === 'inativo'}>Inativo</option>
         </select>
         <div class="flex gap-2">
-          <button type="submit" class="flex-1 px-3 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg transition-colors">
+          <button type="submit" class="flex-1 px-3 py-3 bg-zinc-700 hover:bg-zinc-600 text-white text-base font-semibold rounded-xl transition-colors">
             Filtrar
           </button>
           {temFiltro && (
-            <a href="/dashboard/alunos" class="shrink-0 px-3 py-2.5 border border-zinc-700 text-zinc-400 text-sm rounded-lg hover:text-white transition-colors flex items-center">
+            <a href="/dashboard/alunos" class="shrink-0 px-4 py-3 border border-zinc-700 text-zinc-400 text-base rounded-xl hover:text-white transition-colors flex items-center">
               ✕
             </a>
           )}
@@ -157,11 +157,11 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
       <div id="tabela-alunos">
 
         <!-- ── MOBILE: cards ─────────────────────────────────────── -->
-        <div class="sm:hidden space-y-2" id="cards-alunos">
+        <div class="sm:hidden space-y-3" id="cards-alunos">
           {canEdit && (
-            <label class="flex items-center gap-2 px-1 pb-1 text-xs text-zinc-500 cursor-pointer select-none">
+            <label class="flex items-center gap-2.5 px-1 pb-1 text-sm text-zinc-400 cursor-pointer select-none">
               <input type="checkbox" id="chk-todos-mobile"
-                class="rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary/40 cursor-pointer" />
+                class="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary/40 cursor-pointer" />
               Selecionar todos
             </label>
           )}
@@ -169,32 +169,32 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
             const planoAtivo = a.aluno_planos?.find((ap: any) => ap.status === 'ativo');
             const cat = a.categorias_alunos;
             return (
-              <div class="aluno-row border border-zinc-700 rounded-xl bg-zinc-900/60 overflow-hidden"
+              <div class="aluno-row border border-zinc-700 rounded-xl bg-zinc-900/60 overflow-hidden active:bg-zinc-800/80"
                 data-id={a.id} data-nome={a.nome} data-email={a.email ?? ''} data-cpf={a.cpf ?? ''}
                 data-plano={planoAtivo?.planos?.nome ?? ''} data-categoria={cat?.nome ?? ''} data-status={a.status}>
-                <div class="flex items-center gap-3 px-4 py-3.5">
+                <div class="flex items-center gap-3 px-4 py-4">
                   {canEdit && (
-                    <input type="checkbox" class="chk-aluno rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary/40 cursor-pointer shrink-0"
+                    <input type="checkbox" class="chk-aluno h-5 w-5 rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary/40 cursor-pointer shrink-0"
                       data-id={a.id} />
                   )}
                   <!-- Avatar -->
-                  <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-sm font-bold">
+                  <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-base font-bold">
                     {a.nome.charAt(0).toUpperCase()}
                   </div>
                   <!-- Info -->
                   <div class="flex-1 min-w-0">
-                    <div class="font-semibold text-white text-sm truncate">{a.nome}</div>
-                    <div class="text-zinc-500 text-xs truncate">{a.email}</div>
-                    <div class="flex items-center gap-2 mt-1 flex-wrap">
-                      <span class={`text-xs px-2 py-0.5 rounded-full font-medium ${statusCores[a.status] ?? ''}`}>
+                    <div class="font-semibold text-white text-base leading-tight truncate">{a.nome}</div>
+                    <div class="text-zinc-400 text-sm mt-0.5 truncate">{a.email}</div>
+                    <div class="flex items-center gap-2 mt-2 flex-wrap">
+                      <span class={`text-sm px-2.5 py-0.5 rounded-full font-medium ${statusCores[a.status] ?? ''}`}>
                         {a.status}
                       </span>
                       {planoAtivo && (
-                        <span class="text-xs text-zinc-400">{planoAtivo.planos?.nome}</span>
+                        <span class="text-sm text-zinc-400">{planoAtivo.planos?.nome}</span>
                       )}
                       {cat && (
-                        <span class="inline-flex items-center gap-1 text-xs text-zinc-500">
-                          <span class="w-1.5 h-1.5 rounded-full shrink-0" style={`background:${cat.cor}`}></span>
+                        <span class="inline-flex items-center gap-1.5 text-sm text-zinc-500">
+                          <span class="w-2 h-2 rounded-full shrink-0" style={`background:${cat.cor}`}></span>
                           {cat.nome}
                         </span>
                       )}
@@ -202,9 +202,9 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
                   </div>
                   <!-- Ação -->
                   <a href={`/dashboard/alunos/${a.id}`}
-                    class="shrink-0 flex items-center justify-center h-9 w-9 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+                    class="shrink-0 flex items-center justify-center h-11 w-11 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
                     aria-label="Ver aluno">
-                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
                     </svg>
                   </a>
