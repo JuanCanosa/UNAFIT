@@ -6,7 +6,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Card from '@/components/ui/Card.astro';
 import Badge from '@/components/ui/Badge.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -114,7 +114,82 @@ if (Astro.request.method === 'POST') {
     await supabase.from('aula_exercicios').delete().eq('id', form.get('ae_id') as string);
     return Astro.redirect(`/dashboard/agenda/${aulaId}`);
   }
+
+  if ((action === 'registrar_checkin_manual' || action === 'remover_checkin_manual') && canEdit) {
+    const aluno_id_param = form.get('aluno_id') as string;
+    const admin = createSupabaseAdminClient();
+    const { data: vinculo } = await admin
+      .from('aluno_academias')
+      .select('profile_id')
+      .eq('aluno_id', aluno_id_param)
+      .eq('academia_id', profile.academia_id!)
+      .maybeSingle();
+
+    if (vinculo?.profile_id) {
+      if (action === 'registrar_checkin_manual') {
+        const { data: existente } = await admin
+          .from('checkins').select('id')
+          .eq('aula_id', aulaId).eq('aluno_id', vinculo.profile_id).maybeSingle();
+        if (!existente) {
+          await admin.from('checkins').insert({
+            aula_id:    aulaId,
+            aluno_id:   vinculo.profile_id,
+            academia_id: profile.academia_id,
+          });
+        }
+      } else {
+        await admin.from('checkins')
+          .delete()
+          .eq('aula_id', aulaId)
+          .eq('aluno_id', vinculo.profile_id);
+      }
+    }
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
+  }
 }
+
+// ── Check-in: alunos elegíveis e presenças já registradas ────────────────────
+const adminCheckin = createSupabaseAdminClient();
+
+const [{ data: todosAlunos }, { data: checkinsAulaData }] = await Promise.all([
+  supabase
+    .from('alunos')
+    .select(`id, nome, aluno_planos(id, status, planos(nome, modalidade))`)
+    .eq('academia_id', profile.academia_id!)
+    .eq('status', 'ativo')
+    .order('nome'),
+  supabase
+    .from('checkins')
+    .select('id, aluno_id')
+    .eq('aula_id', aulaId),
+]);
+
+// Busca profile_id de cada aluno via aluno_academias
+const alunoIds = (todosAlunos ?? []).map((a: any) => a.id);
+const { data: vinculos } = alunoIds.length
+  ? await adminCheckin.from('aluno_academias').select('aluno_id, profile_id')
+      .in('aluno_id', alunoIds).eq('academia_id', profile.academia_id!)
+  : { data: [] as { aluno_id: string; profile_id: string }[] };
+
+const profileIdPorAluno: Record<string, string> = Object.fromEntries(
+  (vinculos ?? []).map((v: any) => [v.aluno_id, v.profile_id])
+);
+const profilesComCheckin = new Set((checkinsAulaData ?? []).map((c: any) => c.aluno_id));
+
+// Filtra elegíveis: plano ativo com modalidade compatível (ou sem restrição)
+const alunosElegiveis = (todosAlunos ?? [])
+  .map((a: any) => {
+    const planoAtivo = (a.aluno_planos ?? []).find((ap: any) => ap.status === 'ativo');
+    const modPlano   = planoAtivo?.planos?.modalidade ?? null;
+    const elegivel   = !!planoAtivo && (!modPlano || modPlano === aula.modalidade);
+    const profileId  = profileIdPorAluno[a.id] ?? null;
+    return { id: a.id, nome: a.nome, planoNome: planoAtivo?.planos?.nome ?? '—',
+             profileId, jaFezCheckin: profileId ? profilesComCheckin.has(profileId) : false,
+             elegivel };
+  })
+  .filter((a: any) => a.elegivel);
+
+const totalCheckinManual = alunosElegiveis.filter((a: any) => a.jaFezCheckin).length;
 
 const scoreLabels: Record<string, string> = {
   tempo: 'Tempo', reps: 'Reps', carga: 'Carga (kg)',
@@ -419,6 +494,120 @@ const modalidadeCor: Record<string, string> = {
       )}
     </Card>
 
+  </div>
+
+  <!-- ── CHECK-IN DOS ALUNOS ──────────────────────────────────────────────── -->
+  <div class="mt-5">
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div class="flex items-center gap-3">
+          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/15">
+            <svg class="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-foreground">Check-in dos Alunos</h2>
+            <p class="text-xs text-muted-foreground">
+              {totalCheckinManual} de {alunosElegiveis.length} presente{alunosElegiveis.length !== 1 ? 's' : ''}
+              {aula.capacidade_max ? ` · capacidade ${aula.capacidade_max}` : ''}
+            </p>
+          </div>
+        </div>
+        <!-- Barra de progresso -->
+        <div class="hidden sm:flex items-center gap-2 shrink-0">
+          <div class="w-32 h-2 rounded-full bg-muted overflow-hidden">
+            <div class="h-full rounded-full bg-blue-500 transition-all"
+              style={`width: ${alunosElegiveis.length > 0 ? Math.round((totalCheckinManual / alunosElegiveis.length) * 100) : 0}%`}>
+            </div>
+          </div>
+          <span class="text-xs font-semibold text-muted-foreground">
+            {alunosElegiveis.length > 0 ? Math.round((totalCheckinManual / alunosElegiveis.length) * 100) : 0}%
+          </span>
+        </div>
+      </div>
+
+      {alunosElegiveis.length === 0 ? (
+        <div class="px-5 py-10 text-center">
+          <svg class="h-10 w-10 text-muted-foreground/20 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          <p class="text-sm text-muted-foreground">Nenhum aluno com plano de <strong>{aula.modalidade}</strong> encontrado.</p>
+          <a href="/dashboard/alunos" class="mt-2 inline-block text-xs text-primary hover:underline">Gerenciar alunos →</a>
+        </div>
+      ) : (
+        <div>
+          <!-- Busca rápida -->
+          <div class="px-4 py-3 border-b border-border/50">
+            <input
+              id="checkin-busca"
+              type="text"
+              placeholder="Buscar aluno..."
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50"
+            />
+          </div>
+
+          <!-- Lista de alunos -->
+          <div id="checkin-lista" class="divide-y divide-border/40">
+            {/* Presentes primeiro */}
+            {alunosElegiveis.filter((a: any) => a.jaFezCheckin).map((a: any) => (
+              <div class="checkin-item flex items-center gap-3 px-4 py-3 bg-green-950/20 hover:bg-green-950/30 transition-colors"
+                data-nome={a.nome.toLowerCase()}>
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/20 text-green-400 text-sm font-bold">
+                  {a.nome.charAt(0).toUpperCase()}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-semibold text-foreground truncate">{a.nome}</p>
+                  <p class="text-xs text-muted-foreground truncate">{a.planoNome}</p>
+                </div>
+                <span class="flex items-center gap-1 text-xs text-green-400 shrink-0 mr-2">
+                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                  </svg>
+                  Presente
+                </span>
+                {canEdit && (
+                  <form method="POST" class="shrink-0">
+                    <input type="hidden" name="action" value="remover_checkin_manual" />
+                    <input type="hidden" name="aluno_id" value={a.id} />
+                    <button type="submit"
+                      onclick="return confirm('Desfazer o check-in deste aluno?')"
+                      class="rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-1.5 text-xs text-red-400 hover:bg-red-900/40 hover:border-red-600/60 transition-colors">
+                      Desfazer
+                    </button>
+                  </form>
+                )}
+              </div>
+            ))}
+
+            {/* Não presentes */}
+            {alunosElegiveis.filter((a: any) => !a.jaFezCheckin).map((a: any) => (
+              <div class="checkin-item flex items-center gap-3 px-4 py-3 hover:bg-muted/20 transition-colors"
+                data-nome={a.nome.toLowerCase()}>
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground text-sm font-bold">
+                  {a.nome.charAt(0).toUpperCase()}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-foreground truncate">{a.nome}</p>
+                  <p class="text-xs text-muted-foreground truncate">{a.planoNome}</p>
+                </div>
+                {canEdit && (
+                  <form method="POST" class="shrink-0">
+                    <input type="hidden" name="action" value="registrar_checkin_manual" />
+                    <input type="hidden" name="aluno_id" value={a.id} />
+                    <button type="submit"
+                      class="rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground hover:bg-green-900/30 hover:border-green-700/50 hover:text-green-400 transition-colors">
+                      + Check-in
+                    </button>
+                  </form>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   </div>
 
 </DashboardLayout>
@@ -742,6 +931,16 @@ const modalidadeCor: Record<string, string> = {
     exSel.classList.add('hidden');
     formEx.classList.add('hidden');
     exBusca.value = '';
+  });
+
+  // ── Busca rápida na lista de check-in ─────────────────
+  const checkinBusca = document.getElementById('checkin-busca') as HTMLInputElement | null;
+  checkinBusca?.addEventListener('input', () => {
+    const q = checkinBusca.value.toLowerCase().trim();
+    document.querySelectorAll<HTMLElement>('.checkin-item').forEach(item => {
+      const nome = item.dataset.nome ?? '';
+      item.style.display = !q || nome.includes(q) ? '' : 'none';
+    });
   });
 
   formEx.addEventListener('submit', async (e) => {
