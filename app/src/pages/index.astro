@@ -4,5 +4,1275 @@ import { createSupabaseServerClient } from '@/lib/supabase';
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 
-return Astro.redirect(user ? '/dashboard' : '/login');
+if (user) return Astro.redirect('/dashboard');
 ---
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNAFIT — Software de Gestão para Academias de CrossFit</title>
+  <meta name="description" content="Plataforma SaaS completa para academias de CrossFit. Gestão de alunos, WODs, pagamentos PIX, check-in digital e muito mais. Foque no treino, a gente cuida do resto." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --surface-2: #181818;
+      --border: #222222;
+      --text: #f0ebe4;
+      --text-muted: #777777;
+      --text-dim: #444444;
+      --red: #e62525;
+      --red-dim: rgba(230, 37, 37, 0.12);
+      --red-glow: rgba(230, 37, 37, 0.3);
+      --font-display: 'Bebas Neue', sans-serif;
+      --font-body: 'DM Sans', sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── NAVBAR ── */
+    .nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: background 0.3s, border-bottom 0.3s, padding 0.3s;
+    }
+    .nav.scrolled {
+      background: rgba(10,10,10,0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 40px;
+    }
+    .nav-logo {
+      font-family: var(--font-display);
+      font-size: 28px;
+      letter-spacing: 2px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .nav-logo span { color: var(--red); }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta {
+      background: var(--red);
+      color: var(--text) !important;
+      padding: 10px 24px;
+      border-radius: 4px;
+      font-weight: 600 !important;
+      transition: opacity 0.2s !important;
+    }
+    .nav-cta:hover { opacity: 0.85; }
+    .nav-mobile-btn {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text);
+      padding: 4px;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 0 40px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 70% 40%, rgba(230,37,37,0.08) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 60% at 20% 80%, rgba(230,37,37,0.04) 0%, transparent 60%);
+    }
+    .hero-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 80px 80px;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 0%, transparent 100%);
+    }
+    .hero-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--red);
+      margin-bottom: 16px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .hero-label::before {
+      content: '';
+      display: block;
+      width: 24px;
+      height: 1px;
+      background: var(--red);
+    }
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: clamp(80px, 14vw, 200px);
+      line-height: 0.9;
+      letter-spacing: -2px;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-title .line-2 { color: var(--text-dim); }
+    .hero-title .line-accent {
+      -webkit-text-stroke: 2px var(--red);
+      color: transparent;
+      text-shadow: 0 0 80px var(--red-glow);
+    }
+    .hero-bottom {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-top: 48px;
+      gap: 40px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-desc {
+      max-width: 420px;
+      color: var(--text-muted);
+      font-size: 17px;
+      line-height: 1.7;
+      font-weight: 300;
+    }
+    .hero-desc strong { color: var(--text); font-weight: 600; }
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    .btn-primary {
+      background: var(--red);
+      color: #fff;
+      border: none;
+      padding: 16px 36px;
+      font-family: var(--font-display);
+      font-size: 18px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.85; transform: translateY(-2px); }
+    .btn-ghost {
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 15px 28px;
+      font-family: var(--font-display);
+      font-size: 16px;
+      letter-spacing: 1.5px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: border-color 0.2s, color 0.2s;
+      background: transparent;
+    }
+    .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
+
+    /* ── STATS BAR ── */
+    .stats-bar {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 32px 40px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+    }
+    .stat-item {
+      text-align: center;
+      padding: 0 20px;
+      border-right: 1px solid var(--border);
+    }
+    .stat-item:last-child { border-right: none; }
+    .stat-num {
+      font-family: var(--font-display);
+      font-size: 52px;
+      line-height: 1;
+      color: var(--text);
+      letter-spacing: -1px;
+    }
+    .stat-num span { color: var(--red); }
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+
+    /* ── TICKER ── */
+    .ticker-wrap {
+      overflow: hidden;
+      background: var(--red);
+      padding: 12px 0;
+    }
+    .ticker-track {
+      display: flex;
+      width: max-content;
+      animation: ticker 30s linear infinite;
+    }
+    .ticker-item {
+      font-family: var(--font-display);
+      font-size: 16px;
+      letter-spacing: 3px;
+      color: #fff;
+      padding: 0 24px;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .ticker-item::after {
+      content: '·';
+      color: rgba(255,255,255,0.4);
+    }
+    @keyframes ticker {
+      from { transform: translateX(0); }
+      to { transform: translateX(-50%); }
+    }
+
+    /* ── SECTIONS SHARED ── */
+    section { padding: 120px 40px; }
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--red);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-label::before {
+      content: '';
+      display: block;
+      width: 24px;
+      height: 1px;
+      background: var(--red);
+    }
+    .section-title {
+      font-family: var(--font-display);
+      font-size: clamp(48px, 6vw, 80px);
+      line-height: 1;
+      letter-spacing: -1px;
+      margin-bottom: 20px;
+    }
+    .section-sub {
+      font-size: 17px;
+      color: var(--text-muted);
+      max-width: 480px;
+      font-weight: 300;
+      line-height: 1.7;
+    }
+
+    /* ── FEATURES ── */
+    .features-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 80px;
+      flex-wrap: wrap;
+      gap: 32px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+    }
+    .feature-card {
+      background: var(--bg);
+      padding: 48px 40px;
+      position: relative;
+      overflow: hidden;
+      transition: background 0.3s;
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease, background 0.3s;
+    }
+    .feature-card.visible { opacity: 1; transform: translateY(0); }
+    .feature-card:hover { background: var(--surface); }
+    .feature-card::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0;
+      width: 0; height: 2px;
+      background: var(--red);
+      transition: width 0.4s ease;
+    }
+    .feature-card:hover::after { width: 100%; }
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--red-dim);
+      border: 1px solid rgba(230,37,37,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 28px;
+      color: var(--red);
+    }
+    .feature-num {
+      font-family: var(--font-display);
+      font-size: 72px;
+      color: var(--surface-2);
+      line-height: 1;
+      position: absolute;
+      top: 16px;
+      right: 24px;
+      user-select: none;
+      transition: color 0.3s;
+    }
+    .feature-card:hover .feature-num { color: var(--surface); }
+    .feature-title {
+      font-family: var(--font-display);
+      font-size: 26px;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+    }
+    .feature-desc {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      font-weight: 300;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .how-section { background: var(--surface); }
+    .how-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      margin-top: 80px;
+      position: relative;
+    }
+    .how-grid::before {
+      content: '';
+      position: absolute;
+      top: 32px;
+      left: calc(16.66% + 24px);
+      right: calc(16.66% + 24px);
+      height: 1px;
+      background: linear-gradient(90deg, var(--red) 0%, var(--red) 50%, var(--border) 100%);
+    }
+    .how-step {
+      padding: 0 40px 60px;
+      position: relative;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .how-step.visible { opacity: 1; transform: translateY(0); }
+    .how-step:nth-child(2) { transition-delay: 0.15s; }
+    .how-step:nth-child(3) { transition-delay: 0.3s; }
+    .how-dot {
+      width: 64px;
+      height: 64px;
+      background: var(--bg);
+      border: 2px solid var(--red);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-display);
+      font-size: 24px;
+      color: var(--red);
+      margin-bottom: 32px;
+      position: relative;
+      z-index: 1;
+    }
+    .how-title {
+      font-family: var(--font-display);
+      font-size: 28px;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .how-desc {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      font-weight: 300;
+    }
+
+    /* ── WHITE LABEL ── */
+    .wl-section {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 100px;
+      align-items: center;
+    }
+    .wl-phone {
+      position: relative;
+      display: flex;
+      justify-content: center;
+    }
+    .wl-device {
+      width: 280px;
+      height: 560px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 32px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
+    }
+    .wl-device-screen {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .wl-topbar {
+      background: var(--red);
+      padding: 20px 20px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .wl-topbar-logo {
+      font-family: var(--font-display);
+      font-size: 18px;
+      letter-spacing: 2px;
+      color: #fff;
+    }
+    .wl-content {
+      padding: 16px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .wl-card-mini {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .wl-card-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+    .wl-card-line { height: 8px; background: var(--border); border-radius: 4px; flex: 1; }
+    .wl-card-line-short { width: 60%; }
+    .wl-float-card {
+      position: absolute;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-size: 13px;
+      white-space: nowrap;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+    }
+    .wl-float-card-1 {
+      right: -60px;
+      top: 80px;
+      animation: float1 4s ease-in-out infinite;
+    }
+    .wl-float-card-2 {
+      left: -80px;
+      bottom: 120px;
+      animation: float2 5s ease-in-out infinite;
+    }
+    .wl-float-title { font-size: 10px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
+    .wl-float-val { font-family: var(--font-display); font-size: 24px; letter-spacing: 0.5px; color: var(--text); }
+    .wl-float-val span { color: var(--red); }
+    .wl-float-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(34,197,94,0.1);
+      color: #22c55e;
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-top: 6px;
+    }
+    @keyframes float1 { 0%,100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+    @keyframes float2 { 0%,100% { transform: translateY(0px); } 50% { transform: translateY(8px); } }
+    .wl-text { max-width: 520px; }
+    .wl-benefits { list-style: none; margin-top: 36px; display: flex; flex-direction: column; gap: 16px; }
+    .wl-benefit {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      font-size: 16px;
+      color: var(--text-muted);
+      font-weight: 300;
+    }
+    .wl-benefit-icon {
+      width: 20px;
+      height: 20px;
+      background: var(--red-dim);
+      border: 1px solid rgba(230,37,37,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--red);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .wl-benefit strong { color: var(--text); }
+
+    /* ── PRICING ── */
+    .pricing-section { background: var(--surface); }
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      margin-top: 80px;
+    }
+    .pricing-card {
+      background: var(--bg);
+      padding: 48px 40px;
+      position: relative;
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .pricing-card.visible { opacity: 1; transform: translateY(0); }
+    .pricing-card.featured {
+      background: var(--surface-2);
+    }
+    .pricing-card:nth-child(2) { transition-delay: 0.1s; }
+    .pricing-card:nth-child(3) { transition-delay: 0.2s; }
+    .pricing-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--red);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      margin-bottom: 24px;
+    }
+    .pricing-plan {
+      font-family: var(--font-display);
+      font-size: 32px;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    .pricing-price {
+      font-family: var(--font-display);
+      font-size: 64px;
+      line-height: 1;
+      letter-spacing: -2px;
+      margin: 24px 0 8px;
+    }
+    .pricing-price .currency {
+      font-size: 28px;
+      vertical-align: top;
+      margin-top: 12px;
+      display: inline-block;
+      color: var(--text-muted);
+    }
+    .pricing-period {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 36px;
+    }
+    .pricing-sep {
+      height: 1px;
+      background: var(--border);
+      margin: 32px 0;
+    }
+    .pricing-features { list-style: none; display: flex; flex-direction: column; gap: 12px; margin-bottom: 36px; }
+    .pricing-feat {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 300;
+    }
+    .pricing-feat-check { color: var(--red); font-size: 16px; flex-shrink: 0; }
+    .pricing-feat strong { color: var(--text); }
+    .btn-pricing {
+      width: 100%;
+      padding: 14px;
+      font-family: var(--font-display);
+      font-size: 18px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      display: block;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .btn-pricing:hover { opacity: 0.85; transform: translateY(-1px); }
+    .btn-pricing-red { background: var(--red); color: #fff; border: none; }
+    .btn-pricing-outline { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-pricing-outline:hover { border-color: var(--text-muted); }
+
+    /* ── CTA FINAL ── */
+    .cta-section {
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .cta-bg {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 60% at 50% 50%, rgba(230,37,37,0.07) 0%, transparent 70%);
+    }
+    .cta-outline {
+      font-family: var(--font-display);
+      font-size: clamp(60px, 10vw, 140px);
+      line-height: 0.95;
+      -webkit-text-stroke: 1px var(--text-dim);
+      color: transparent;
+      user-select: none;
+      position: relative;
+      z-index: 0;
+      margin-bottom: -40px;
+    }
+    .cta-content {
+      position: relative;
+      z-index: 1;
+      max-width: 640px;
+      margin: 0 auto;
+      padding-bottom: 80px;
+    }
+    .cta-section .section-title { margin-bottom: 16px; }
+    .cta-section .section-sub { margin: 0 auto 40px; text-align: center; }
+    .cta-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .cta-note {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 16px;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 60px 40px 40px;
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 60px;
+      margin-bottom: 60px;
+    }
+    .footer-brand { }
+    .footer-logo {
+      font-family: var(--font-display);
+      font-size: 32px;
+      letter-spacing: 2px;
+      color: var(--text);
+      text-decoration: none;
+      display: block;
+      margin-bottom: 16px;
+    }
+    .footer-logo span { color: var(--red); }
+    .footer-tagline {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      max-width: 260px;
+      font-weight: 300;
+    }
+    .footer-col-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+    }
+    .footer-links { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+    .footer-links a {
+      font-size: 14px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 300;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--text); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .footer-copy {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+    .footer-made {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+    .footer-made span { color: var(--red); }
+
+    /* ── SCROLL REVEAL ── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 1024px) {
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .pricing-grid { grid-template-columns: 1fr; background: none; gap: 16px; }
+      .pricing-card { background: var(--surface) !important; border: 1px solid var(--border); }
+      .wl-section { grid-template-columns: 1fr; gap: 60px; }
+      .wl-phone { display: none; }
+      .how-grid { grid-template-columns: 1fr; }
+      .how-grid::before { display: none; }
+      .footer-grid { grid-template-columns: 1fr 1fr; gap: 40px; }
+      .stats-bar { grid-template-columns: repeat(2, 1fr); }
+      .stat-item:nth-child(2) { border-right: none; }
+    }
+    @media (max-width: 768px) {
+      .nav { padding: 16px 20px; }
+      .nav.scrolled { padding: 12px 20px; }
+      .nav-links { display: none; }
+      .nav-mobile-btn { display: block; }
+      .hero { padding: 0 20px 60px; }
+      section { padding: 80px 20px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .stats-bar { padding: 24px 20px; grid-template-columns: repeat(2, 1fr); }
+      .how-step { padding: 0 20px 40px; }
+      .footer-grid { grid-template-columns: 1fr; }
+      .footer-bottom { flex-direction: column; text-align: center; }
+      .cta-outline { font-size: 48px; }
+      .hero-bottom { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <nav class="nav" id="navbar">
+    <a href="/" class="nav-logo">UNA<span>FIT</span></a>
+    <ul class="nav-links">
+      <li><a href="#funcionalidades">Funcionalidades</a></li>
+      <li><a href="#como-funciona">Como Funciona</a></li>
+      <li><a href="#precos">Preços</a></li>
+      <li><a href="/login">Entrar</a></li>
+      <li><a href="#precos" class="nav-cta">Começar Grátis</a></li>
+    </ul>
+    <button class="nav-mobile-btn" id="mobileMenuBtn" aria-label="Menu">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero" id="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-grid"></div>
+    <div class="hero-label">Software para CrossFit</div>
+    <h1 class="hero-title">
+      <div class="line-1">GERENCIE</div>
+      <div class="line-2">TUDO.</div>
+      <div class="line-accent">FOQUE.</div>
+    </h1>
+    <div class="hero-bottom">
+      <p class="hero-desc">
+        Plataforma <strong>SaaS completa</strong> para academias de CrossFit. Alunos, WODs, pagamentos PIX, check-in digital e relatórios — tudo em um só lugar.
+      </p>
+      <div class="hero-actions">
+        <a href="#precos" class="btn-primary">
+          COMEÇAR AGORA
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </a>
+        <a href="#como-funciona" class="btn-ghost">VER DEMO</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar">
+    <div class="stat-item">
+      <div class="stat-num"><span class="countup" data-target="500">0</span><span>+</span></div>
+      <div class="stat-label">Alunos Gerenciados</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num"><span class="countup" data-target="30">0</span><span>+</span></div>
+      <div class="stat-label">Academias Ativas</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num"><span class="countup" data-target="99">0</span><span>%</span></div>
+      <div class="stat-label">Uptime Garantido</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num"><span class="countup" data-target="24">0</span><span>/7</span></div>
+      <div class="stat-label">Disponibilidade</div>
+    </div>
+  </div>
+
+  <!-- TICKER -->
+  <div class="ticker-wrap" aria-hidden="true">
+    <div class="ticker-track">
+      <div class="ticker-item">GESTÃO DE ALUNOS</div>
+      <div class="ticker-item">WODS DIÁRIOS</div>
+      <div class="ticker-item">PAGAMENTO VIA PIX</div>
+      <div class="ticker-item">CHECK-IN DIGITAL</div>
+      <div class="ticker-item">AGENDA DE AULAS</div>
+      <div class="ticker-item">RELATÓRIOS FINANCEIROS</div>
+      <div class="ticker-item">WHITE-LABEL</div>
+      <div class="ticker-item">RANKINGS DE PRESENÇA</div>
+      <div class="ticker-item">GESTÃO DE ALUNOS</div>
+      <div class="ticker-item">WODS DIÁRIOS</div>
+      <div class="ticker-item">PAGAMENTO VIA PIX</div>
+      <div class="ticker-item">CHECK-IN DIGITAL</div>
+      <div class="ticker-item">AGENDA DE AULAS</div>
+      <div class="ticker-item">RELATÓRIOS FINANCEIROS</div>
+      <div class="ticker-item">WHITE-LABEL</div>
+      <div class="ticker-item">RANKINGS DE PRESENÇA</div>
+    </div>
+  </div>
+
+  <!-- FEATURES -->
+  <section id="funcionalidades">
+    <div class="features-header">
+      <div>
+        <div class="section-label">Funcionalidades</div>
+        <h2 class="section-title">TUDO QUE<br/>VOCÊ PRECISA</h2>
+      </div>
+      <p class="section-sub">Cada funcionalidade foi construída especificamente para o modelo de negócio de academias de CrossFit.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-num">01</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">GESTÃO DE ALUNOS</h3>
+        <p class="feature-desc">Cadastro completo com CPF, histórico de planos, cobranças automáticas via Asaas e acompanhamento de frequência.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">02</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">WODs DIÁRIOS</h3>
+        <p class="feature-desc">Monte seus treinos com grupos, seções e exercícios. Biblioteca de movimentos e registro de performance dos atletas.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">03</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">AGENDA DE AULAS</h3>
+        <p class="feature-desc">Horários por professor, capacidade máxima de alunos e visualização semanal. Alunos acessam a agenda pelo app.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">04</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">CHECK-IN DIGITAL</h3>
+        <p class="feature-desc">Registro de presença em tempo real. Controle de frequência, histórico por aluno e rankings de assiduidade.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">05</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">PAGAMENTOS</h3>
+        <p class="feature-desc">Cobranças automáticas via PIX, Boleto e Cartão pelo Asaas. Webhook de confirmação instantânea, faturas e inadimplência.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">06</div>
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+        </div>
+        <h3 class="feature-title">RELATÓRIOS</h3>
+        <p class="feature-desc">Dashboard financeiro com MRR, inadimplência e faturamento por período. Relatórios de presença e performance.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="como-funciona" class="how-section">
+    <div class="section-label">Como Funciona</div>
+    <h2 class="section-title">3 PASSOS<br/>PARA COMEÇAR</h2>
+    <div class="how-grid">
+      <div class="how-step">
+        <div class="how-dot">1</div>
+        <h3 class="how-title">CRIE SUA CONTA</h3>
+        <p class="how-desc">Escolha um plano, cadastre sua academia e personalize com seu logo e subdomínio exclusivo. Em menos de 5 minutos.</p>
+      </div>
+      <div class="how-step">
+        <div class="how-dot">2</div>
+        <h3 class="how-title">CONFIGURE</h3>
+        <p class="how-desc">Integre com o Asaas para pagamentos automáticos, cadastre seus planos e importe ou adicione seus alunos.</p>
+      </div>
+      <div class="how-step">
+        <div class="how-dot">3</div>
+        <h3 class="how-title">GERENCIE</h3>
+        <p class="how-desc">Publique WODs, agende aulas, monitore presença e receba pagamentos. Foque no treino — o sistema faz o resto.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHITE LABEL -->
+  <section>
+    <div class="wl-section">
+      <div class="wl-phone">
+        <div class="wl-device">
+          <div class="wl-device-screen">
+            <div class="wl-topbar">
+              <div class="wl-topbar-logo">SUA BOX</div>
+            </div>
+            <div class="wl-content">
+              <div class="wl-card-mini" style="background:#1a1a1a">
+                <div class="wl-card-dot"></div>
+                <div>
+                  <div class="wl-card-line" style="width:80%;margin-bottom:6px"></div>
+                  <div class="wl-card-line" style="width:50%"></div>
+                </div>
+              </div>
+              <div class="wl-card-mini" style="background:#1a1a1a">
+                <div class="wl-card-dot" style="background:#22c55e"></div>
+                <div>
+                  <div class="wl-card-line" style="width:70%;margin-bottom:6px"></div>
+                  <div class="wl-card-line" style="width:40%"></div>
+                </div>
+              </div>
+              <div class="wl-card-mini" style="background:#1a1a1a">
+                <div class="wl-card-dot" style="background:#f59e0b"></div>
+                <div>
+                  <div class="wl-card-line" style="width:60%;margin-bottom:6px"></div>
+                  <div class="wl-card-line" style="width:45%"></div>
+                </div>
+              </div>
+              <div style="height:12px"></div>
+              <div style="background:var(--red);height:40px;border-radius:6px;opacity:0.8"></div>
+            </div>
+          </div>
+        </div>
+        <div class="wl-float-card wl-float-card-1">
+          <div class="wl-float-title">Check-ins hoje</div>
+          <div class="wl-float-val"><span>47</span> alunos</div>
+          <div class="wl-float-tag">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg>
+            +12% vs ontem
+          </div>
+        </div>
+        <div class="wl-float-card wl-float-card-2">
+          <div class="wl-float-title">Faturamento</div>
+          <div class="wl-float-val">R$<span>8.340</span></div>
+          <div class="wl-float-tag">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg>
+            Este mês
+          </div>
+        </div>
+      </div>
+      <div class="wl-text reveal">
+        <div class="section-label">White-label</div>
+        <h2 class="section-title">SUA MARCA,<br/>NOSSA TECH</h2>
+        <p class="section-sub">Cada academia tem sua identidade visual, subdomínio e login personalizados. Seus alunos veem só a sua marca.</p>
+        <ul class="wl-benefits">
+          <li class="wl-benefit">
+            <div class="wl-benefit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span><strong>Subdomínio exclusivo</strong> — unafit.com.br/suabox</span>
+          </li>
+          <li class="wl-benefit">
+            <div class="wl-benefit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span><strong>Logo personalizada</strong> no painel e e-mails</span>
+          </li>
+          <li class="wl-benefit">
+            <div class="wl-benefit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span><strong>Alunos e colaboradores</strong> acessam pelo login da box</span>
+          </li>
+          <li class="wl-benefit">
+            <div class="wl-benefit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span><strong>Recebimentos direto</strong> para sua conta Asaas</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="precos" class="pricing-section">
+    <div class="section-label reveal">Planos</div>
+    <h2 class="section-title reveal">SIMPLES E<br/>TRANSPARENTE</h2>
+    <p class="section-sub reveal">Sem taxa de setup. Sem fidelidade. Cancele quando quiser.</p>
+    <div class="pricing-grid">
+      <div class="pricing-card">
+        <div class="pricing-plan">STARTER</div>
+        <p style="font-size:14px;color:var(--text-muted);font-weight:300">Ideal para boxes em crescimento</p>
+        <div class="pricing-price">
+          <span class="currency">R$</span>99<span style="font-size:36px">,90</span>
+        </div>
+        <div class="pricing-period">por mês · cobrado mensalmente</div>
+        <div class="pricing-sep"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Até <strong>50 alunos</strong></span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>WODs e agenda de aulas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Check-in digital</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Pagamentos via Asaas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>White-label básico</span></li>
+          <li class="pricing-feat" style="color:var(--text-dim)"><span style="color:var(--text-dim)">✗</span> <span>Relatórios avançados</span></li>
+          <li class="pricing-feat" style="color:var(--text-dim)"><span style="color:var(--text-dim)">✗</span> <span>API + Webhooks</span></li>
+        </ul>
+        <a href="#" class="btn-pricing btn-pricing-outline">COMEÇAR GRÁTIS</a>
+      </div>
+      <div class="pricing-card featured">
+        <div class="pricing-badge">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          MAIS POPULAR
+        </div>
+        <div class="pricing-plan">PRO</div>
+        <p style="font-size:14px;color:var(--text-muted);font-weight:300">Para boxes estabelecidas</p>
+        <div class="pricing-price">
+          <span class="currency">R$</span>199<span style="font-size:36px">,90</span>
+        </div>
+        <div class="pricing-period">por mês · cobrado mensalmente</div>
+        <div class="pricing-sep"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Até <strong>200 alunos</strong></span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>WODs e agenda de aulas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Check-in digital</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Pagamentos via Asaas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>White-label completo</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span><strong>Relatórios avançados</strong></span></li>
+          <li class="pricing-feat" style="color:var(--text-dim)"><span style="color:var(--text-dim)">✗</span> <span>API + Webhooks</span></li>
+        </ul>
+        <a href="#" class="btn-pricing btn-pricing-red">COMEÇAR GRÁTIS</a>
+      </div>
+      <div class="pricing-card">
+        <div class="pricing-plan">SCALE</div>
+        <p style="font-size:14px;color:var(--text-muted);font-weight:300">Multi-unidade e grandes boxes</p>
+        <div class="pricing-price">
+          <span class="currency">R$</span>349<span style="font-size:36px">,90</span>
+        </div>
+        <div class="pricing-period">por mês · cobrado mensalmente</div>
+        <div class="pricing-sep"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span><strong>Alunos ilimitados</strong></span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>WODs e agenda de aulas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Check-in digital</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Pagamentos via Asaas</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>White-label completo</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span>Relatórios avançados</span></li>
+          <li class="pricing-feat"><span class="pricing-feat-check">✓</span> <span><strong>API + Webhooks</strong></span></li>
+        </ul>
+        <a href="#" class="btn-pricing btn-pricing-outline">COMEÇAR GRÁTIS</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA FINAL -->
+  <section class="cta-section">
+    <div class="cta-bg"></div>
+    <div class="cta-outline" aria-hidden="true">PRONTO?</div>
+    <div class="cta-content reveal">
+      <div class="section-label" style="justify-content:center">Próximo passo</div>
+      <h2 class="section-title">COMECE HOJE,<br/>GRÁTIS</h2>
+      <p class="section-sub">14 dias sem cobrar nada. Sem cartão de crédito. Configure sua box em minutos.</p>
+      <div class="cta-actions">
+        <a href="#precos" class="btn-primary">
+          CRIAR MINHA CONTA
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </a>
+        <a href="/login" class="btn-ghost">JÁ TENHO CONTA</a>
+      </div>
+      <p class="cta-note">Dúvidas? Fale com nosso time — resposta em até 2 horas.</p>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="/" class="footer-logo">UNA<span>FIT</span></a>
+        <p class="footer-tagline">Software de gestão completo para academias de CrossFit. Do check-in ao pagamento.</p>
+      </div>
+      <div>
+        <div class="footer-col-title">Produto</div>
+        <ul class="footer-links">
+          <li><a href="#funcionalidades">Funcionalidades</a></li>
+          <li><a href="#como-funciona">Como Funciona</a></li>
+          <li><a href="#precos">Preços</a></li>
+          <li><a href="/login">Entrar</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="footer-col-title">Recursos</div>
+        <ul class="footer-links">
+          <li><a href="#">Documentação</a></li>
+          <li><a href="#">Tutoriais</a></li>
+          <li><a href="#">Blog</a></li>
+          <li><a href="#">Status</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="footer-col-title">Empresa</div>
+        <ul class="footer-links">
+          <li><a href="#">Sobre nós</a></li>
+          <li><a href="#">Contato</a></li>
+          <li><a href="#">Privacidade</a></li>
+          <li><a href="#">Termos</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">© 2025 UNAFIT. Todos os direitos reservados.</p>
+      <p class="footer-made">Feito com <span>♥</span> para o CrossFit brasileiro</p>
+    </div>
+  </footer>
+
+  <script>
+    // Navbar scroll effect
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      navbar.classList.toggle('scrolled', window.scrollY > 60);
+    }, { passive: true });
+
+    // Scroll reveal
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          observer.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.12 });
+
+    document.querySelectorAll('.feature-card, .how-step, .pricing-card, .reveal').forEach(el => {
+      observer.observe(el);
+    });
+
+    // CountUp
+    const countupObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const el = entry.target;
+        const target = parseInt(el.dataset.target, 10);
+        const duration = 1800;
+        const start = performance.now();
+        const step = (now) => {
+          const progress = Math.min((now - start) / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          el.textContent = Math.floor(eased * target);
+          if (progress < 1) requestAnimationFrame(step);
+          else el.textContent = target;
+        };
+        requestAnimationFrame(step);
+        countupObserver.unobserve(el);
+      });
+    }, { threshold: 0.5 });
+
+    document.querySelectorAll('.countup').forEach(el => countupObserver.observe(el));
+
+    // Hero title stagger
+    document.querySelectorAll('.hero-title .line-1, .hero-title .line-2, .hero-title .line-accent').forEach((el, i) => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(40px)';
+      el.style.transition = `opacity 0.8s ease ${i * 0.15 + 0.3}s, transform 0.8s ease ${i * 0.15 + 0.3}s`;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          el.style.opacity = '1';
+          el.style.transform = 'translateY(0)';
+        });
+      });
+    });
+
+    // Hero bottom stagger
+    ['.hero-label', '.hero-desc', '.hero-actions'].forEach((sel, i) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      el.style.transition = `opacity 0.7s ease ${i * 0.12 + 0.8}s, transform 0.7s ease ${i * 0.12 + 0.8}s`;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        el.style.opacity = '1';
+        el.style.transform = 'translateY(0)';
+      }));
+    });
+  </script>
+</body>
+</html>
