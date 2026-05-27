@@ -1,9 +1,4 @@
 ---
-/**
- * /dashboard/financeiro/faturas
- * Faturas de todos os alunos — visível apenas para dono e saas_admin.
- * Professor NÃO acessa (conforme RULES.md §2).
- */
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import Card from '@/components/ui/Card.astro';
 import Badge from '@/components/ui/Badge.astro';
@@ -34,10 +29,9 @@ const { data: assinatura } = profile.academia_id
       .maybeSingle()
   : { data: null };
 
-const valorPlano  = Number((assinatura as any)?.saas_planos?.valor ?? 0);
-const isCourtesy  = valorPlano === 0;
+const valorPlano = Number((assinatura as any)?.saas_planos?.valor ?? 0);
+const isCourtesy = valorPlano === 0;
 
-// Faturas SaaS — só para planos pagos
 const primeiroDiaMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
 const { data: faturasSaas } = (!isCourtesy && profile.academia_id)
   ? await admin
@@ -51,49 +45,57 @@ const { data: faturasSaas } = (!isCourtesy && profile.academia_id)
   : { data: null };
 
 // Filtro de mês via query param
-const url      = new URL(Astro.request.url);
-const filtroMes = url.searchParams.get('mes'); // ex: "2026-04"
+const url       = new URL(Astro.request.url);
+const filtroMes = url.searchParams.get('mes'); // ex: "2026-05"
 
-// Busca faturas com dados do aluno
-let query = supabase
-  .from('faturas')
+const mesAtual = filtroMes ?? new Date().toISOString().slice(0, 7);
+const mesInicio = mesAtual + '-01';
+// Último dia do mês
+const [ano, mes] = mesAtual.split('-').map(Number);
+const ultimoDia  = new Date(ano!, mes!, 0).getDate();
+const mesFim     = mesAtual + '-' + String(ultimoDia).padStart(2, '0');
+
+// Busca pagamentos do mês com dados do aluno
+const { data: pagamentos } = await admin
+  .from('pagamentos')
   .select(`
-    id, valor, status, vencimento, pago_em, mes_referencia, descricao,
-    profiles ( nome_completo, telefone )
+    id, valor, status, data_vencimento, data_pagamento, descricao,
+    asaas_payment_id, link_pagamento,
+    pix_qr_code_base64, pix_copia_cola, boleto_url, boleto_linha,
+    alunos ( id, nome )
   `)
   .eq('academia_id', profile.academia_id!)
-  .order('vencimento', { ascending: false });
-
-if (filtroMes) {
-  query = query
-    .gte('mes_referencia', filtroMes + '-01')
-    .lte('mes_referencia', filtroMes + '-31');
-}
-
-const { data: faturas } = await query.limit(100);
+  .gte('data_vencimento', mesInicio)
+  .lte('data_vencimento', mesFim)
+  .order('data_vencimento', { ascending: false })
+  .limit(200);
 
 // Totais
-const totalPagas    = faturas?.filter(f => f.status === 'paga').length ?? 0;
-const totalPendentes= faturas?.filter(f => f.status === 'pendente').length ?? 0;
-const totalVencidas = faturas?.filter(f => f.status === 'vencida').length ?? 0;
-const valorTotal    = faturas?.reduce((acc, f) => acc + Number(f.valor), 0) ?? 0;
-const valorRecebido = faturas?.filter(f => f.status === 'paga').reduce((acc, f) => acc + Number(f.valor), 0) ?? 0;
+const totalPagas     = pagamentos?.filter(p => p.status === 'pago').length ?? 0;
+const totalPendentes = pagamentos?.filter(p => p.status === 'pendente').length ?? 0;
+const totalVencidas  = pagamentos?.filter(p => p.status === 'vencido').length ?? 0;
+const valorTotal     = pagamentos?.reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
+const valorRecebido  = pagamentos?.filter(p => p.status === 'pago').reduce((acc, p) => acc + Number(p.valor), 0) ?? 0;
 
 const statusConfig: Record<string, { label: string; variant: 'success' | 'warning' | 'destructive' | 'muted' }> = {
-  paga:      { label: 'Paga',      variant: 'success' },
+  pago:      { label: 'Paga',      variant: 'success' },
   pendente:  { label: 'Pendente',  variant: 'warning' },
-  vencida:   { label: 'Vencida',   variant: 'destructive' },
-  cancelada: { label: 'Cancelada', variant: 'muted' },
+  vencido:   { label: 'Vencida',   variant: 'destructive' },
+  cancelado: { label: 'Cancelada', variant: 'muted' },
 };
 
 function formatCurrency(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
+
+function formatDate(d: string) {
+  return new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
+}
 ---
 
 <DashboardLayout title="Faturas">
 
-  <!-- ── Assinatura UNAFIT (só para planos pagos) ──────────────────────────── -->
+  <!-- ── Assinatura UNAFIT ─────────────────────────────────────────────────── -->
   {!isCourtesy && assinatura && (
     <div class="mb-8">
       <div class="flex items-center gap-2 mb-3">
@@ -107,7 +109,6 @@ function formatCurrency(v: number) {
           {(assinatura as any).saas_planos?.nome ?? 'Plano'} · {assinatura.status}
         </span>
       </div>
-
       {!faturasSaas || faturasSaas.length === 0 ? (
         <div class="rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
           Nenhuma fatura de assinatura encontrada.
@@ -122,72 +123,28 @@ function formatCurrency(v: number) {
                 venceu || f.status === 'vencido' ? 'border-red-600/30' :
                 'border-yellow-500/20'
               }`}>
-                <!-- Linha de resumo -->
                 <div class="flex items-center gap-3 px-4 py-3">
                   <div class="flex-1 min-w-0">
                     <p class="text-sm font-medium text-foreground truncate">{f.descricao}</p>
-                    <p class="text-xs text-muted-foreground mt-0.5">
-                      Vence: {new Date(f.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
-                    </p>
+                    <p class="text-xs text-muted-foreground mt-0.5">Vence: {formatDate(f.data_vencimento)}</p>
                   </div>
-                  <span class="font-bold text-foreground shrink-0">
-                    {Number(f.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </span>
+                  <span class="font-bold text-foreground shrink-0">{formatCurrency(Number(f.valor))}</span>
                   <span class={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${
                     f.status === 'pago'    ? 'border-green-600/30 text-green-400 bg-green-600/10' :
-                    f.status === 'vencido' ? 'border-red-600/30 text-red-400 bg-red-600/10' :
-                    venceu                 ? 'border-red-600/30 text-red-400 bg-red-600/10' :
+                    f.status === 'vencido' || venceu ? 'border-red-600/30 text-red-400 bg-red-600/10' :
                     'border-yellow-500/30 text-yellow-400 bg-yellow-500/10'
                   }`}>
                     {f.status === 'pago' ? 'pago' : venceu ? 'vencido' : 'pendente'}
                   </span>
                 </div>
-
-                <!-- Opções de pagamento (só se não pago) -->
                 {f.status !== 'pago' && f.asaas_payment_id && (
                   <div class="border-t border-border/50 px-4 py-3 bg-black/10 space-y-3">
                     {f.invoice_url && (
                       <a href={f.invoice_url} target="_blank"
                         class="flex items-center justify-center gap-2 w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
-                        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
                         Pagar agora (PIX · Boleto · Cartão)
                       </a>
                     )}
-                    <div class="grid sm:grid-cols-2 gap-3">
-                      {f.pix_qr_code_base64 && (
-                        <div class="rounded-lg border border-zinc-800 p-3 text-center space-y-2">
-                          <p class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">PIX</p>
-                          <img src={`data:image/png;base64,${f.pix_qr_code_base64}`}
-                            alt="QR Code PIX" class="h-28 w-28 mx-auto rounded" />
-                          {f.pix_copia_cola && (
-                            <button id={`pix-${f.id}`}
-                              onclick={`navigator.clipboard.writeText('${f.pix_copia_cola}').then(()=>{var b=document.getElementById('pix-${f.id}');b.textContent='Copiado!';setTimeout(()=>b.textContent='Copiar código PIX',2000)})`}
-                              class="w-full py-1.5 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
-                              Copiar código PIX
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {f.boleto_linha && (
-                        <div class="rounded-lg border border-zinc-800 p-3 space-y-2">
-                          <p class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Boleto</p>
-                          <p class="text-[10px] font-mono text-zinc-500 break-all leading-relaxed">{f.boleto_linha}</p>
-                          <button id={`bol-${f.id}`}
-                            onclick={`navigator.clipboard.writeText('${f.boleto_linha}').then(()=>{var b=document.getElementById('bol-${f.id}');b.textContent='Copiado!';setTimeout(()=>b.textContent='Copiar código',2000)})`}
-                            class="w-full py-1.5 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
-                            Copiar código de barras
-                          </button>
-                          {f.boleto_url && (
-                            <a href={f.boleto_url} target="_blank"
-                              class="block text-center text-xs text-primary hover:underline">
-                              Ver boleto (PDF)
-                            </a>
-                          )}
-                        </div>
-                      )}
-                    </div>
                   </div>
                 )}
               </div>
@@ -204,13 +161,11 @@ function formatCurrency(v: number) {
       <h1 class="text-2xl font-bold text-foreground">Faturas</h1>
       <p class="mt-1 text-sm text-muted-foreground">Controle financeiro dos alunos</p>
     </div>
-
-    <!-- Filtro de mês -->
     <form method="GET" class="flex items-center gap-2">
       <input
         name="mes" type="month"
-        value={filtroMes ?? new Date().toISOString().slice(0, 7)}
-        class="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+        value={mesAtual}
+        class="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
       />
       <button type="submit"
         class="rounded-lg bg-muted px-4 py-2 text-sm font-medium text-foreground hover:bg-muted/70 transition-colors">
@@ -242,55 +197,133 @@ function formatCurrency(v: number) {
 
   <!-- Tabela -->
   <Card>
-    {!faturas || faturas.length === 0 ? (
+    {!pagamentos || pagamentos.length === 0 ? (
       <p class="py-8 text-center text-sm text-muted-foreground">
-        Nenhuma fatura encontrada{filtroMes ? ` para ${filtroMes}` : ''}.
+        Nenhuma fatura encontrada para {new Date(mesAtual + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}.
       </p>
     ) : (
-      <div class="overflow-x-auto -mx-5">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="border-b border-border">
-              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Aluno</th>
-              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Descrição</th>
-              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Vencimento</th>
-              <th class="px-5 pb-3 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Valor</th>
-              <th class="px-5 pb-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {faturas.map((f) => {
-              const aluno = (f.profiles as any)?.nome_completo ?? '—';
-              const cfg   = statusConfig[f.status] ?? { label: f.status, variant: 'muted' as const };
-              return (
-                <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
-                  <td class="px-5 py-3">
-                    <div class="flex items-center gap-3">
-                      <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
-                        {aluno.charAt(0).toUpperCase()}
+      <div class="divide-y divide-border/50">
+        {pagamentos.map((p) => {
+          const aluno = (p.alunos as any)?.nome ?? '—';
+          const alunoId = (p.alunos as any)?.id;
+          const cfg   = statusConfig[p.status] ?? { label: p.status, variant: 'muted' as const };
+          const temAsaas = !!(p.asaas_payment_id);
+          const isPago = p.status === 'pago';
+
+          return (
+            <div class="hover:bg-muted/20 transition-colors">
+              <!-- Linha principal -->
+              <div class="flex items-center gap-3 px-5 py-3.5">
+                <a href={alunoId ? `/dashboard/alunos/${alunoId}` : '#'}
+                  class="flex items-center gap-3 min-w-0 flex-1 group">
+                  <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                    {aluno.charAt(0).toUpperCase()}
+                  </div>
+                  <div class="min-w-0">
+                    <p class="font-medium text-foreground text-sm group-hover:text-primary transition-colors truncate">{aluno}</p>
+                    <p class="text-xs text-muted-foreground truncate">{p.descricao ?? '—'}</p>
+                  </div>
+                </a>
+
+                <div class="hidden md:block text-xs text-muted-foreground shrink-0 w-24 text-right">
+                  {formatDate(p.data_vencimento)}
+                </div>
+
+                <div class="text-right shrink-0">
+                  <span class="font-semibold text-foreground text-sm">{formatCurrency(Number(p.valor))}</span>
+                </div>
+
+                <div class="flex items-center gap-2 shrink-0">
+                  <Badge variant={cfg.variant}>{cfg.label}</Badge>
+
+                  {/* Botão de pagamento inline (se tiver link Asaas e não estiver pago) */}
+                  {!isPago && p.link_pagamento && (
+                    <a href={p.link_pagamento} target="_blank" rel="noopener"
+                      class="hidden sm:inline-flex items-center gap-1 text-xs text-primary border border-primary/30 rounded px-2 py-1 hover:bg-primary/10 transition-colors shrink-0">
+                      <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                      </svg>
+                      Pagar
+                    </a>
+                  )}
+
+                  {/* Toggle de detalhes se tiver PIX/boleto */}
+                  {!isPago && temAsaas && (p.pix_qr_code_base64 || p.boleto_linha) && (
+                    <button
+                      class="pix-toggle text-xs text-zinc-500 hover:text-primary transition-colors shrink-0"
+                      data-target={`detalhe-${p.id}`}>
+                      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Detalhes de pagamento expansíveis (PIX + Boleto) */}
+              {!isPago && temAsaas && (p.pix_qr_code_base64 || p.boleto_linha) && (
+                <div id={`detalhe-${p.id}`} class="hidden border-t border-border/40 bg-black/10 px-5 py-4">
+                  {p.link_pagamento && (
+                    <a href={p.link_pagamento} target="_blank" rel="noopener"
+                      class="flex items-center justify-center gap-2 w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors mb-3">
+                      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                      </svg>
+                      Pagar agora (PIX · Boleto · Cartão)
+                    </a>
+                  )}
+                  <div class="grid sm:grid-cols-2 gap-3">
+                    {p.pix_qr_code_base64 && (
+                      <div class="rounded-lg border border-zinc-800 p-3 text-center space-y-2">
+                        <p class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">PIX</p>
+                        <img src={`data:image/png;base64,${p.pix_qr_code_base64}`}
+                          alt="QR Code PIX" class="h-28 w-28 mx-auto rounded" />
+                        {p.pix_copia_cola && (
+                          <button id={`pix-${p.id}`}
+                            onclick={`navigator.clipboard.writeText('${p.pix_copia_cola}').then(()=>{var b=document.getElementById('pix-${p.id}');b.textContent='Copiado!';setTimeout(()=>b.textContent='Copiar código PIX',2000)})`}
+                            class="w-full py-1.5 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
+                            Copiar código PIX
+                          </button>
+                        )}
                       </div>
-                      <span class="font-medium text-foreground">{aluno}</span>
-                    </div>
-                  </td>
-                  <td class="px-5 py-3 text-muted-foreground hidden sm:table-cell text-xs">
-                    {f.descricao ?? '—'}
-                  </td>
-                  <td class="px-5 py-3 text-muted-foreground hidden md:table-cell">
-                    {new Date(f.vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
-                  </td>
-                  <td class="px-5 py-3 text-right font-semibold text-foreground">
-                    {formatCurrency(Number(f.valor))}
-                  </td>
-                  <td class="px-5 py-3">
-                    <Badge variant={cfg.variant}>{cfg.label}</Badge>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    )}
+                    {p.boleto_linha && (
+                      <div class="rounded-lg border border-zinc-800 p-3 space-y-2">
+                        <p class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Boleto</p>
+                        <p class="text-[10px] font-mono text-zinc-500 break-all leading-relaxed">{p.boleto_linha}</p>
+                        <button id={`bol-${p.id}`}
+                          onclick={`navigator.clipboard.writeText('${p.boleto_linha}').then(()=>{var b=document.getElementById('bol-${p.id}');b.textContent='Copiado!';setTimeout(()=>b.textContent='Copiar código',2000)})`}
+                          class="w-full py-1.5 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-primary hover:border-primary/40 transition-colors">
+                          Copiar código de barras
+                        </button>
+                        {p.boleto_url && (
+                          <a href={p.boleto_url} target="_blank"
+                            class="block text-center text-xs text-primary hover:underline">
+                            Ver boleto (PDF)
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     )}
   </Card>
+
+  <script>
+    document.querySelectorAll('.pix-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = (btn as HTMLElement).dataset.target!;
+        const el = document.getElementById(targetId);
+        el?.classList.toggle('hidden');
+        const svg = btn.querySelector('svg');
+        svg?.classList.toggle('rotate-180');
+      });
+    });
+  </script>
 
 </DashboardLayout>
