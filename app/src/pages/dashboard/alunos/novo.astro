@@ -1,7 +1,7 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
-import { buscarOuCriarCliente } from '@/lib/asaas';
+import { criarAssinaturaAluno } from '@/lib/asaas-plano';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -74,31 +74,33 @@ if (Astro.request.method === 'POST') {
       if (insErr) {
         formError = insErr.message;
       } else {
-        // Tenta criar cliente no Asaas (silencioso se falhar)
-        try {
-          const cliente = await buscarOuCriarCliente({
-            nome,
-            email: email || `${cpf}@aluno.unafit.com.br`,
-            cpfCnpj: cpf,
-            telefone,
-          });
-          if (cliente?.id) {
-            await supabase.from('alunos').update({ asaas_customer_id: cliente.id }).eq('id', aluno!.id);
-          }
-        } catch (_) {}
+        const adminClient = createSupabaseAdminClient();
 
-        // Vincula ao plano se selecionado
+        // Vincula ao plano e auto-sincroniza no Asaas se selecionado
+        let asaasWarn = '';
         if (plano_id && aluno) {
-          await supabase.from('aluno_planos').insert({
+          const { data: ap } = await adminClient.from('aluno_planos').insert({
             academia_id: profile.academia_id,
             aluno_id: aluno.id,
             plano_id,
-          });
+          }).select('id').single();
+
+          if (ap?.id) {
+            try {
+              await criarAssinaturaAluno(adminClient, {
+                academiaId:   profile.academia_id!,
+                alunoId:      aluno.id,
+                alunoPlanoId: ap.id,
+                planoId:      plano_id,
+              });
+            } catch (e: any) {
+              asaasWarn = `Plano atribuído, mas erro ao criar cobrança no Asaas: ${e?.message ?? 'erro desconhecido'}. Verifique a chave API em Configurações.`;
+            }
+          }
         }
 
         // Cria conta de acesso no Supabase Auth com senha definida pelo gestor
         // Se o aluno já tem conta em outra academia, vincula sem criar novo usuário
-        const adminClient = createSupabaseAdminClient();
         let profileId: string | null = null;
 
         const { data: authData, error: authErr } = await adminClient.auth.admin.createUser({
@@ -143,7 +145,8 @@ if (Astro.request.method === 'POST') {
         }
 
         if (!formError) {
-          return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1`);
+          const warnParam = asaasWarn ? `&asaas_warn=${encodeURIComponent(asaasWarn)}` : '';
+          return Astro.redirect(`/dashboard/alunos/${aluno!.id}?novo=1${warnParam}`);
         }
       }
     }
