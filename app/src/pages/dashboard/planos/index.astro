@@ -134,13 +134,11 @@ if (Astro.request.method === 'POST') {
 
 const saved = new URL(Astro.request.url).searchParams.get('saved');
 
-const [{ data: planos }, { data: categorias }, { data: modalRows }] = await Promise.all([
+const [{ data: planos }, { data: categorias }, { data: modalidades }] = await Promise.all([
   supabase.from('planos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
   supabase.from('categorias_alunos').select('*').eq('academia_id', profile.academia_id!).order('nome'),
-  supabase.from('aulas_agenda').select('modalidade').eq('academia_id', profile.academia_id!),
+  supabase.from('modalidades').select('id, nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('ordem'),
 ]);
-// Modalidades únicas usadas nas aulas desta academia
-const modalidadesUnicas = [...new Set((modalRows ?? []).map((m: any) => m.modalidade).filter(Boolean))].sort();
 ---
 
 <DashboardLayout title="Planos & Categorias">
@@ -326,13 +324,13 @@ const modalidadesUnicas = [...new Set((modalRows ?? []).map((m: any) => m.modali
         </div>
         <div>
           <label class="block text-sm text-zinc-400 mb-1">Modalidade restrita</label>
-          <input id="plano-modalidade" name="modalidade"
-            list="lista-modalidades"
-            placeholder="Ex: CrossFit  (vazio = acesso a todas)"
-            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm" />
-          <datalist id="lista-modalidades">
-            {modalidadesUnicas.map((m: string) => <option value={m} />)}
-          </datalist>
+          <select id="plano-modalidade" name="modalidade"
+            class="w-full bg-zinc-800 border border-zinc-700 focus:border-red-500 outline-none rounded-lg px-3 py-2 text-white text-sm">
+            <option value="">— Acesso a todas as modalidades —</option>
+            {(modalidades ?? []).map(m => (
+              <option value={m.nome}>{m.nome}</option>
+            ))}
+          </select>
           <p class="text-xs text-zinc-600 mt-1">Alunos deste plano só verão check-ins desta modalidade.</p>
         </div>
         <div class="flex gap-2 pt-2">
@@ -394,6 +392,7 @@ const modalidadesUnicas = [...new Set((modalRows ?? []).map((m: any) => m.modali
     val('plano-descricao', '');
     val('plano-valor', '');
     val('plano-vencimento', '');
+    (el<HTMLSelectElement>('plano-modalidade')).value = '';
     el('modal-plano-titulo').textContent = 'Novo Plano';
   }
 
@@ -410,7 +409,7 @@ const modalidadesUnicas = [...new Set((modalRows ?? []).map((m: any) => m.modali
       val('plano-descricao',  b.dataset.descricao!);
       val('plano-valor',      b.dataset.valor!);
       val('plano-vencimento', b.dataset.vencimento!);
-      val('plano-modalidade', b.dataset.modalidade!);
+      (el<HTMLSelectElement>('plano-modalidade')).value = b.dataset.modalidade || '';
       el('modal-plano-titulo').textContent = 'Editar Plano';
       abrirModalPlano();
     });
