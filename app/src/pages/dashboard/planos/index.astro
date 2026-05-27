@@ -40,9 +40,9 @@ if (Astro.request.method === 'POST') {
     } else {
       const planoId = form.get('plano_id') as string;
 
-      // Busca vencimento_dia anterior para detectar mudança
+      // Busca dados anteriores para detectar mudanças
       const { data: planoAtual } = await supabase.from('planos')
-        .select('vencimento_dia').eq('id', planoId).single();
+        .select('vencimento_dia, valor').eq('id', planoId).single();
 
       const { error } = await supabase.from('planos')
         .update({ nome, descricao: descricao || null, valor, vencimento_dia, modalidade })
@@ -50,8 +50,11 @@ if (Astro.request.method === 'POST') {
 
       if (error) { formError = error.message; }
       else {
-        // Se o dia de vencimento mudou, atualiza as subscriptions Asaas dos alunos deste plano
-        if (planoAtual?.vencimento_dia !== vencimento_dia) {
+        const vencimentoMudou = planoAtual?.vencimento_dia !== vencimento_dia;
+        const valorMudou      = planoAtual?.valor !== valor;
+
+        // Se vencimento ou valor mudaram, atualiza as subscriptions Asaas dos alunos deste plano
+        if (vencimentoMudou || valorMudou) {
           try {
             const admin = createSupabaseAdminClient();
             const [{ data: acad }, { data: planosAtivos }] = await Promise.all([
@@ -66,15 +69,20 @@ if (Astro.request.method === 'POST') {
             if (acad?.asaas_api_key && planosAtivos?.length) {
               const cli = createAsaasClient(acad.asaas_api_key, acad.asaas_sandbox !== false);
 
-              // Calcula próximo vencimento no novo dia
-              const hoje = new Date();
-              let dataVenc = new Date(hoje.getFullYear(), hoje.getMonth(), vencimento_dia);
-              if (dataVenc <= hoje) dataVenc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, vencimento_dia);
-              const dataVencStr = dataVenc.toISOString().split('T')[0];
+              const params: { valor?: number; nextDueDate?: string } = {};
+
+              if (valorMudou) params.valor = valor;
+
+              if (vencimentoMudou) {
+                const hoje = new Date();
+                let dataVenc = new Date(hoje.getFullYear(), hoje.getMonth(), vencimento_dia);
+                if (dataVenc <= hoje) dataVenc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, vencimento_dia);
+                params.nextDueDate = dataVenc.toISOString().split('T')[0];
+              }
 
               await Promise.allSettled(
                 planosAtivos.map((ap: any) =>
-                  cli.atualizarAssinatura(ap.asaas_subscription_id, { nextDueDate: dataVencStr })
+                  cli.atualizarAssinatura(ap.asaas_subscription_id, params)
                 )
               );
             }
