@@ -328,9 +328,7 @@ for (const m of modalidades ?? []) {
     </div>
   </div>
 
-</DashboardLayout>
-
-<!-- Modal Nova Aula -->
+  <!-- Modal Nova Aula -->
 <div id="modal-aula" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
   <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
     <div class="mb-5 flex items-center justify-between">
@@ -430,3 +428,5 @@ for (const m of modalidades ?? []) {
     btn.addEventListener('click', () => openModal((btn as HTMLElement).dataset.date));
   });
 </script>
+
+</DashboardLayout>
