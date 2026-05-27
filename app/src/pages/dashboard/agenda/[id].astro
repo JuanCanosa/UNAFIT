@@ -827,14 +827,15 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
 </div>
 
 <script define:vars={{ aulaId }}>
+  function initModals() {
   // ── Modal Editar Aula ──────────────────────────────────
   const modalEditarAula    = document.getElementById('modal-editar-aula');
   const btnEditarAula      = document.getElementById('btn-editar-aula');
   const editarAulaClose    = document.getElementById('editar-aula-close');
   const editarAulaCancelar = document.getElementById('editar-aula-cancelar');
 
-  function openEditarAula()  { modalEditarAula.classList.remove('hidden'); modalEditarAula.classList.add('flex'); }
-  function closeEditarAula() { modalEditarAula.classList.add('hidden');    modalEditarAula.classList.remove('flex'); }
+  function openEditarAula()  { if (!modalEditarAula) return; modalEditarAula.classList.remove('hidden'); modalEditarAula.classList.add('flex'); }
+  function closeEditarAula() { if (!modalEditarAula) return; modalEditarAula.classList.add('hidden');    modalEditarAula.classList.remove('flex'); }
 
   btnEditarAula?.addEventListener('click', openEditarAula);
   editarAulaClose?.addEventListener('click', closeEditarAula);
@@ -848,8 +849,8 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
   const wodLinkClose = document.getElementById('wod-link-close');
   const wodLinkCancel= document.getElementById('wod-link-cancel');
 
-  function openWodModal()  { modalWod.classList.remove('hidden'); modalWod.classList.add('flex'); }
-  function closeWodModal() { modalWod.classList.add('hidden');    modalWod.classList.remove('flex'); }
+  function openWodModal()  { if (!modalWod) return; modalWod.classList.remove('hidden'); modalWod.classList.add('flex'); }
+  function closeWodModal() { if (!modalWod) return; modalWod.classList.add('hidden');    modalWod.classList.remove('flex'); }
 
   btnVincular?.addEventListener('click', openWodModal);
   btnVinEmpty?.addEventListener('click', openWodModal);
@@ -949,10 +950,10 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
   });
 
   // ── Busca rápida na lista de check-in ─────────────────
-  const checkinBusca = document.getElementById('checkin-busca') as HTMLInputElement | null;
+  const checkinBusca = document.getElementById('checkin-busca');
   checkinBusca?.addEventListener('input', () => {
     const q = checkinBusca.value.toLowerCase().trim();
-    document.querySelectorAll<HTMLElement>('.checkin-item').forEach(item => {
+    document.querySelectorAll('.checkin-item').forEach(item => {
       const nome = item.dataset.nome ?? '';
       item.style.display = !q || nome.includes(q) ? '' : 'none';
     });
@@ -988,6 +989,13 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
       btn.disabled = false; btn.textContent = 'Adicionar';
     }
   });
+  } // fim initModals
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initModals);
+  } else {
+    initModals();
+  }
 </script>
 
 </DashboardLayout>
