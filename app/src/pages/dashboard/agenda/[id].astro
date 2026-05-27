@@ -196,11 +196,28 @@ const scoreLabels: Record<string, string> = {
   rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
 };
 
-const modalidadeCor: Record<string, string> = {
-  'CrossFit':         'bg-primary/15 text-primary',
-  'Treino Livre':     'bg-green-500/15 text-green-400',
-  'Treino Funcional': 'bg-orange-500/15 text-orange-400',
+const COR_CLASSES: Record<string, { badge: string }> = {
+  vermelho: { badge: 'bg-primary/15 text-primary' },
+  verde:    { badge: 'bg-green-500/15 text-green-400' },
+  laranja:  { badge: 'bg-orange-500/15 text-orange-400' },
+  azul:     { badge: 'bg-blue-500/15 text-blue-400' },
+  roxo:     { badge: 'bg-purple-500/15 text-purple-400' },
+  amarelo:  { badge: 'bg-yellow-500/15 text-yellow-400' },
+  rosa:     { badge: 'bg-pink-500/15 text-pink-400' },
+  cinza:    { badge: 'bg-zinc-500/15 text-zinc-400' },
 };
+
+// Busca modalidades para o select e o badge de cor
+const { data: modalidades } = await supabase
+  .from('modalidades')
+  .select('id, nome, cor')
+  .eq('academia_id', profile.academia_id!)
+  .eq('ativo', true)
+  .order('ordem');
+
+const modalidadeCor: Record<string, string> = Object.fromEntries(
+  (modalidades ?? []).map(m => [m.nome, (COR_CLASSES[m.cor] ?? COR_CLASSES['vermelho']).badge])
+);
 ---
 
 <DashboardLayout title={`Aula — ${new Date(aula.data_aula + 'T12:00:00').toLocaleDateString('pt-BR')}`}>
@@ -630,10 +647,10 @@ const modalidadeCor: Record<string, string> = {
       <div>
         <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Modalidade</label>
         <div class="flex flex-col gap-2">
-          {['CrossFit', 'Treino Livre', 'Treino Funcional'].map(m => (
+          {(modalidades ?? []).map(m => (
             <label class="flex items-center gap-3 rounded-lg border border-border p-3 cursor-pointer hover:border-primary/30 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input type="radio" name="modalidade" value={m} checked={aula.modalidade === m} class="accent-primary" required />
-              <span class="text-sm font-medium text-foreground">{m}</span>
+              <input type="radio" name="modalidade" value={m.nome} checked={aula.modalidade === m.nome} class="accent-primary" required />
+              <span class="text-sm font-medium text-foreground">{m.nome}</span>
             </label>
           ))}
         </div>

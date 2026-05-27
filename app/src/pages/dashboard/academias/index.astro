@@ -61,6 +61,13 @@ if (Astro.request.method === 'POST') {
             ativo: true,
           }, { onConflict: 'id' });
 
+          // Seed de modalidades padrão
+          await adminClient.from('modalidades').insert([
+            { academia_id: acad!.id, nome: 'CrossFit',         cor: 'vermelho', ordem: 0 },
+            { academia_id: acad!.id, nome: 'Treino Livre',     cor: 'verde',    ordem: 1 },
+            { academia_id: acad!.id, nome: 'Treino Funcional', cor: 'laranja',  ordem: 2 },
+          ]);
+
           const linkLogin = `${appUrl}/${slug}`;
 
           if (emailConfigurado()) {
