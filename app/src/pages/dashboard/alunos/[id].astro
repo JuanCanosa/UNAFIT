@@ -219,10 +219,14 @@ if (Astro.request.method === 'POST') {
               });
             }
           }
-        } catch (_) {} // não falha a atribuição de plano se Asaas falhar
+        } catch (e: any) {
+          // Plano foi atribuído, mas a integração Asaas falhou.
+          // Retorna com erro para que o dono saiba que precisa verificar a chave.
+          formError = `Plano atribuído, mas houve um erro ao criar cobrança no Asaas: ${e?.message ?? 'erro desconhecido'}. Verifique a chave API em Configurações.`;
+        }
       }
     }
-    return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
+    if (!formError) return Astro.redirect(`/dashboard/alunos/${alunoId}?saved=1`);
   }
 
   if (action === 'cancelar_plano') {

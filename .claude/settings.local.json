@@ -3,7 +3,8 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"e:/trabalho/UNAFIT/sistema-app/app/src\" -Recurse -Directory)",
       "Bash(Select-Object FullName)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "mcp__claude_ai_Supabase__apply_migration"
     ]
   }
 }
