@@ -55,8 +55,9 @@ const [ano, mes] = mesAtual.split('-').map(Number);
 const ultimoDia  = new Date(ano!, mes!, 0).getDate();
 const mesFim     = mesAtual + '-' + String(ultimoDia).padStart(2, '0');
 
-// Busca pagamentos do mês com dados do aluno
-const { data: pagamentos } = await admin
+// Sem filtro de mês: mostra pendentes/vencidas de qualquer período + pagas do mês atual
+// Com filtro: mostra todas do mês selecionado
+let pagamentosQuery = admin
   .from('pagamentos')
   .select(`
     id, valor, status, data_vencimento, data_pagamento, descricao,
@@ -64,9 +65,22 @@ const { data: pagamentos } = await admin
     pix_qr_code_base64, pix_copia_cola, boleto_url, boleto_linha,
     alunos ( id, nome )
   `)
-  .eq('academia_id', profile.academia_id!)
-  .gte('data_vencimento', mesInicio)
-  .lte('data_vencimento', mesFim)
+  .eq('academia_id', profile.academia_id!);
+
+if (filtroMes) {
+  // Filtro explícito: apenas o mês escolhido
+  pagamentosQuery = pagamentosQuery
+    .gte('data_vencimento', mesInicio)
+    .lte('data_vencimento', mesFim);
+} else {
+  // Padrão: pendentes/vencidas de qualquer mês + pagas dos últimos 60 dias
+  const ha60dias = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  pagamentosQuery = pagamentosQuery.or(
+    `status.in.(pendente,vencido),and(status.eq.pago,data_vencimento.gte.${ha60dias})`
+  );
+}
+
+const { data: pagamentos } = await pagamentosQuery
   .order('data_vencimento', { ascending: false })
   .limit(200);
 
@@ -198,9 +212,19 @@ function formatDate(d: string) {
   <!-- Tabela -->
   <Card>
     {!pagamentos || pagamentos.length === 0 ? (
-      <p class="py-8 text-center text-sm text-muted-foreground">
-        Nenhuma fatura encontrada para {new Date(mesAtual + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}.
-      </p>
+      <div class="py-10 text-center space-y-2">
+        <p class="text-sm text-muted-foreground">
+          {filtroMes
+            ? `Nenhuma fatura em ${new Date(mesAtual + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}.`
+            : 'Nenhuma fatura pendente ou recente encontrada.'}
+        </p>
+        {!filtroMes && (
+          <p class="text-xs text-zinc-600">
+            As cobranças são criadas automaticamente pelo Asaas quando você atribui um plano ao aluno.
+            <a href="/dashboard/configuracoes" class="text-primary hover:underline ml-1">Verificar sincronização →</a>
+          </p>
+        )}
+      </div>
     ) : (
       <div class="divide-y divide-border/50">
         {pagamentos.map((p) => {
