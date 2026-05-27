@@ -39,28 +39,49 @@ const ultimoDia   = new Date(ano, mes + 1, 0);
 const primISO     = primeiroDia.toISOString().split('T')[0];
 const ultISO      = ultimoDia.toISOString().split('T')[0];
 
-// Handle POST — criar nova aula
-let formError = '';
+// Handle POST — criar ou excluir aula
+let formError  = '';
+let alertError = '';
+
 if (Astro.request.method === 'POST') {
-  const form       = await Astro.request.formData();
-  const modalidade = form.get('modalidade') as string;
-  const data_aula  = form.get('data_aula') as string;
-  const h_inicio   = form.get('horario_inicio') as string;
-  const h_fim      = form.get('horario_fim') as string;
-  const capacidade = form.get('capacidade_max') as string;
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
 
-  const { error } = await supabase.from('aulas_agenda').insert({
-    academia_id:    profile.academia_id,
-    modalidade,
-    data_aula,
-    horario_inicio: h_inicio,
-    horario_fim:    h_fim,
-    capacidade_max: capacidade ? parseInt(capacidade) : null,
-    criado_por:     profile.id,
-  });
+  if (action === 'excluir_aula') {
+    const aula_id = form.get('aula_id') as string;
+    // Verifica se há check-ins antes de excluir
+    const { data: chks } = await supabase
+      .from('checkins').select('id').eq('aula_id', aula_id).limit(1);
+    if ((chks?.length ?? 0) > 0) {
+      alertError = 'Esta aula possui check-ins registrados e não pode ser excluída.';
+    } else {
+      await supabase.from('aulas_agenda')
+        .delete()
+        .eq('id', aula_id)
+        .eq('academia_id', profile.academia_id!);
+      return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+    }
+  } else {
+    // Criar nova aula
+    const modalidade = form.get('modalidade') as string;
+    const data_aula  = form.get('data_aula') as string;
+    const h_inicio   = form.get('horario_inicio') as string;
+    const h_fim      = form.get('horario_fim') as string;
+    const capacidade = form.get('capacidade_max') as string;
 
-  if (error) formError = error.message;
-  else return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+    const { error } = await supabase.from('aulas_agenda').insert({
+      academia_id:    profile.academia_id,
+      modalidade,
+      data_aula,
+      horario_inicio: h_inicio,
+      horario_fim:    h_fim,
+      capacidade_max: capacidade ? parseInt(capacidade) : null,
+      criado_por:     profile.id,
+    });
+
+    if (error) formError = error.message;
+    else return Astro.redirect(`/dashboard/agenda?mes=${ano}-${String(mes + 1).padStart(2, '0')}`);
+  }
 }
 
 // Busca aulas do mês
@@ -151,6 +172,12 @@ const modalidadeCoresHoje: Record<string, string> = {
     </div>
   </div>
 
+  {alertError && (
+    <div class="mb-4 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+      ⚠ {alertError}
+    </div>
+  )}
+
   <!-- Legenda de modalidades -->
   <div class="mb-4 flex flex-wrap items-center gap-3 text-xs">
     <span class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-primary/70"></span>CrossFit</span>
@@ -199,15 +226,39 @@ const modalidadeCoresHoje: Record<string, string> = {
             {aulasHoje.map((aula) => {
               const wodNome  = (aula.wods as any)?.nome;
               const label    = wodNome ?? aula.modalidade;
+              const nCheckins = (aula.checkins as any[])?.length ?? 0;
               const cores    = isHoje
                 ? (modalidadeCoresHoje[aula.modalidade] ?? modalidadeCoresHoje['CrossFit'])
                 : (modalidadeCores[aula.modalidade]     ?? modalidadeCores['CrossFit']);
               return (
-                <a href={`/dashboard/agenda/${aula.id}`}
-                  class:list={['block rounded-md px-1.5 py-1 text-xs leading-tight border transition-colors', cores]}>
-                  <p class="font-semibold truncate">{label}</p>
-                  <p class="opacity-80 mt-0.5">{aula.horario_inicio.slice(0, 5)}</p>
-                </a>
+                <div class:list={['group relative rounded-md border transition-colors', cores]}>
+                  <a href={`/dashboard/agenda/${aula.id}`}
+                    class="block px-1.5 py-1 text-xs leading-tight pr-5">
+                    <p class="font-semibold truncate">{label}</p>
+                    <p class="opacity-80 mt-0.5">{aula.horario_inicio.slice(0, 5)}</p>
+                  </a>
+                  {canEdit && (
+                    <form method="POST" class="absolute top-0.5 right-0.5">
+                      <input type="hidden" name="action" value="excluir_aula" />
+                      <input type="hidden" name="aula_id" value={aula.id} />
+                      <button
+                        type="submit"
+                        title={nCheckins > 0 ? `${nCheckins} check-in(s) — não pode excluir` : 'Excluir aula'}
+                        onclick={nCheckins > 0
+                          ? `alert('Esta aula tem ${nCheckins} check-in(s) e não pode ser excluída.'); return false;`
+                          : `return confirm('Excluir a aula "${label}" (${aula.horario_inicio.slice(0,5)})?\\nEsta ação não pode ser desfeita.')`
+                        }
+                        class:list={[
+                          'flex h-4 w-4 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold',
+                          nCheckins > 0
+                            ? 'cursor-not-allowed text-current/40'
+                            : 'hover:bg-black/30 hover:text-red-300 text-current'
+                        ]}>
+                        ×
+                      </button>
+                    </form>
+                  )}
+                </div>
               );
             })}
 
