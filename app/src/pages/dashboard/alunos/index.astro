@@ -401,14 +401,26 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
   const modalCancel = document.getElementById('modal-bulk-cancelar')!;
   const modalOk     = document.getElementById('modal-bulk-confirmar')!;
 
+  // Deduplica por data-id — mobile e desktop têm checkboxes separados para o mesmo aluno
   function getSelecionados(): string[] {
-    return Array.from(document.querySelectorAll<HTMLInputElement>('.chk-aluno:checked'))
-      .map(c => c.dataset.id ?? '').filter(Boolean);
+    const seen = new Set<string>();
+    document.querySelectorAll<HTMLInputElement>('.chk-aluno:checked').forEach(c => {
+      if (c.dataset.id) seen.add(c.dataset.id);
+    });
+    return [...seen];
+  }
+
+  function getTotalAlunos(): number {
+    const seen = new Set<string>();
+    document.querySelectorAll<HTMLInputElement>('.chk-aluno').forEach(c => {
+      if (c.dataset.id) seen.add(c.dataset.id);
+    });
+    return seen.size;
   }
 
   function atualizarBarra() {
     const ids   = getSelecionados();
-    const total = document.querySelectorAll('.chk-aluno').length;
+    const total = getTotalAlunos();
 
     if (ids.length === 0) {
       bulkBar.classList.add('hidden');
@@ -420,7 +432,7 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
       bulkCount.textContent = `${ids.length} selecionado${ids.length > 1 ? 's' : ''}`;
       [chkTodos, chkTodosMobile].forEach(c => {
         if (!c) return;
-        c.checked      = ids.length === total;
+        c.checked       = ids.length === total;
         c.indeterminate = ids.length > 0 && ids.length < total;
       });
     }
