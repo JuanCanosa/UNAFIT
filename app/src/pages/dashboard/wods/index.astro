@@ -34,6 +34,8 @@ if (Astro.request.method === 'POST') {
   const treino          = (form.get('treino') as string)?.trim();
   const score_type      = form.get('score_type') as string;
   const data_aplicacao  = form.get('data_aplicacao') as string;
+  const time_cap_min    = form.get('time_cap_min') ? parseInt(form.get('time_cap_min') as string) : null;
+  const duracao_min     = form.get('duracao_min')  ? parseInt(form.get('duracao_min')  as string) : null;
 
   if (!nome || !treino || !data_aplicacao) {
     formError = 'Nome, treino e data são obrigatórios.';
@@ -41,6 +43,7 @@ if (Astro.request.method === 'POST') {
     const { error } = await supabase.from('wods').insert({
       academia_id: profile.academia_id,
       nome, treino, score_type, data_aplicacao,
+      time_cap_min, duracao_min,
       criado_por: profile.id,
     });
     if (error) formError = error.message;
@@ -51,7 +54,7 @@ if (Astro.request.method === 'POST') {
 // Busca WODs filtrados por data
 const query = supabase
   .from('wods')
-  .select('id, nome, score_type, treino, data_aplicacao, criado_em')
+  .select('id, nome, score_type, treino, data_aplicacao, criado_em, time_cap_min, duracao_min')
   .eq('academia_id', profile.academia_id!);
 
 const { data: wods } = await (view === 'historico'
@@ -143,7 +146,19 @@ function fmtData(iso: string) {
                   </span>
                 : <span class="text-xs text-muted-foreground/50 italic">Sem data</span>
               }
-              <span class="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+              <div class="flex items-center gap-1.5">
+                {(wod as any).time_cap_min && (
+                  <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-orange-500/10 text-orange-400">
+                    Cap {(wod as any).time_cap_min}min
+                  </span>
+                )}
+                {(wod as any).duracao_min && (
+                  <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/10 text-purple-400">
+                    {(wod as any).duracao_min}min
+                  </span>
+                )}
+                <span class="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+              </div>
             </div>
           </a>
         );
@@ -192,6 +207,21 @@ function fmtData(iso: string) {
           <option value="rounds_reps">Rounds + Reps</option>
           <option value="pass_fail">Pass / Fail</option>
         </select>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Time Cap (min)</label>
+          <input name="time_cap_min" type="number" min="1" max="120" placeholder="ex: 20"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Duração AMRAP/EMOM (min)</label>
+          <input name="duracao_min" type="number" min="1" max="120" placeholder="ex: 20"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          />
+        </div>
       </div>
 
       <div>

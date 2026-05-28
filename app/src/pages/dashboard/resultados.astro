@@ -11,21 +11,18 @@ const { data: profile } = await supabase
 
 if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
-// Exercícios da academia
 const { data: exercicios } = await supabase
   .from('exercicios')
   .select('id, nome, tipo_resultado')
   .eq('academia_id', profile.academia_id!)
   .order('nome');
 
-// PRs do aluno
 const { data: prs } = await supabase
   .from('prs')
   .select('id, exercicio_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, data_registro, observacao')
   .eq('aluno_id', user.id)
   .order('data_registro', { ascending: false });
 
-// Checkins do aluno (para stats)
 const { data: checkins } = await supabase
   .from('checkins').select('id, feito_em').eq('aluno_id', user.id);
 
@@ -33,12 +30,11 @@ const totalCheckins = checkins?.length ?? 0;
 const trintaDias = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const checkinsRecentes = checkins?.filter(c => new Date((c as any).feito_em) >= trintaDias).length ?? 0;
 
-// Agrupa PRs por exercício e acha o melhor
 type PR = {
   id: string; exercicio_id: string; tipo: string;
-  valor_peso: number | null; valor_tempo_seg: number | null;
-  valor_reps: number | null; valor_rounds: number | null; valor_reps_extra: number | null;
-  rx: boolean; data_registro: string; observacao: string | null;
+  valor_peso: number|null; valor_tempo_seg: number|null;
+  valor_reps: number|null; valor_rounds: number|null; valor_reps_extra: number|null;
+  rx: boolean; data_registro: string; observacao: string|null;
 };
 
 const prsPorExercicio = new Map<string, PR[]>();
@@ -47,17 +43,19 @@ for (const pr of (prs ?? []) as PR[]) {
   prsPorExercicio.get(pr.exercicio_id)!.push(pr);
 }
 
+function valorNum(pr: PR): number {
+  if (pr.tipo === 'peso')       return pr.valor_peso ?? 0;
+  if (pr.tipo === 'tempo')      return pr.valor_tempo_seg ?? 0;
+  if (pr.tipo === 'reps')       return pr.valor_reps ?? 0;
+  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
+  return 0;
+}
+
 function melhorPR(lista: PR[]): PR {
-  if (lista.length === 1) return lista[0]!;
-  const tipo = lista[0]!.tipo;
-  return lista.reduce((melhor, atual) => {
-    if (tipo === 'peso')   return (atual.valor_peso ?? 0) > (melhor.valor_peso ?? 0) ? atual : melhor;
-    if (tipo === 'tempo')  return (atual.valor_tempo_seg ?? Infinity) < (melhor.valor_tempo_seg ?? Infinity) ? atual : melhor;
-    if (tipo === 'reps')   return (atual.valor_reps ?? 0) > (melhor.valor_reps ?? 0) ? atual : melhor;
-    // rounds_reps
-    const rA = (atual.valor_rounds ?? 0) * 10000 + (atual.valor_reps_extra ?? 0);
-    const rM = (melhor.valor_rounds ?? 0) * 10000 + (melhor.valor_reps_extra ?? 0);
-    return rA > rM ? atual : melhor;
+  return lista.reduce((best, cur) => {
+    const bv = best.tipo === 'tempo' ? -valorNum(best) : valorNum(best);
+    const cv = cur.tipo  === 'tempo' ? -valorNum(cur)  : valorNum(cur);
+    return cv > bv ? cur : best;
   });
 }
 
@@ -80,13 +78,49 @@ function fmtValor(pr: PR): string {
   return '—';
 }
 
-function fmtData(iso: string) {
-  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+function fmtData(iso: string, short = false) {
+  const opts: Intl.DateTimeFormatOptions = short
+    ? { day: '2-digit', month: 'short' }
+    : { day: '2-digit', month: 'short', year: 'numeric' };
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', opts);
 }
 
-// Exercícios que já têm PRs deste aluno, ordenados pelo nome
+// Gráfico sparkline — retorna: { points: string, areaPoints: string, trend: 'up'|'down'|'stable' }
+function sparkline(lista: PR[], tipo: string, W = 200, H = 48) {
+  const sorted = [...lista].sort((a, b) =>
+    new Date(a.data_registro).getTime() - new Date(b.data_registro).getTime()
+  );
+  if (sorted.length < 2) return null;
+
+  // Valor para o eixo Y — tempo invertido (menor = melhor)
+  const vals = sorted.map(h => tipo === 'tempo' ? -(valorNum(h)) : valorNum(h));
+  const min  = Math.min(...vals);
+  const max  = Math.max(...vals);
+  const range = max - min || 1;
+
+  const pts = sorted.map((_, i) => {
+    const x = (i / (sorted.length - 1)) * (W - 8) + 4;
+    const y = H - 6 - ((vals[i]! - min) / range) * (H - 16);
+    return { x: parseFloat(x.toFixed(1)), y: parseFloat(y.toFixed(1)) };
+  });
+
+  const linePoints  = pts.map(p => `${p.x},${p.y}`).join(' ');
+  const areaPoints  = [
+    ...pts.map(p => `${p.x},${p.y}`),
+    `${pts[pts.length-1]!.x},${H}`,
+    `${pts[0]!.x},${H}`,
+  ].join(' ');
+
+  const firstVal = vals[0]!;
+  const lastVal  = vals[vals.length - 1]!;
+  const diff = lastVal - firstVal;
+  const trend: 'up'|'down'|'stable' = diff > 0 ? 'up' : diff < 0 ? 'down' : 'stable';
+
+  // Para tempo, "up" (melhorou nos valores invertidos) significa tempos menores = melhor
+  return { linePoints, areaPoints, trend, pts, sorted };
+}
+
 const exerciciosComPR = (exercicios ?? []).filter(e => prsPorExercicio.has(e.id));
-const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id));
 ---
 
 <DashboardLayout title="Meus Resultados">
@@ -95,9 +129,7 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       <h1 class="text-2xl font-bold text-foreground">Meus Resultados</h1>
       <p class="mt-1 text-sm text-muted-foreground">Seus Personal Records e evolução nos treinos</p>
     </div>
-    <button
-      id="btn-novo-pr"
-      type="button"
+    <button id="btn-novo-pr" type="button"
       class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors shrink-0">
       <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -117,12 +149,11 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       <p class="mt-1 text-3xl font-bold text-foreground">{checkinsRecentes}</p>
     </div>
     <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">PRs registrados</p>
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Movimentos</p>
       <p class="mt-1 text-3xl font-bold text-foreground">{prsPorExercicio.size}</p>
     </div>
   </div>
 
-  <!-- PRs por exercício -->
   {exerciciosComPR.length === 0 ? (
     <div class="rounded-xl border border-border bg-card p-12 text-center">
       <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
@@ -143,40 +174,90 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
   ) : (
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {exerciciosComPR.map(ex => {
-        const lista = prsPorExercicio.get(ex.id)!;
-        const pr = melhorPR(lista);
-        const historico = [...lista].sort((a, b) => new Date(b.data_registro).getTime() - new Date(a.data_registro).getTime());
-        const ehTempo = ex.tipo_resultado === 'tempo';
+        const lista   = prsPorExercicio.get(ex.id)!;
+        const pr      = melhorPR(lista);
+        const historico = [...lista].sort((a, b) =>
+          new Date(b.data_registro).getTime() - new Date(a.data_registro).getTime()
+        );
+        const spark   = sparkline(lista, ex.tipo_resultado);
+        const trendColor = spark?.trend === 'up' ? 'text-green-400' : spark?.trend === 'down' ? 'text-red-400' : 'text-zinc-500';
+        const trendBg    = spark?.trend === 'up' ? 'stroke-green-400' : spark?.trend === 'down' ? 'stroke-red-400' : 'stroke-zinc-500';
+        const trendFill  = spark?.trend === 'up' ? 'fill-green-400' : spark?.trend === 'down' ? 'fill-red-400' : 'fill-zinc-500';
 
         return (
-          <div class="rounded-xl border border-border bg-card overflow-hidden group">
-            <!-- Header do card -->
-            <div class="px-4 pt-4 pb-3 border-b border-border/50">
+          <div class="rounded-xl border border-border bg-card overflow-hidden flex flex-col">
+            <!-- Header -->
+            <div class="px-4 pt-4 pb-3">
               <div class="flex items-center justify-between gap-2 mb-3">
                 <h3 class="font-semibold text-foreground text-sm truncate">{ex.nome}</h3>
-                <span class="text-[10px] font-medium text-muted-foreground bg-muted/40 px-2 py-0.5 rounded-full shrink-0 capitalize">
-                  {ex.tipo_resultado === 'rounds_reps' ? 'rounds' : ex.tipo_resultado}
-                </span>
+                <div class="flex items-center gap-2 shrink-0">
+                  {spark && (
+                    <span class:list={['text-xs font-bold flex items-center gap-0.5', trendColor]}>
+                      {spark.trend === 'up' && '↑'}
+                      {spark.trend === 'down' && '↓'}
+                      {spark.trend === 'stable' && '—'}
+                    </span>
+                  )}
+                  <span class="text-[10px] font-medium text-muted-foreground bg-muted/40 px-2 py-0.5 rounded-full capitalize">
+                    {ex.tipo_resultado === 'rounds_reps' ? 'rounds' : ex.tipo_resultado}
+                  </span>
+                </div>
               </div>
+
               <!-- PR Principal -->
-              <div class="flex items-end justify-between gap-2">
+              <div class="flex items-end justify-between gap-2 mb-3">
                 <div>
                   <p class="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Personal Record</p>
                   <p class="text-2xl font-bold text-primary">{fmtValor(pr)}</p>
                   <p class="text-xs text-muted-foreground mt-0.5">{fmtData(pr.data_registro)}</p>
                 </div>
-                {pr.rx && (
-                  <span class="text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-2 py-1 rounded-lg">RX</span>
-                )}
+                <div class="flex flex-col items-end gap-1">
+                  {pr.rx && <span class="text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded">RX</span>}
+                  <span class="text-[10px] text-muted-foreground">{lista.length} registro{lista.length !== 1 ? 's' : ''}</span>
+                </div>
               </div>
+
+              <!-- Sparkline -->
+              {spark ? (
+                <div class="rounded-lg bg-zinc-950/50 border border-zinc-800/50 p-2 mb-1">
+                  <svg viewBox={`0 0 200 48`} class="w-full h-10" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id={`grad-${ex.id}`} x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" class={trendColor} stop-opacity="0.25"/>
+                        <stop offset="100%" class={trendColor} stop-opacity="0"/>
+                      </linearGradient>
+                    </defs>
+                    <polygon
+                      points={spark.areaPoints}
+                      class={trendFill}
+                      fill-opacity="0.12"
+                    />
+                    <polyline
+                      points={spark.linePoints}
+                      fill="none"
+                      class={trendBg}
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    {spark.pts.map(p => (
+                      <circle cx={p.x} cy={p.y} r="2.5" class={trendFill} fill-opacity="0.9"/>
+                    ))}
+                  </svg>
+                </div>
+              ) : (
+                <div class="rounded-lg bg-zinc-950/30 border border-zinc-800/30 px-3 py-2 mb-1 flex items-center justify-center">
+                  <p class="text-[10px] text-zinc-600">Registre mais resultados para ver o gráfico</p>
+                </div>
+              )}
             </div>
 
-            <!-- Histórico (últimos 4) -->
-            <div class="px-4 py-3 space-y-1.5">
-              <p class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Histórico</p>
+            <!-- Histórico -->
+            <div class="px-4 pb-3 space-y-1.5 border-t border-border/40 pt-3">
+              <p class="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Histórico</p>
               {historico.slice(0, 4).map((h, i) => (
                 <div class="flex items-center justify-between gap-2">
-                  <span class="text-xs text-muted-foreground">{fmtData(h.data_registro)}</span>
+                  <span class="text-xs text-muted-foreground">{fmtData(h.data_registro, true)}</span>
                   <div class="flex items-center gap-2">
                     {h.rx && <span class="text-[9px] font-bold text-primary">RX</span>}
                     <span class:list={['text-xs font-semibold', i === 0 ? 'text-primary' : 'text-foreground']}>
@@ -188,7 +269,7 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
             </div>
 
             <!-- Ação -->
-            <div class="px-4 pb-4">
+            <div class="px-4 pb-4 mt-auto">
               <button
                 type="button"
                 data-action="novo-pr-exercicio"
@@ -219,7 +300,6 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       </div>
 
       <div class="px-5 py-5 space-y-4">
-        <!-- Exercício -->
         <div>
           <label class="block text-xs text-muted-foreground mb-1">Exercício</label>
           <select id="pr-exercicio" class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
@@ -230,30 +310,26 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
           </select>
         </div>
 
-        <!-- Campo dinâmico por tipo -->
         <div id="campo-peso" class="hidden">
           <label class="block text-xs text-muted-foreground mb-1">Carga (kg)</label>
           <input id="pr-peso" type="number" step="0.5" min="0" placeholder="ex: 102.5"
             class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
-
         <div id="campo-tempo" class="hidden">
           <label class="block text-xs text-muted-foreground mb-1">Tempo (mm:ss)</label>
           <input id="pr-tempo" type="text" placeholder="ex: 03:45" maxlength="5"
             class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          <p class="text-xs text-zinc-600 mt-1">Formato: minutos:segundos (ex: 12:34)</p>
+          <p class="text-xs text-zinc-600 mt-1">Minutos:Segundos — ex: 12:34 ou 03:45</p>
         </div>
-
         <div id="campo-reps" class="hidden">
           <label class="block text-xs text-muted-foreground mb-1">Repetições</label>
           <input id="pr-reps" type="number" min="0" placeholder="ex: 150"
             class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
-
-        <div id="campo-rounds" class="hidden space-y-3">
+        <div id="campo-rounds" class="hidden">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-muted-foreground mb-1">Rounds completos</label>
+              <label class="block text-xs text-muted-foreground mb-1">Rounds</label>
               <input id="pr-rounds" type="number" min="0" placeholder="ex: 5"
                 class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
             </div>
@@ -265,7 +341,6 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
           </div>
         </div>
 
-        <!-- RX / Scaled + Data -->
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-muted-foreground mb-1">Modalidade</label>
@@ -287,10 +362,9 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
           </div>
         </div>
 
-        <!-- Observação -->
         <div>
           <label class="block text-xs text-muted-foreground mb-1">Observação <span class="text-zinc-600">(opcional)</span></label>
-          <input id="pr-obs" type="text" placeholder="ex: joelho inflamado, PR pessoal..."
+          <input id="pr-obs" type="text" placeholder="ex: novo PR pessoal, joelho inflamado..."
             class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
         </div>
 
@@ -307,51 +381,36 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
   <script>
     const modal   = document.getElementById('modal-novo-pr')!;
     const selEx   = document.getElementById('pr-exercicio') as HTMLSelectElement;
-    const campoP  = document.getElementById('campo-peso')!;
-    const campoT  = document.getElementById('campo-tempo')!;
-    const campoR  = document.getElementById('campo-reps')!;
-    const campoRR = document.getElementById('campo-rounds')!;
+    const campos  = { peso: document.getElementById('campo-peso')!, tempo: document.getElementById('campo-tempo')!,
+                      reps: document.getElementById('campo-reps')!, rounds_reps: document.getElementById('campo-rounds')! };
     const erroDiv = document.getElementById('pr-erro')!;
 
     function abrirModal(exercicioId?: string, tipo?: string) {
       if (exercicioId) selEx.value = exercicioId;
       atualizarCampos(tipo ?? selEx.selectedOptions[0]?.dataset.tipo ?? '');
-      // data de hoje
-      (document.getElementById('pr-data') as HTMLInputElement).value =
-        new Date().toLocaleDateString('en-CA');
+      (document.getElementById('pr-data') as HTMLInputElement).value = new Date().toLocaleDateString('en-CA');
       modal.classList.remove('hidden');
       document.body.style.overflow = 'hidden';
     }
-
     function fecharModal() {
       modal.classList.add('hidden');
       document.body.style.overflow = '';
       erroDiv.classList.add('hidden');
     }
-
     function atualizarCampos(tipo: string) {
-      campoP.classList.toggle('hidden',  tipo !== 'peso');
-      campoT.classList.toggle('hidden',  tipo !== 'tempo');
-      campoR.classList.toggle('hidden',  tipo !== 'reps');
-      campoRR.classList.toggle('hidden', tipo !== 'rounds_reps');
+      Object.entries(campos).forEach(([k, el]) => el.classList.toggle('hidden', k !== tipo));
     }
 
-    selEx.addEventListener('change', () => {
-      const tipo = selEx.selectedOptions[0]?.dataset.tipo ?? '';
-      atualizarCampos(tipo);
-    });
-
+    selEx.addEventListener('change', () => atualizarCampos(selEx.selectedOptions[0]?.dataset.tipo ?? ''));
     document.getElementById('btn-novo-pr')?.addEventListener('click', () => abrirModal());
     document.getElementById('btn-novo-pr-empty')?.addEventListener('click', () => abrirModal());
     document.getElementById('btn-fechar-pr')?.addEventListener('click', fecharModal);
     modal.addEventListener('click', e => { if (e.target === modal) fecharModal(); });
 
-    // Botões "Registrar novo" nos cards
     document.querySelectorAll<HTMLElement>('[data-action="novo-pr-exercicio"]').forEach(btn => {
       btn.addEventListener('click', () => abrirModal(btn.dataset.id, btn.dataset.tipo));
     });
 
-    // Máscara tempo mm:ss
     const inputTempo = document.getElementById('pr-tempo') as HTMLInputElement;
     inputTempo.addEventListener('input', () => {
       let v = inputTempo.value.replace(/\D/g, '');
@@ -360,18 +419,16 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       inputTempo.value = v;
     });
 
-    // Salvar
     document.getElementById('btn-salvar-pr')?.addEventListener('click', async () => {
       const exercicioId = selEx.value;
       const tipo        = selEx.selectedOptions[0]?.dataset.tipo ?? '';
       if (!exercicioId || !tipo) { mostrarErro('Selecione um exercício.'); return; }
 
       const payload: Record<string, unknown> = {
-        exercicio_id: exercicioId,
-        tipo,
-        rx:           document.querySelector<HTMLInputElement>('input[name="pr-rx"]:checked')?.value !== 'scaled',
-        data_registro:(document.getElementById('pr-data') as HTMLInputElement).value || undefined,
-        observacao:   (document.getElementById('pr-obs') as HTMLInputElement).value || undefined,
+        exercicio_id: exercicioId, tipo,
+        rx: document.querySelector<HTMLInputElement>('input[name="pr-rx"]:checked')?.value !== 'scaled',
+        data_registro: (document.getElementById('pr-data') as HTMLInputElement).value || undefined,
+        observacao:    (document.getElementById('pr-obs') as HTMLInputElement).value || undefined,
       };
 
       if (tipo === 'peso') {
@@ -381,7 +438,7 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       } else if (tipo === 'tempo') {
         const raw = (document.getElementById('pr-tempo') as HTMLInputElement).value;
         const partes = raw.split(':');
-        if (partes.length !== 2) { mostrarErro('Informe o tempo no formato mm:ss.'); return; }
+        if (partes.length !== 2) { mostrarErro('Use o formato mm:ss.'); return; }
         const seg = parseInt(partes[0]!) * 60 + parseInt(partes[1]!);
         if (isNaN(seg) || seg <= 0) { mostrarErro('Tempo inválido.'); return; }
         payload.valor_tempo_seg = seg;
@@ -392,32 +449,20 @@ const exerciciosSemPR = (exercicios ?? []).filter(e => !prsPorExercicio.has(e.id
       } else if (tipo === 'rounds_reps') {
         const r = parseInt((document.getElementById('pr-rounds') as HTMLInputElement).value);
         if (isNaN(r) || r < 0) { mostrarErro('Informe os rounds.'); return; }
-        payload.valor_rounds    = r;
+        payload.valor_rounds     = r;
         payload.valor_reps_extra = parseInt((document.getElementById('pr-reps-extra') as HTMLInputElement).value) || 0;
       }
 
       const btn = document.getElementById('btn-salvar-pr') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Salvando...';
-
+      btn.disabled = true; btn.textContent = 'Salvando...';
       try {
         const res = await fetch('/api/prs/registrar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const err = await res.json();
-          mostrarErro(err.error ?? 'Erro ao salvar.');
-        } else {
-          window.location.reload();
-        }
-      } catch {
-        mostrarErro('Erro de conexão. Tente novamente.');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Salvar Resultado';
-      }
+        if (!res.ok) { const err = await res.json(); mostrarErro(err.error ?? 'Erro ao salvar.'); }
+        else window.location.reload();
+      } catch { mostrarErro('Erro de conexão. Tente novamente.'); }
+      finally { btn.disabled = false; btn.textContent = 'Salvar Resultado'; }
     });
 
     function mostrarErro(msg: string) {

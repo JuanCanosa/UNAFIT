@@ -23,7 +23,7 @@ const wodId = Astro.params.id as string;
 
 const { data: wod, error: wodErr } = await supabase
   .from('wods')
-  .select('id, nome, treino, score_type, data_aplicacao, criado_em')
+  .select('id, nome, treino, score_type, data_aplicacao, criado_em, time_cap_min, duracao_min')
   .eq('id', wodId)
   .eq('academia_id', profile.academia_id!)
   .single();
@@ -53,13 +53,15 @@ if (Astro.request.method === 'POST') {
     const treino         = (form.get('treino') as string)?.trim();
     const score_type     = form.get('score_type') as string;
     const data_aplicacao = (form.get('data_aplicacao') as string) || null;
+    const time_cap_min   = form.get('time_cap_min') ? parseInt(form.get('time_cap_min') as string) : null;
+    const duracao_min    = form.get('duracao_min')  ? parseInt(form.get('duracao_min')  as string) : null;
 
     if (!nome || !treino) {
       formError = 'Nome e prescrição são obrigatórios.';
     } else {
       const { error } = await supabase
         .from('wods')
-        .update({ nome, treino, score_type, data_aplicacao })
+        .update({ nome, treino, score_type, data_aplicacao, time_cap_min, duracao_min })
         .eq('id', wodId);
       if (error) formError = error.message;
       else return Astro.redirect(`/dashboard/wods/${wodId}?saved=1`);
@@ -170,6 +172,25 @@ const totalEx      = (wodExercicios ?? []).length;
             </div>
           </div>
 
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Time Cap (min)</label>
+              <input name="time_cap_min" type="number" min="1" max="120"
+                value={wod.time_cap_min ?? ''}
+                placeholder="ex: 20"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Duração AMRAP/EMOM (min)</label>
+              <input name="duracao_min" type="number" min="1" max="120"
+                value={wod.duracao_min ?? ''}
+                placeholder="ex: 20"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              />
+            </div>
+          </div>
+
           <div>
             <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
               Prescrição *
@@ -193,7 +214,7 @@ const totalEx      = (wodExercicios ?? []).length;
             <p class="text-xs text-muted-foreground mb-1">Nome</p>
             <p class="font-semibold text-foreground">{wod.nome}</p>
           </div>
-          <div class="flex gap-4">
+          <div class="flex flex-wrap gap-4">
             <div>
               <p class="text-xs text-muted-foreground mb-1">Score</p>
               <Badge variant="primary">{scoreLabels[wod.score_type] ?? wod.score_type}</Badge>
@@ -202,6 +223,18 @@ const totalEx      = (wodExercicios ?? []).length;
               <div>
                 <p class="text-xs text-muted-foreground mb-1">Data</p>
                 <p class="text-sm text-foreground">{new Date(wod.data_aplicacao + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+              </div>
+            )}
+            {wod.time_cap_min && (
+              <div>
+                <p class="text-xs text-muted-foreground mb-1">Time Cap</p>
+                <span class="rounded-md px-2 py-1 text-xs font-semibold bg-orange-500/10 text-orange-400">{wod.time_cap_min} min</span>
+              </div>
+            )}
+            {wod.duracao_min && (
+              <div>
+                <p class="text-xs text-muted-foreground mb-1">Duração</p>
+                <span class="rounded-md px-2 py-1 text-xs font-semibold bg-purple-500/10 text-purple-400">{wod.duracao_min} min</span>
               </div>
             )}
           </div>

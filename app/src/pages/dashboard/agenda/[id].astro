@@ -27,7 +27,7 @@ const { data: aula, error: aulaErr } = await supabase
   .from('aulas_agenda')
   .select(`
     id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, obs_aquecimento,
-    wods ( id, nome, score_type, treino ),
+    wods ( id, nome, score_type, treino, time_cap_min, duracao_min ),
     checkins ( id )
   `)
   .eq('id', aulaId)
@@ -75,6 +75,12 @@ const hojeISO    = new Date().toISOString().split('T')[0];
 const isHoje     = aula.data_aula === hojeISO;
 const savedParam = new URL(Astro.request.url).searchParams.get('saved');
 
+// Mapeamento score_type → tipo_resultado (PRs)
+const scoreTypeMap: Record<string, string> = {
+  tempo: 'tempo', reps: 'reps', carga: 'peso', rounds_reps: 'rounds_reps',
+};
+const tipoResultado = wod ? (scoreTypeMap[wod.score_type] ?? null) : null;
+
 // Handle POST
 let formError = '';
 if (Astro.request.method === 'POST') {
@@ -112,6 +118,49 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'remover_exercicio') {
     await supabase.from('aula_exercicios').delete().eq('id', form.get('ae_id') as string);
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
+  }
+
+  if (action === 'registrar_resultado_wod' && canEdit && wod && tipoResultado) {
+    const profileIdAlvo = form.get('profile_id') as string;
+    const rx            = form.get('rx') === 'true';
+    const observacao    = (form.get('observacao') as string) || null;
+
+    // Encontra ou cria exercício com o nome do WOD
+    let { data: exercicio } = await adminCheckin
+      .from('exercicios').select('id').eq('academia_id', profile.academia_id!).eq('nome', wod.nome).maybeSingle();
+    if (!exercicio) {
+      const { data: novo } = await adminCheckin.from('exercicios').insert({
+        academia_id: profile.academia_id!, nome: wod.nome, tipo_resultado: tipoResultado,
+      }).select('id').single();
+      exercicio = novo;
+    }
+
+    if (exercicio) {
+      const prData: Record<string, unknown> = {
+        academia_id: profile.academia_id!, aluno_id: profileIdAlvo, exercicio_id: exercicio.id,
+        tipo: tipoResultado, rx, data_registro: aula.data_aula, aula_id: aulaId, registrado_por: user.id, observacao,
+      };
+      if (tipoResultado === 'tempo') {
+        const min = parseInt(form.get('valor_min') as string) || 0;
+        const sec = parseInt(form.get('valor_sec') as string) || 0;
+        prData.valor_tempo_seg = min * 60 + sec;
+      } else if (tipoResultado === 'reps') {
+        prData.valor_reps = parseInt(form.get('valor_reps') as string) || 0;
+      } else if (tipoResultado === 'peso') {
+        prData.valor_peso = parseFloat(form.get('valor_peso') as string) || 0;
+      } else if (tipoResultado === 'rounds_reps') {
+        prData.valor_rounds    = parseInt(form.get('valor_rounds') as string) || 0;
+        prData.valor_reps_extra = parseInt(form.get('valor_reps_extra') as string) || 0;
+      }
+      await adminCheckin.from('prs').insert(prData);
+    }
+    return Astro.redirect(`/dashboard/agenda/${aulaId}`);
+  }
+
+  if (action === 'remover_resultado_wod' && canEdit) {
+    const pr_id = form.get('pr_id') as string;
+    await adminCheckin.from('prs').delete().eq('id', pr_id).eq('academia_id', profile.academia_id!);
     return Astro.redirect(`/dashboard/agenda/${aulaId}`);
   }
 
@@ -217,6 +266,55 @@ const { data: modalidades } = await supabase
 
 const modalidadeCor: Record<string, string> = Object.fromEntries(
   (modalidades ?? []).map(m => [m.nome, (COR_CLASSES[m.cor] ?? COR_CLASSES['vermelho']).badge])
+);
+
+// ── Resultados da Turma ──────────────────────────────────────────────────────
+// Busca resultados já registrados para esta aula
+const { data: resultadosTurma } = wod && tipoResultado
+  ? await adminCheckin
+      .from('prs')
+      .select('id, aluno_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, observacao, profiles(nome_completo)')
+      .eq('aula_id', aulaId)
+      .eq('academia_id', profile.academia_id!)
+  : { data: [] as any[] };
+
+// Alunos presentes que já têm resultado registrado
+const profilesComResultado = new Set((resultadosTurma ?? []).map((r: any) => r.aluno_id));
+
+// Função auxiliar para formatar valor do resultado
+function fmtScore(r: any): string {
+  if (r.tipo === 'peso')   return `${r.valor_peso} kg`;
+  if (r.tipo === 'reps')   return `${r.valor_reps} rep${r.valor_reps !== 1 ? 's' : ''}`;
+  if (r.tipo === 'tempo' && r.valor_tempo_seg != null) {
+    const h = Math.floor(r.valor_tempo_seg / 3600);
+    const m = Math.floor((r.valor_tempo_seg % 3600) / 60);
+    const s = r.valor_tempo_seg % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+  if (r.tipo === 'rounds_reps') {
+    const rr = r.valor_rounds ?? 0;
+    const x  = r.valor_reps_extra;
+    return x ? `${rr} + ${x}` : `${rr} rounds`;
+  }
+  return '—';
+}
+
+// Ranking: ordena pelo melhor score
+function scoreNum(r: any): number {
+  if (r.tipo === 'peso')       return r.valor_peso ?? 0;
+  if (r.tipo === 'tempo')      return -(r.valor_tempo_seg ?? 999999);
+  if (r.tipo === 'reps')       return r.valor_reps ?? 0;
+  if (r.tipo === 'rounds_reps') return (r.valor_rounds ?? 0) * 10000 + (r.valor_reps_extra ?? 0);
+  return 0;
+}
+
+const rankingTurma = [...(resultadosTurma ?? [])].sort((a: any, b: any) => scoreNum(b) - scoreNum(a));
+
+// Alunos presentes sem resultado registrado
+const presentesSemResultado = alunosElegiveis.filter((a: any) =>
+  a.jaFezCheckin && a.profileId && !profilesComResultado.has(a.profileId)
 );
 ---
 
@@ -436,6 +534,26 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
               <p class="text-sm text-foreground whitespace-pre-line font-mono">{wod.treino}</p>
             </div>
           )}
+          {(wod.time_cap_min || wod.duracao_min) && (
+            <div class="flex items-center gap-2 flex-wrap">
+              {wod.time_cap_min && (
+                <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                  <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Time Cap: {wod.time_cap_min} min
+                </span>
+              )}
+              {wod.duracao_min && (
+                <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Duração: {wod.duracao_min} min
+                </span>
+              )}
+            </div>
+          )}
           {wodExercicios && wodExercicios.length > 0 && (
             wodGrupos && wodGrupos.length > 0 ? (
               <div class="space-y-2">
@@ -626,6 +744,198 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
       )}
     </div>
   </div>
+
+  <!-- ── Resultados da Turma ─────────────────────────────────────────────── -->
+  {wod && tipoResultado && (
+    <div class="mt-5 rounded-xl border border-border bg-card overflow-hidden">
+      <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-border">
+        <div class="flex items-center gap-3">
+          <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+            <svg class="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-semibold text-foreground">Resultados da Turma — {wod.nome}</h2>
+            <p class="text-xs text-muted-foreground capitalize mt-0.5">
+              {scoreLabels[wod.score_type] ?? wod.score_type}
+              {wod.score_type === 'tempo' ? ' · menor é melhor' : ' · maior é melhor'}
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-muted-foreground">{rankingTurma.length}/{(alunosElegiveis.filter((a: any) => a.jaFezCheckin).length)} presentes</span>
+          {canEdit && presentesSemResultado.length > 0 && (
+            <button id="btn-add-resultado" type="button"
+              class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 transition-colors">
+              <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              Registrar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {rankingTurma.length === 0 ? (
+        <div class="px-5 py-10 text-center">
+          <p class="text-sm text-muted-foreground mb-1">Nenhum resultado registrado ainda</p>
+          <p class="text-xs text-zinc-600">
+            {(alunosElegiveis.filter((a: any) => a.jaFezCheckin).length) === 0
+              ? 'Faça check-ins primeiro'
+              : `${(alunosElegiveis.filter((a: any) => a.jaFezCheckin).length)} aluno(s) presente(s) — registre os resultados`}
+          </p>
+        </div>
+      ) : (
+        <div class="divide-y divide-border/40">
+          {rankingTurma.map((r: any, i: number) => {
+            const nome = (r.profiles as any)?.nome_completo ?? 'Atleta';
+            const medalhas = ['🥇', '🥈', '🥉'];
+            return (
+              <div class:list={['flex items-center gap-4 px-5 py-3 transition-colors', i === 0 ? 'bg-primary/5' : 'hover:bg-muted/10']}>
+                <span class="w-7 text-center shrink-0">
+                  {i < 3
+                    ? <span class="text-lg">{medalhas[i]}</span>
+                    : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
+                </span>
+                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                  {nome.charAt(0).toUpperCase()}
+                </div>
+                <p class="flex-1 min-w-0 text-sm font-medium text-foreground truncate">{nome}</p>
+                <div class="flex items-center gap-3">
+                  {r.rx && <span class="text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">RX</span>}
+                  <p class:list={['text-sm font-bold', i === 0 ? 'text-primary' : 'text-foreground']}>{fmtScore(r)}</p>
+                  {canEdit && (
+                    <form method="POST">
+                      <input type="hidden" name="action" value="remover_resultado_wod" />
+                      <input type="hidden" name="pr_id" value={r.id} />
+                      <button type="submit"
+                        onclick="return confirm('Remover este resultado?')"
+                        class="p-1 rounded text-zinc-600 hover:text-red-400 transition-colors">
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  )}
+
+  <!-- Modal: Registrar Resultado -->
+  {wod && tipoResultado && canEdit && (
+    <div id="modal-resultado-turma" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm">
+      <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div>
+            <h2 class="text-sm font-bold text-foreground">Registrar Resultado</h2>
+            <p class="text-xs text-muted-foreground mt-0.5">{wod.nome} · {scoreLabels[wod.score_type]}</p>
+          </div>
+          <button id="btn-fechar-resultado" type="button"
+            class="text-zinc-500 hover:text-zinc-300 transition-colors p-1 rounded-lg hover:bg-zinc-800">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <form method="POST" class="px-5 py-5 space-y-4">
+          <input type="hidden" name="action" value="registrar_resultado_wod" />
+
+          <!-- Aluno -->
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Atleta</label>
+            <select name="profile_id" required
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
+              <option value="">— Selecione o atleta —</option>
+              {presentesSemResultado.map((a: any) => (
+                <option value={a.profileId}>{a.nome}</option>
+              ))}
+              {/* Também permite registrar pra quem já tem (override) */}
+              {(alunosElegiveis.filter((a: any) => a.jaFezCheckin && a.profileId && profilesComResultado.has(a.profileId)) as any[]).map((a: any) => (
+                <option value={a.profileId}>{a.nome} (atualizar)</option>
+              ))}
+            </select>
+          </div>
+
+          <!-- Campo por tipo de score -->
+          {tipoResultado === 'tempo' && (
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-muted-foreground mb-1">Minutos</label>
+                <input name="valor_min" type="number" min="0" max="999" placeholder="0"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+              <div>
+                <label class="block text-xs text-muted-foreground mb-1">Segundos</label>
+                <input name="valor_sec" type="number" min="0" max="59" placeholder="0"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+            </div>
+          )}
+          {tipoResultado === 'reps' && (
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Repetições</label>
+              <input name="valor_reps" type="number" min="0" placeholder="ex: 150"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+          )}
+          {tipoResultado === 'peso' && (
+            <div>
+              <label class="block text-xs text-muted-foreground mb-1">Carga (kg)</label>
+              <input name="valor_peso" type="number" step="0.5" min="0" placeholder="ex: 102.5"
+                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+          )}
+          {tipoResultado === 'rounds_reps' && (
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-muted-foreground mb-1">Rounds</label>
+                <input name="valor_rounds" type="number" min="0" placeholder="ex: 5"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+              <div>
+                <label class="block text-xs text-muted-foreground mb-1">+ Reps extras</label>
+                <input name="valor_reps_extra" type="number" min="0" placeholder="ex: 12"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+            </div>
+          )}
+
+          <!-- RX / Scaled -->
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Modalidade</label>
+            <div class="flex rounded-lg border border-border overflow-hidden">
+              <label class="flex-1 text-center cursor-pointer">
+                <input type="radio" name="rx" value="true" class="sr-only peer" checked />
+                <span class="block py-2.5 text-sm font-semibold text-muted-foreground peer-checked:text-primary peer-checked:bg-primary/10 transition-colors">RX</span>
+              </label>
+              <label class="flex-1 text-center cursor-pointer border-l border-border">
+                <input type="radio" name="rx" value="false" class="sr-only peer" />
+                <span class="block py-2.5 text-sm font-semibold text-muted-foreground peer-checked:text-orange-400 peer-checked:bg-orange-400/10 transition-colors">Scaled</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Observação -->
+          <div>
+            <label class="block text-xs text-muted-foreground mb-1">Observação <span class="text-zinc-600">(opcional)</span></label>
+            <input name="observacao" type="text" placeholder="ex: novo PR, lesão..."
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          </div>
+
+          <button type="submit"
+            class="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
+            Salvar Resultado
+          </button>
+        </form>
+      </div>
+    </div>
+  )}
 
   <!-- Modal Editar Aula -->
 <div id="modal-editar-aula" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -989,6 +1299,27 @@ const modalidadeCor: Record<string, string> = Object.fromEntries(
       btn.disabled = false; btn.textContent = 'Adicionar';
     }
   });
+    // Modal resultados da turma
+    const modalResultado = document.getElementById('modal-resultado-turma');
+    if (modalResultado) {
+      const btnAdd    = document.getElementById('btn-add-resultado');
+      const btnFechar = document.getElementById('btn-fechar-resultado');
+
+      function abrirModalResultado() {
+        modalResultado.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+      }
+      function fecharModalResultado() {
+        modalResultado.classList.add('hidden');
+        document.body.style.overflow = '';
+      }
+
+      btnAdd?.addEventListener('click', abrirModalResultado);
+      btnFechar?.addEventListener('click', fecharModalResultado);
+      modalResultado.addEventListener('click', e => {
+        if (e.target === modalResultado) fecharModalResultado();
+      });
+    }
   } // fim initModals
 
   if (document.readyState === 'loading') {
