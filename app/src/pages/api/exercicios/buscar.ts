@@ -26,7 +26,7 @@ export const GET: APIRoute = async ({ request, cookies }) => {
 
   const { data: exercicios } = await supabase
     .from('exercicios')
-    .select('id, nome, descricao')
+    .select('id, nome, descricao, tipo_resultado')
     .eq('academia_id', profile.academia_id!)
     .ilike('nome', `%${q}%`)
     .order('nome')

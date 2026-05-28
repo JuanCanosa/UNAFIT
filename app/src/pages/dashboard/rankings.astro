@@ -1,6 +1,5 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import Card from '@/components/ui/Card.astro';
 import { createSupabaseServerClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
@@ -8,196 +7,363 @@ const { data: { user } } = await supabase.auth.getUser();
 if (!user) return Astro.redirect('/login');
 
 const { data: profile } = await supabase
-  .from('profiles')
-  .select('role, academia_id')
-  .eq('id', user.id)
-  .single();
+  .from('profiles').select('role, academia_id').eq('id', user.id).single();
 
-if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
+if (!profile) return Astro.redirect('/login');
+
+const isAluno = profile.role === 'aluno';
+
+// Exercício selecionado para ranking de performance
+const urlParams = new URL(Astro.request.url).searchParams;
+const exSelecionadoId = urlParams.get('ex') ?? '';
+const tabAtiva = urlParams.get('tab') ?? (isAluno ? 'performance' : 'presenca');
 
 // Mês atual em horário de Brasília
 const hojeISO_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const inicioMes  = hojeISO_BR.slice(0, 7) + '-01';
+const mesFmt = new Date(inicioMes + 'T12:00:00Z').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
-const mesFmt = new Date(inicioMes + 'T12:00:00Z').toLocaleDateString('pt-BR', {
-  month: 'long', year: 'numeric',
-});
+// Exercícios com PRs registrados na academia
+const { data: exerciciosComPRs } = await supabase
+  .from('exercicios')
+  .select('id, nome, tipo_resultado')
+  .eq('academia_id', profile.academia_id!)
+  .order('nome');
 
-// Busca paralela: aulas do mês + checkins do mês
+// Busca dados em paralelo
 const [
   { data: aulasDoMes },
   { data: checkinsDoMes },
+  { data: prsExercicio },
 ] = await Promise.all([
-  supabase
+  !isAluno ? supabase
     .from('aulas_agenda')
     .select('id, data_aula, horario_inicio, modalidade, capacidade_max, wods(nome)')
     .eq('academia_id', profile.academia_id!)
     .gte('data_aula', inicioMes)
     .lte('data_aula', hojeISO_BR)
-    .order('data_aula', { ascending: false }),
+    .order('data_aula', { ascending: false })
+    : Promise.resolve({ data: [] }),
 
-  supabase
+  !isAluno ? supabase
     .from('checkins')
     .select('aula_id, aluno_id, profiles(nome_completo)')
     .eq('academia_id', profile.academia_id!)
-    .gte('feito_em', `${inicioMes}T00:00:00`),
+    .gte('feito_em', `${inicioMes}T00:00:00`)
+    : Promise.resolve({ data: [] }),
+
+  exSelecionadoId ? supabase
+    .from('prs')
+    .select('aluno_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, data_registro, profiles(nome_completo)')
+    .eq('academia_id', profile.academia_id!)
+    .eq('exercicio_id', exSelecionadoId)
+    : Promise.resolve({ data: [] }),
 ]);
 
-// Processa em JS: presença por aula + ranking de alunos
+// Exercício selecionado
+const exSelecionado = (exerciciosComPRs ?? []).find(e => e.id === exSelecionadoId) ?? null;
+
+// Ranking presença
 const presencasPorAula: Record<string, number> = {};
-const rankingMap: Record<string, { nome: string; total: number }> = {};
-
+const rankingPresenca: Record<string, { nome: string; total: number }> = {};
 for (const c of checkinsDoMes ?? []) {
-  if (c.aula_id) {
-    presencasPorAula[c.aula_id] = (presencasPorAula[c.aula_id] ?? 0) + 1;
-  }
+  if (c.aula_id) presencasPorAula[c.aula_id] = (presencasPorAula[c.aula_id] ?? 0) + 1;
   const nome = (c.profiles as any)?.nome_completo ?? '?';
-  if (!rankingMap[c.aluno_id]) rankingMap[c.aluno_id] = { nome, total: 0 };
-  rankingMap[c.aluno_id]!.total++;
+  if (!rankingPresenca[c.aluno_id]) rankingPresenca[c.aluno_id] = { nome, total: 0 };
+  rankingPresenca[c.aluno_id]!.total++;
 }
-
-const topAlunos = Object.values(rankingMap)
+const topPresenca = Object.entries(rankingPresenca)
+  .map(([id, v]) => ({ id, ...v }))
   .sort((a, b) => b.total - a.total)
   .slice(0, 20);
 
 const totalAulasNoMes     = aulasDoMes?.length ?? 0;
 const totalPresencasNoMes = checkinsDoMes?.length ?? 0;
-const alunosUnicos        = Object.keys(rankingMap).length;
-const mediaPresenca       = totalAulasNoMes > 0
-  ? (totalPresencasNoMes / totalAulasNoMes).toFixed(1)
-  : '—';
+const alunosUnicos        = Object.keys(rankingPresenca).length;
+const mediaPresenca = totalAulasNoMes > 0 ? (totalPresencasNoMes / totalAulasNoMes).toFixed(1) : '—';
+
+// Ranking performance: melhor PR por aluno para o exercício selecionado
+type PRRow = {
+  aluno_id: string; tipo: string;
+  valor_peso: number|null; valor_tempo_seg: number|null;
+  valor_reps: number|null; valor_rounds: number|null; valor_reps_extra: number|null;
+  rx: boolean; data_registro: string;
+  profiles: { nome_completo: string } | null;
+};
+
+function scoreNumerico(pr: PRRow): number {
+  if (pr.tipo === 'peso')       return pr.valor_peso ?? 0;
+  if (pr.tipo === 'tempo')      return -(pr.valor_tempo_seg ?? 999999); // menor é melhor → negativo
+  if (pr.tipo === 'reps')       return pr.valor_reps ?? 0;
+  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
+  return 0;
+}
+
+function fmtValor(pr: PRRow): string {
+  if (pr.tipo === 'peso')   return `${pr.valor_peso} kg`;
+  if (pr.tipo === 'reps')   return `${pr.valor_reps} rep${(pr.valor_reps ?? 0) !== 1 ? 's' : ''}`;
+  if (pr.tipo === 'tempo' && pr.valor_tempo_seg != null) {
+    const h = Math.floor(pr.valor_tempo_seg / 3600);
+    const m = Math.floor((pr.valor_tempo_seg % 3600) / 60);
+    const s = pr.valor_tempo_seg % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+  if (pr.tipo === 'rounds_reps') {
+    const r = pr.valor_rounds ?? 0;
+    const x = pr.valor_reps_extra;
+    return x ? `${r} + ${x}` : `${r} rounds`;
+  }
+  return '—';
+}
+
+// Agrupa por aluno e pega o melhor
+const melhorPorAluno = new Map<string, PRRow>();
+for (const pr of (prsExercicio ?? []) as PRRow[]) {
+  const atual = melhorPorAluno.get(pr.aluno_id);
+  if (!atual || scoreNumerico(pr) > scoreNumerico(atual)) {
+    melhorPorAluno.set(pr.aluno_id, pr);
+  }
+}
+
+const rankingPerformance = [...melhorPorAluno.values()]
+  .sort((a, b) => scoreNumerico(b) - scoreNumerico(a))
+  .slice(0, 20);
+
+const posicaoDoAluno = isAluno
+  ? rankingPerformance.findIndex(r => r.aluno_id === user.id)
+  : -1;
 
 const medalhas = ['🥇', '🥈', '🥉'];
 ---
 
 <DashboardLayout title="Rankings">
-
   <div class="mb-6">
     <h1 class="text-2xl font-bold text-foreground">Rankings</h1>
-    <p class="mt-1 text-sm text-muted-foreground capitalize">Desempenho e presença dos atletas · {mesFmt}</p>
+    <p class="mt-1 text-sm text-muted-foreground capitalize">Desempenho da academia · {mesFmt}</p>
   </div>
 
-  <!-- Stats do mês -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Aulas no Mês</p>
-      <p class="mt-1.5 text-3xl font-bold text-foreground">{totalAulasNoMes}</p>
-      <p class="text-xs text-muted-foreground mt-1">turmas realizadas</p>
-    </div>
-    <div class="rounded-xl border border-primary/20 bg-primary/5 p-4">
-      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Presenças</p>
-      <p class="mt-1.5 text-3xl font-bold text-primary">{totalPresencasNoMes}</p>
-      <p class="text-xs text-muted-foreground mt-1">check-ins no mês</p>
-    </div>
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Média / Aula</p>
-      <p class="mt-1.5 text-3xl font-bold text-foreground">{mediaPresenca}</p>
-      <p class="text-xs text-muted-foreground mt-1">alunos por turma</p>
-    </div>
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Alunos Ativos</p>
-      <p class="mt-1.5 text-3xl font-bold text-foreground">{alunosUnicos}</p>
-      <p class="text-xs text-muted-foreground mt-1">treinaram este mês</p>
-    </div>
+  <!-- Tabs -->
+  <div class="flex gap-1 mb-6 border-b border-border">
+    {!isAluno && (
+      <a href="/dashboard/rankings?tab=presenca"
+        class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px', tabAtiva === 'presenca' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
+        Presença
+      </a>
+    )}
+    <a href="/dashboard/rankings?tab=performance"
+      class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px', tabAtiva === 'performance' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
+      Performance
+    </a>
   </div>
 
-  <!-- Grid principal -->
-  <div class="grid gap-6 lg:grid-cols-2">
+  <!-- ── TAB PRESENÇA ─────────────────────────────────────────────────────── -->
+  {tabAtiva === 'presenca' && !isAluno && (
+    <div>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div class="rounded-xl border border-border bg-card p-4">
+          <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Aulas no Mês</p>
+          <p class="mt-1.5 text-3xl font-bold text-foreground">{totalAulasNoMes}</p>
+        </div>
+        <div class="rounded-xl border border-primary/20 bg-primary/5 p-4">
+          <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Presenças</p>
+          <p class="mt-1.5 text-3xl font-bold text-primary">{totalPresencasNoMes}</p>
+        </div>
+        <div class="rounded-xl border border-border bg-card p-4">
+          <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Média / Aula</p>
+          <p class="mt-1.5 text-3xl font-bold text-foreground">{mediaPresenca}</p>
+        </div>
+        <div class="rounded-xl border border-border bg-card p-4">
+          <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Alunos Ativos</p>
+          <p class="mt-1.5 text-3xl font-bold text-foreground">{alunosUnicos}</p>
+        </div>
+      </div>
 
-    <!-- TOP PRESENÇA -->
-    <Card>
-      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        🏋️ Top Presença — Este Mês
-      </h2>
-
-      {topAlunos.length === 0 ? (
-        <p class="py-8 text-center text-sm text-muted-foreground">Nenhum check-in registrado este mês.</p>
-      ) : (
-        <div class="space-y-1.5">
-          {topAlunos.map((r, i) => (
-            <div class:list={[
-              'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
-              i === 0 ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30',
-            ]}>
-              <span class="w-7 text-center">
-                {i < 3
-                  ? <span class="text-lg">{medalhas[i]}</span>
-                  : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>
-                }
-              </span>
-              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
-                {r.nome.charAt(0).toUpperCase()}
-              </div>
-              <p class="flex-1 min-w-0 text-sm font-medium text-foreground truncate">{r.nome}</p>
-              <div class="text-right shrink-0">
-                <p class="text-sm font-bold text-primary">{r.total}</p>
-                <p class="text-[10px] text-muted-foreground">check-in{r.total !== 1 ? 's' : ''}</p>
-              </div>
+      <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Top Presença -->
+        <div class="rounded-xl border border-border bg-card p-5">
+          <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Top Presença — Este Mês
+          </h2>
+          {topPresenca.length === 0 ? (
+            <p class="py-8 text-center text-sm text-muted-foreground">Nenhum check-in registrado este mês.</p>
+          ) : (
+            <div class="space-y-1.5">
+              {topPresenca.map((r, i) => (
+                <div class:list={['flex items-center gap-3 rounded-lg px-3 py-2.5', i === 0 ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30']}>
+                  <span class="w-7 text-center">
+                    {i < 3
+                      ? <span class="text-lg">{medalhas[i]}</span>
+                      : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
+                  </span>
+                  <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-xs font-bold">
+                    {r.nome.charAt(0).toUpperCase()}
+                  </div>
+                  <p class="flex-1 min-w-0 text-sm font-medium text-foreground truncate">{r.nome}</p>
+                  <div class="text-right shrink-0">
+                    <p class="text-sm font-bold text-primary">{r.total}</p>
+                    <p class="text-[10px] text-muted-foreground">check-in{r.total !== 1 ? 's' : ''}</p>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </Card>
 
-    <!-- HISTÓRICO DE AULAS -->
-    <Card>
-      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        📋 Histórico de Aulas — Este Mês
-      </h2>
-
-      {!aulasDoMes || aulasDoMes.length === 0 ? (
-        <p class="py-8 text-center text-sm text-muted-foreground">Nenhuma aula registrada este mês.</p>
-      ) : (
-        <div class="space-y-1.5 max-h-[520px] overflow-y-auto pr-1">
-          {aulasDoMes.map((a: any) => {
-            const presencas = presencasPorAula[a.id] ?? 0;
-            const cap       = Number(a.capacidade_max) || 0;
-            const pct       = cap > 0 ? Math.min(100, Math.round((presencas / cap) * 100)) : null;
-            const nomeAula  = (a.wods as any)?.nome ?? a.modalidade ?? 'Aula';
-            const dataObj   = new Date(a.data_aula + 'T12:00:00Z');
-            return (
-              <div class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/30 transition-colors">
-                <!-- Data -->
-                <div class="flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-lg bg-muted text-center">
-                  <span class="text-sm font-bold text-foreground leading-none">
-                    {dataObj.getUTCDate()}
-                  </span>
-                  <span class="text-[9px] text-muted-foreground uppercase tracking-wide">
-                    {dataObj.toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', '')}
-                  </span>
-                </div>
-                <!-- Info -->
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-foreground truncate">{nomeAula}</p>
-                  <p class="text-xs text-muted-foreground">
-                    {a.horario_inicio?.slice(0, 5)}
-                    {cap > 0 ? ` · cap. ${cap}` : ''}
-                  </p>
-                  {pct !== null && (
-                    <div class="mt-1.5 h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
-                      <div
-                        class:list={[
-                          'h-full rounded-full transition-all',
-                          pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-primary',
-                        ]}
-                        style={`width: ${pct}%`}
-                      />
+        <!-- Histórico de Aulas -->
+        <div class="rounded-xl border border-border bg-card p-5">
+          <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Histórico de Aulas — Este Mês
+          </h2>
+          {!aulasDoMes || aulasDoMes.length === 0 ? (
+            <p class="py-8 text-center text-sm text-muted-foreground">Nenhuma aula registrada este mês.</p>
+          ) : (
+            <div class="space-y-1.5 max-h-[520px] overflow-y-auto pr-1">
+              {aulasDoMes.map((a: any) => {
+                const presencas = presencasPorAula[a.id] ?? 0;
+                const cap = Number(a.capacidade_max) || 0;
+                const pct = cap > 0 ? Math.min(100, Math.round((presencas / cap) * 100)) : null;
+                const nomeAula = (a.wods as any)?.nome ?? a.modalidade ?? 'Aula';
+                const dataObj = new Date(a.data_aula + 'T12:00:00Z');
+                return (
+                  <div class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/30">
+                    <div class="flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-lg bg-muted text-center">
+                      <span class="text-sm font-bold text-foreground leading-none">{dataObj.getUTCDate()}</span>
+                      <span class="text-[9px] text-muted-foreground uppercase">{dataObj.toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', '')}</span>
                     </div>
-                  )}
-                </div>
-                <!-- Presenças -->
-                <div class="text-right shrink-0 min-w-[48px]">
-                  <p class="text-sm font-bold text-foreground">{presencas}</p>
-                  <p class="text-[10px] text-muted-foreground">
-                    {cap > 0 ? `de ${cap}` : 'presente' + (presencas !== 1 ? 's' : '')}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium text-foreground truncate">{nomeAula}</p>
+                      <p class="text-xs text-muted-foreground">{a.horario_inicio?.slice(0, 5)}{cap > 0 ? ` · cap. ${cap}` : ''}</p>
+                      {pct !== null && (
+                        <div class="mt-1.5 h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+                          <div class:list={['h-full rounded-full', pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-primary']} style={`width: ${pct}%`} />
+                        </div>
+                      )}
+                    </div>
+                    <div class="text-right shrink-0 min-w-[48px]">
+                      <p class="text-sm font-bold text-foreground">{presencas}</p>
+                      <p class="text-[10px] text-muted-foreground">{cap > 0 ? `de ${cap}` : `presente${presencas !== 1 ? 's' : ''}`}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )}
+
+  <!-- ── TAB PERFORMANCE ─────────────────────────────────────────────────── -->
+  {tabAtiva === 'performance' && (
+    <div>
+      <!-- Seletor de exercício -->
+      <div class="mb-6 flex flex-wrap items-center gap-3">
+        <label class="text-sm text-muted-foreground shrink-0">Exercício:</label>
+        <div class="flex flex-wrap gap-2">
+          {(exerciciosComPRs ?? []).length === 0 ? (
+            <p class="text-sm text-muted-foreground">Nenhum exercício cadastrado.</p>
+          ) : (
+            (exerciciosComPRs ?? []).map(e => (
+              <a
+                href={`/dashboard/rankings?tab=performance&ex=${e.id}`}
+                class:list={[
+                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  exSelecionadoId === e.id
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+                ]}>
+                {e.nome}
+              </a>
+            ))
+          )}
+        </div>
+      </div>
+
+      {!exSelecionado ? (
+        <div class="rounded-xl border border-border bg-card p-12 text-center">
+          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+            <svg class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <p class="text-sm font-medium text-foreground mb-1">Selecione um exercício</p>
+          <p class="text-xs text-muted-foreground">Escolha um exercício acima para ver o ranking</p>
+        </div>
+      ) : (
+        <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
+            <div>
+              <h2 class="font-semibold text-foreground">{exSelecionado.nome}</h2>
+              <p class="text-xs text-muted-foreground capitalize mt-0.5">
+                {exSelecionado.tipo_resultado === 'rounds_reps' ? 'rounds + reps' : exSelecionado.tipo_resultado}
+                {exSelecionado.tipo_resultado === 'tempo' ? ' · menor é melhor' : ' · maior é melhor'}
+              </p>
+            </div>
+            <span class="text-xs text-muted-foreground">{rankingPerformance.length} atleta{rankingPerformance.length !== 1 ? 's' : ''}</span>
+          </div>
+
+          {rankingPerformance.length === 0 ? (
+            <div class="p-12 text-center">
+              <p class="text-sm text-muted-foreground">Nenhum resultado registrado para este exercício ainda.</p>
+            </div>
+          ) : (
+            <div class="divide-y divide-border/50">
+              {rankingPerformance.map((r, i) => {
+                const isMe = r.aluno_id === user.id;
+                return (
+                  <div class:list={[
+                    'flex items-center gap-4 px-5 py-3.5 transition-colors',
+                    i === 0 ? 'bg-primary/5' : isMe ? 'bg-blue-500/5' : 'hover:bg-muted/20',
+                  ]}>
+                    <!-- Posição -->
+                    <span class="w-8 text-center shrink-0">
+                      {i < 3
+                        ? <span class="text-xl">{medalhas[i]}</span>
+                        : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
+                    </span>
+
+                    <!-- Avatar -->
+                    <div class:list={[
+                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                      isMe ? 'bg-blue-500/20 text-blue-400' : 'bg-primary/15 text-primary',
+                    ]}>
+                      {(r.profiles?.nome_completo ?? '?').charAt(0).toUpperCase()}
+                    </div>
+
+                    <!-- Nome -->
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium text-foreground truncate">
+                        {r.profiles?.nome_completo ?? 'Atleta'}
+                        {isMe && <span class="ml-2 text-[10px] text-blue-400 font-semibold">VOCÊ</span>}
+                      </p>
+                      <p class="text-xs text-muted-foreground">
+                        {r.rx ? 'RX' : 'Scaled'} · {new Date(r.data_registro + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                      </p>
+                    </div>
+
+                    <!-- Score -->
+                    <div class="text-right shrink-0">
+                      <p class:list={['text-base font-bold', i === 0 ? 'text-primary' : isMe ? 'text-blue-400' : 'text-foreground']}>
+                        {fmtValor(r)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {isAluno && posicaoDoAluno >= 0 && (
+            <div class="px-5 py-3 border-t border-border bg-blue-500/5">
+              <p class="text-xs text-blue-400 text-center font-medium">
+                Sua posição: <strong>{posicaoDoAluno + 1}º</strong> de {rankingPerformance.length} atleta{rankingPerformance.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+          )}
         </div>
       )}
-    </Card>
-
-  </div>
+    </div>
+  )}
 </DashboardLayout>
