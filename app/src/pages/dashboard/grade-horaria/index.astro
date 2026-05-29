@@ -91,16 +91,16 @@ if (Astro.request.method === 'POST') {
           const data_aula = target.toISOString().split('T')[0];
 
           // Verifica se já existe aula neste horário/dia/modalidade
-          const { data: existente } = await supabase
+          const { data: existentes } = await supabase
             .from('aulas_agenda')
             .select('id')
             .eq('academia_id', profile.academia_id!)
             .eq('data_aula', data_aula)
             .eq('horario_inicio', slot.horario_inicio)
             .eq('modalidade', slot.modalidade)
-            .maybeSingle();
+            .limit(1);
 
-          if (existente) {
+          if (existentes && existentes.length > 0) {
             pulados++;
           } else {
             const { error } = await supabase.from('aulas_agenda').insert({
