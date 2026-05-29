@@ -35,21 +35,23 @@ if (Astro.request.method === 'POST') {
   const action = form.get('action') as string;
 
   if (action === 'adicionar_slot') {
-    const dia_semana    = parseInt(form.get('dia_semana') as string);
-    const modalidade    = form.get('modalidade') as string;
+    const dias_raw       = form.getAll('dias_semana') as string[];
+    const dias           = dias_raw.map(d => parseInt(d)).filter(d => d >= 1 && d <= 7);
+    const modalidade     = form.get('modalidade') as string;
     const horario_inicio = form.get('horario_inicio') as string;
     const horario_fim    = form.get('horario_fim') as string;
     const capacidade_max = form.get('capacidade_max') ? parseInt(form.get('capacidade_max') as string) : null;
 
-    if (!dia_semana || !modalidade || !horario_inicio || !horario_fim) {
-      erro = 'Preencha todos os campos obrigatórios.';
+    if (!dias.length || !modalidade || !horario_inicio || !horario_fim) {
+      erro = 'Selecione ao menos um dia e preencha os horários.';
     } else {
-      const { error } = await supabase.from('grade_horaria').insert({
+      const rows = dias.map(dia_semana => ({
         academia_id: profile.academia_id,
         dia_semana, modalidade, horario_inicio, horario_fim, capacidade_max,
-      });
+      }));
+      const { error } = await supabase.from('grade_horaria').insert(rows);
       if (error) erro = error.message;
-      else sucesso = 'Horário adicionado à grade.';
+      else sucesso = `${dias.length} horário${dias.length !== 1 ? 's' : ''} adicionado${dias.length !== 1 ? 's' : ''} à grade.`;
     }
   }
 
@@ -293,9 +295,12 @@ const hojeISO    = new Date().toISOString().split('T')[0];
 
 <!-- ── Modal: Adicionar Horário ── -->
 <div id="modal-add-slot" class="fixed inset-0 z-50 hidden bg-black/70 backdrop-blur-sm">
-  <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+  <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
     <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-      <h2 class="text-sm font-bold text-foreground">Adicionar Horário</h2>
+      <div>
+        <h2 class="text-sm font-bold text-foreground">Adicionar Horário</h2>
+        <p class="text-xs text-muted-foreground mt-0.5">Marque todos os dias em que esta aula se repete</p>
+      </div>
       <button id="btn-fechar-slot" type="button"
         class="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -304,20 +309,13 @@ const hojeISO    = new Date().toISOString().split('T')[0];
       </button>
     </div>
 
-    <form method="POST" class="px-5 py-5 space-y-4">
+    <form method="POST" class="px-5 py-5 space-y-5">
       <input type="hidden" name="action" value="adicionar_slot" />
 
+      <!-- Modalidade -->
       <div>
-        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Dia da Semana *</label>
-        <select id="select-dia" name="dia_semana" required
-          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
-          {DIAS.map(d => <option value={d.num}>{d.label}</option>)}
-        </select>
-      </div>
-
-      <div>
-        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Modalidade *</label>
-        <div id="modal-options" class="grid grid-cols-2 gap-2">
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Modalidade *</label>
+        <div class="grid grid-cols-2 gap-2">
           {(modalidades ?? []).map((m, i) => (
             <label class="cursor-pointer">
               <input type="radio" name="modalidade" value={m.nome} class="sr-only peer" required checked={i === 0} />
@@ -329,6 +327,7 @@ const hojeISO    = new Date().toISOString().split('T')[0];
         </div>
       </div>
 
+      <!-- Horário -->
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Início *</label>
@@ -342,6 +341,23 @@ const hojeISO    = new Date().toISOString().split('T')[0];
         </div>
       </div>
 
+      <!-- Dias da semana (checkboxes) -->
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Dias da Semana *</label>
+        <div class="grid grid-cols-7 gap-1">
+          {DIAS.map(d => (
+            <label class="cursor-pointer flex flex-col items-center gap-1">
+              <input type="checkbox" name="dias_semana" value={d.num}
+                class="sr-only peer" />
+              <span class="w-full text-center rounded-lg border border-border py-2.5 text-[11px] font-bold text-muted-foreground transition-colors peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary hover:border-border/80 hover:text-foreground leading-none">
+                {d.label.slice(0, 3)}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <!-- Capacidade -->
       <div>
         <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Capacidade Máxima</label>
         <input name="capacidade_max" type="number" min="1" placeholder="Sem limite"
@@ -415,10 +431,13 @@ const hojeISO    = new Date().toISOString().split('T')[0];
 <script define:vars={{ hojeISO }}>
   // ── Modal Add Slot ──
   const modalSlot = document.getElementById('modal-add-slot');
-  const selectDia = document.getElementById('select-dia');
 
   function abrirSlot(diaNum) {
-    if (diaNum && selectDia) selectDia.value = String(diaNum);
+    // Se veio de um botão de dia específico, pré-marca o checkbox
+    if (diaNum) {
+      const cb = modalSlot.querySelector(`input[name="dias_semana"][value="${diaNum}"]`);
+      if (cb) cb.checked = true;
+    }
     modalSlot.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   }
