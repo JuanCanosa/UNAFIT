@@ -1,0 +1,480 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient } from '@/lib/supabase';
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id, id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || !['dono', 'colaborador', 'saas_admin'].includes(profile.role))
+  return Astro.redirect('/dashboard');
+
+const DIAS = [
+  { num: 1, label: 'Segunda' },
+  { num: 2, label: 'Terça'   },
+  { num: 3, label: 'Quarta'  },
+  { num: 4, label: 'Quinta'  },
+  { num: 5, label: 'Sexta'   },
+  { num: 6, label: 'Sábado'  },
+  { num: 7, label: 'Domingo' },
+];
+
+let sucesso = '';
+let erro    = '';
+let geradoCount = 0;
+let pulados = 0;
+
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'adicionar_slot') {
+    const dia_semana    = parseInt(form.get('dia_semana') as string);
+    const modalidade    = form.get('modalidade') as string;
+    const horario_inicio = form.get('horario_inicio') as string;
+    const horario_fim    = form.get('horario_fim') as string;
+    const capacidade_max = form.get('capacidade_max') ? parseInt(form.get('capacidade_max') as string) : null;
+
+    if (!dia_semana || !modalidade || !horario_inicio || !horario_fim) {
+      erro = 'Preencha todos os campos obrigatórios.';
+    } else {
+      const { error } = await supabase.from('grade_horaria').insert({
+        academia_id: profile.academia_id,
+        dia_semana, modalidade, horario_inicio, horario_fim, capacidade_max,
+      });
+      if (error) erro = error.message;
+      else sucesso = 'Horário adicionado à grade.';
+    }
+  }
+
+  if (action === 'excluir_slot') {
+    const id = form.get('slot_id') as string;
+    const { error } = await supabase
+      .from('grade_horaria').delete()
+      .eq('id', id).eq('academia_id', profile.academia_id!);
+    if (error) erro = error.message;
+    else sucesso = 'Horário removido.';
+  }
+
+  if (action === 'gerar_semana') {
+    const semana_iso = form.get('semana_iso') as string;
+    if (!semana_iso) { erro = 'Selecione a semana.'; }
+    else {
+      // Encontra a Segunda-feira da semana selecionada
+      const d = new Date(semana_iso + 'T12:00:00');
+      const dow = d.getDay(); // 0=Dom, 1=Seg ... 6=Sáb
+      const diffToMonday = dow === 0 ? -6 : 1 - dow;
+      d.setDate(d.getDate() + diffToMonday);
+      const monday = d.toISOString().split('T')[0];
+
+      const { data: slots } = await supabase
+        .from('grade_horaria')
+        .select('*')
+        .eq('academia_id', profile.academia_id!)
+        .order('dia_semana').order('horario_inicio');
+
+      if (!slots || slots.length === 0) {
+        erro = 'Nenhum horário na grade. Adicione horários primeiro.';
+      } else {
+        for (const slot of slots) {
+          const offset = slot.dia_semana - 1; // dia_semana 1=Seg → offset 0
+          const target = new Date(monday + 'T12:00:00');
+          target.setDate(target.getDate() + offset);
+          const data_aula = target.toISOString().split('T')[0];
+
+          // Verifica se já existe aula neste horário/dia/modalidade
+          const { data: existente } = await supabase
+            .from('aulas_agenda')
+            .select('id')
+            .eq('academia_id', profile.academia_id!)
+            .eq('data_aula', data_aula)
+            .eq('horario_inicio', slot.horario_inicio)
+            .eq('modalidade', slot.modalidade)
+            .maybeSingle();
+
+          if (existente) {
+            pulados++;
+          } else {
+            const { error } = await supabase.from('aulas_agenda').insert({
+              academia_id:    profile.academia_id,
+              modalidade:     slot.modalidade,
+              data_aula,
+              horario_inicio: slot.horario_inicio,
+              horario_fim:    slot.horario_fim,
+              capacidade_max: slot.capacidade_max,
+              criado_por:     user.id,
+            });
+            if (!error) geradoCount++;
+          }
+        }
+
+        if (geradoCount > 0) {
+          const mondayFmt = new Date(monday + 'T12:00:00').toLocaleDateString('pt-BR', { day: 'numeric', month: 'long' });
+          sucesso = `${geradoCount} aula${geradoCount !== 1 ? 's' : ''} criada${geradoCount !== 1 ? 's' : ''} a partir de ${mondayFmt}.${pulados > 0 ? ` (${pulados} já existiam)` : ''}`;
+        } else if (pulados > 0) {
+          erro = `Todas as ${pulados} aulas desta semana já existem na agenda.`;
+        }
+      }
+    }
+  }
+}
+
+const { data: slots } = await supabase
+  .from('grade_horaria')
+  .select('id, dia_semana, modalidade, horario_inicio, horario_fim, capacidade_max')
+  .eq('academia_id', profile.academia_id!)
+  .order('dia_semana').order('horario_inicio');
+
+const { data: modalidades } = await supabase
+  .from('modalidades')
+  .select('id, nome, cor')
+  .eq('academia_id', profile.academia_id!)
+  .eq('ativo', true)
+  .order('ordem');
+
+// Agrupa slots por dia
+const slotsPorDia: Record<number, typeof slots> = {};
+for (const slot of slots ?? []) {
+  if (!slotsPorDia[slot.dia_semana]) slotsPorDia[slot.dia_semana] = [];
+  slotsPorDia[slot.dia_semana]!.push(slot);
+}
+
+const COR: Record<string, string> = {
+  vermelho: 'bg-primary/10 text-primary border-primary/20',
+  verde:    'bg-green-500/10 text-green-400 border-green-500/20',
+  laranja:  'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  azul:     'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  roxo:     'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  amarelo:  'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  rosa:     'bg-pink-500/10 text-pink-400 border-pink-500/20',
+  cinza:    'bg-zinc-500/10 text-zinc-400 border-zinc-500/20',
+};
+
+const modCor: Record<string, string> = Object.fromEntries(
+  (modalidades ?? []).map(m => [m.nome, COR[m.cor] ?? COR['cinza']])
+);
+
+const totalSlots = (slots ?? []).length;
+const hojeISO    = new Date().toISOString().split('T')[0];
+---
+
+<DashboardLayout title="Grade Semanal">
+
+  <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">Grade Semanal</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        Configure a grade padrão e gere a semana inteira com um clique
+      </p>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      <button id="btn-add-slot" type="button"
+        class="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Adicionar Horário
+      </button>
+      <button id="btn-gerar-semana" type="button"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        Gerar Semana
+      </button>
+    </div>
+  </div>
+
+  {sucesso && (
+    <div class="mb-5 flex items-center gap-2 rounded-lg border border-green-600/30 bg-green-900/20 px-4 py-3 text-sm text-green-400">
+      <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      {sucesso}
+      {geradoCount > 0 && (
+        <a href="/dashboard/agenda" class="ml-auto underline underline-offset-2 hover:no-underline shrink-0">
+          Ver agenda →
+        </a>
+      )}
+    </div>
+  )}
+  {erro && (
+    <div class="mb-5 rounded-lg border border-red-600/30 bg-red-900/20 px-4 py-3 text-sm text-red-400">
+      {erro}
+    </div>
+  )}
+
+  {totalSlots === 0 ? (
+    <div class="rounded-xl border border-dashed border-border bg-card py-16 text-center">
+      <svg class="mx-auto mb-3 h-10 w-10 text-muted-foreground/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+      <p class="text-sm font-medium text-muted-foreground">Grade vazia</p>
+      <p class="mt-1 text-xs text-zinc-600">Adicione os horários da sua semana padrão e gere aulas com 1 clique.</p>
+      <button id="btn-add-slot-empty" type="button"
+        class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/20 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Adicionar primeiro horário
+      </button>
+    </div>
+  ) : (
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {DIAS.filter(d => slotsPorDia[d.num]?.length).map(dia => (
+        <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b border-border">
+            <span class="text-xs font-bold uppercase tracking-wider text-foreground">{dia.label}</span>
+            <span class="text-xs text-muted-foreground">{slotsPorDia[dia.num]?.length ?? 0} aula{(slotsPorDia[dia.num]?.length ?? 0) !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="p-2 space-y-1.5">
+            {(slotsPorDia[dia.num] ?? []).map(slot => (
+              <div class:list={['group flex items-center gap-2 rounded-lg border px-3 py-2', modCor[slot.modalidade] ?? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20']}>
+                <div class="flex-1 min-w-0">
+                  <p class="text-xs font-bold truncate">{slot.modalidade}</p>
+                  <p class="text-[11px] opacity-70 mt-0.5">
+                    {slot.horario_inicio.slice(0,5)} – {slot.horario_fim.slice(0,5)}
+                    {slot.capacidade_max ? ` · max ${slot.capacidade_max}` : ''}
+                  </p>
+                </div>
+                <form method="POST" class="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <input type="hidden" name="action" value="excluir_slot" />
+                  <input type="hidden" name="slot_id" value={slot.id} />
+                  <button type="submit"
+                    onclick={`return confirm('Remover este horário da grade?')`}
+                    class="p-1 rounded hover:bg-black/20 transition-colors">
+                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </form>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Dias sem slots — botão add rápido */}
+      {DIAS.filter(d => !slotsPorDia[d.num]?.length).map(dia => (
+        <button type="button"
+          class="btn-add-slot-dia rounded-xl border border-dashed border-border/50 bg-card/50 py-6 text-center text-xs text-muted-foreground/40 hover:border-primary/30 hover:text-primary/60 hover:bg-card transition-colors"
+          data-dia={dia.num} data-label={dia.label}>
+          <span class="block text-xs font-semibold mb-1 uppercase tracking-wider">{dia.label}</span>
+          <span>+ add horário</span>
+        </button>
+      ))}
+    </div>
+  )}
+
+  <!-- Resumo -->
+  {totalSlots > 0 && (
+    <div class="mt-6 rounded-xl border border-border bg-card px-5 py-4 flex items-center justify-between gap-4">
+      <div>
+        <p class="text-sm font-semibold text-foreground">{totalSlots} horário{totalSlots !== 1 ? 's' : ''} na grade</p>
+        <p class="text-xs text-muted-foreground mt-0.5">Ao gerar uma semana, cada horário vira uma aula na agenda</p>
+      </div>
+      <button id="btn-gerar-semana-2" type="button"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shrink-0">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        Gerar Semana
+      </button>
+    </div>
+  )}
+
+</DashboardLayout>
+
+<!-- ── Modal: Adicionar Horário ── -->
+<div id="modal-add-slot" class="fixed inset-0 z-50 hidden bg-black/70 backdrop-blur-sm">
+  <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+      <h2 class="text-sm font-bold text-foreground">Adicionar Horário</h2>
+      <button id="btn-fechar-slot" type="button"
+        class="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form method="POST" class="px-5 py-5 space-y-4">
+      <input type="hidden" name="action" value="adicionar_slot" />
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Dia da Semana *</label>
+        <select id="select-dia" name="dia_semana" required
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
+          {DIAS.map(d => <option value={d.num}>{d.label}</option>)}
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Modalidade *</label>
+        <div id="modal-options" class="grid grid-cols-2 gap-2">
+          {(modalidades ?? []).map((m, i) => (
+            <label class="cursor-pointer">
+              <input type="radio" name="modalidade" value={m.nome} class="sr-only peer" required checked={i === 0} />
+              <span class="flex items-center justify-center rounded-lg border border-border px-2 py-2 text-xs font-semibold text-muted-foreground text-center transition-colors peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary hover:border-border/80 leading-tight">
+                {m.nome}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Início *</label>
+          <input name="horario_inicio" type="time" required value="06:00"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Fim *</label>
+          <input name="horario_fim" type="time" required value="07:00"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Capacidade Máxima</label>
+        <input name="capacidade_max" type="number" min="1" placeholder="Sem limite"
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+      </div>
+
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="btn-cancelar-slot"
+          class="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Adicionar
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Modal: Gerar Semana ── -->
+<div id="modal-gerar" class="fixed inset-0 z-50 hidden bg-black/70 backdrop-blur-sm">
+  <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+      <div>
+        <h2 class="text-sm font-bold text-foreground">Gerar Semana</h2>
+        <p class="text-xs text-muted-foreground mt-0.5">{totalSlots} horário{totalSlots !== 1 ? 's' : ''} serão criados como aulas</p>
+      </div>
+      <button id="btn-fechar-gerar" type="button"
+        class="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <form method="POST" class="px-5 py-5 space-y-4">
+      <input type="hidden" name="action" value="gerar_semana" />
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+          Selecione qualquer dia da semana desejada *
+        </label>
+        <input id="input-semana" name="semana_iso" type="date" required
+          value={hojeISO}
+          class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        <p id="semana-preview" class="mt-2 text-xs text-muted-foreground"></p>
+      </div>
+
+      <div class="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
+        <p class="font-semibold text-foreground/70">O que vai acontecer:</p>
+        <p>• {totalSlots} aulas serão criadas na semana selecionada</p>
+        <p>• Horários que já existem na agenda serão ignorados</p>
+        <p>• Você pode rodar várias vezes sem duplicar</p>
+      </div>
+
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="btn-cancelar-gerar"
+          class="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+          Cancelar
+        </button>
+        <button type="submit"
+          class="flex-1 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+          Gerar Aulas →
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script define:vars={{ hojeISO }}>
+  // ── Modal Add Slot ──
+  const modalSlot = document.getElementById('modal-add-slot');
+  const selectDia = document.getElementById('select-dia');
+
+  function abrirSlot(diaNum) {
+    if (diaNum && selectDia) selectDia.value = String(diaNum);
+    modalSlot.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+  function fecharSlot() {
+    modalSlot.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  document.getElementById('btn-add-slot')?.addEventListener('click', () => abrirSlot(null));
+  document.getElementById('btn-add-slot-empty')?.addEventListener('click', () => abrirSlot(null));
+  document.getElementById('btn-fechar-slot')?.addEventListener('click', fecharSlot);
+  document.getElementById('btn-cancelar-slot')?.addEventListener('click', fecharSlot);
+  modalSlot?.addEventListener('click', e => { if (e.target === modalSlot) fecharSlot(); });
+
+  document.querySelectorAll('.btn-add-slot-dia').forEach(btn => {
+    btn.addEventListener('click', () => abrirSlot(parseInt(btn.dataset.dia)));
+  });
+
+  // ── Modal Gerar Semana ──
+  const modalGerar    = document.getElementById('modal-gerar');
+  const inputSemana   = document.getElementById('input-semana');
+  const semanaPreview = document.getElementById('semana-preview');
+
+  function calcularSemana(iso) {
+    const d = new Date(iso + 'T12:00:00');
+    const dow = d.getDay();
+    const diffToMonday = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(d); mon.setDate(d.getDate() + diffToMonday);
+    const sat = new Date(mon); sat.setDate(mon.getDate() + 5);
+    const fmt = (dt) => dt.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' });
+    return `Semana de ${fmt(mon)} a ${fmt(sat)}`;
+  }
+
+  function atualizarPreview() {
+    if (inputSemana?.value) {
+      semanaPreview.textContent = calcularSemana(inputSemana.value);
+    }
+  }
+
+  function abrirGerar() {
+    modalGerar.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    atualizarPreview();
+  }
+  function fecharGerar() {
+    modalGerar.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  document.getElementById('btn-gerar-semana')?.addEventListener('click', abrirGerar);
+  document.getElementById('btn-gerar-semana-2')?.addEventListener('click', abrirGerar);
+  document.getElementById('btn-fechar-gerar')?.addEventListener('click', fecharGerar);
+  document.getElementById('btn-cancelar-gerar')?.addEventListener('click', fecharGerar);
+  modalGerar?.addEventListener('click', e => { if (e.target === modalGerar) fecharGerar(); });
+  inputSemana?.addEventListener('change', atualizarPreview);
+
+  // Inicializa preview
+  atualizarPreview();
+</script>
