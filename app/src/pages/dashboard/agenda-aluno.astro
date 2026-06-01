@@ -32,8 +32,7 @@ const semana = Array.from({ length: 7 }, (_, i) => addDays(hojeISO, i));
 // ── Aulas do dia selecionado ──────────────────────────────────────────────────
 const admin = createSupabaseAdminClient();
 
-// Modalidade restrita pelo plano ativo do aluno
-let modalidadePlano: string | null = null;
+// Busca vínculo e modalidades do aluno diretamente em aluno_modalidades
 const { data: vinculoAluno } = await admin
   .from('aluno_academias')
   .select('aluno_id')
@@ -42,16 +41,14 @@ const { data: vinculoAluno } = await admin
   .eq('ativo', true)
   .maybeSingle();
 
+let modalidadesAluno: string[] = [];
 if (vinculoAluno?.aluno_id) {
-  const { data: ap } = await admin
-    .from('aluno_planos')
-    .select('planos(modalidade)')
+  const { data: mods } = await admin
+    .from('aluno_modalidades')
+    .select('modalidade')
     .eq('aluno_id', vinculoAluno.aluno_id)
-    .eq('status', 'ativo')
-    .order('data_inicio', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  modalidadePlano = (ap as any)?.planos?.modalidade ?? null;
+    .eq('academia_id', profile.academia_id!);
+  modalidadesAluno = (mods ?? []).map((m: any) => m.modalidade);
 }
 
 let aulasQuery = supabase
@@ -61,8 +58,8 @@ let aulasQuery = supabase
   .eq('data_aula', diaISO)
   .order('horario_inicio');
 
-if (modalidadePlano) {
-  aulasQuery = aulasQuery.eq('modalidade', modalidadePlano);
+if (modalidadesAluno.length > 0) {
+  aulasQuery = aulasQuery.in('modalidade', modalidadesAluno);
 }
 const { data: aulas } = await aulasQuery;
 
