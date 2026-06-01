@@ -45,19 +45,21 @@ if (vinculoAluno?.aluno_id) {
   modalidadesAluno = (mods ?? []).map((m: any) => m.modalidade);
 }
 
-// Aulas de hoje — filtradas pelas modalidades do aluno (se configuradas)
-// Se nenhuma modalidade configurada, o aluno vê todas as aulas
-let aulasQuery = supabase
-  .from('aulas_agenda')
-  .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, wods(nome, score_type, treino)')
-  .eq('academia_id', profile.academia_id!)
-  .eq('data_aula', hojeISO)
-  .order('horario_inicio');
+// Aluno sem modalidade configurada não pode fazer check-in
+const semModalidade = modalidadesAluno.length === 0;
 
-if (modalidadesAluno.length > 0) {
-  aulasQuery = aulasQuery.in('modalidade', modalidadesAluno);
+// Aulas de hoje — apenas se o aluno tiver modalidades configuradas
+let aulas: any[] = [];
+if (!semModalidade) {
+  const { data } = await supabase
+    .from('aulas_agenda')
+    .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, wods(nome, score_type, treino)')
+    .eq('academia_id', profile.academia_id!)
+    .eq('data_aula', hojeISO)
+    .in('modalidade', modalidadesAluno)
+    .order('horario_inicio');
+  aulas = data ?? [];
 }
-const { data: aulas } = await aulasQuery;
 
 const aulaIds = aulas?.map(a => a.id) ?? [];
 
@@ -133,6 +135,7 @@ const hoje = new Date().toLocaleDateString('pt-BR', {
   )}
 
   <!-- Cabeçalho -->
+
   <div class="mb-6">
     <p class="text-xs font-medium uppercase tracking-widest text-primary mb-1">{hoje}</p>
     <h1 class="text-2xl font-bold text-foreground">Check-in</h1>
@@ -142,7 +145,22 @@ const hoje = new Date().toLocaleDateString('pt-BR', {
   </div>
 
   <!-- Lista de aulas -->
-  {!aulas || aulas.length === 0 ? (
+  {semModalidade ? (
+
+    <div class="flex flex-col items-center justify-center py-20 text-center">
+      <div class="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-red-500/10 border border-red-500/20">
+        <svg class="h-10 w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+        </svg>
+      </div>
+      <p class="text-lg font-bold text-foreground">Sem modalidade configurada</p>
+      <p class="mt-2 text-sm text-muted-foreground max-w-xs leading-relaxed">
+        Você ainda não está inscrito em nenhuma modalidade de aula.<br />
+        Entre em contato com o responsável pela academia para regularizar sua inscrição.
+      </p>
+    </div>
+
+  ) : !aulas || aulas.length === 0 ? (
 
     <div class="flex flex-col items-center justify-center py-20 text-center">
       <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-800 border border-border">
