@@ -200,18 +200,26 @@ if (Astro.request.method === 'POST') {
 // ── Check-in: alunos elegíveis e presenças já registradas ────────────────────
 const adminCheckin = createSupabaseAdminClient();
 
-const [{ data: todosAlunos }, { data: checkinsAulaData }] = await Promise.all([
-  supabase
+const [{ data: todosAlunos }, { data: checkinsAulaData }, { data: alunosNaModalidade }] = await Promise.all([
+  adminCheckin
     .from('alunos')
-    .select(`id, nome, aluno_planos(id, status, planos(nome, modalidade))`)
+    .select(`id, nome, aluno_planos(id, status, planos(nome))`)
     .eq('academia_id', profile.academia_id!)
     .eq('status', 'ativo')
     .order('nome'),
-  supabase
+  adminCheckin
     .from('checkins')
     .select('id, aluno_id')
     .eq('aula_id', aulaId),
+  // Alunos inscritos na modalidade desta aula
+  adminCheckin
+    .from('aluno_modalidades')
+    .select('aluno_id')
+    .eq('academia_id', profile.academia_id!)
+    .eq('modalidade', aula.modalidade),
 ]);
+
+const idsNaModalidade = new Set((alunosNaModalidade ?? []).map((m: any) => m.aluno_id));
 
 // Busca profile_id de cada aluno via aluno_academias
 const alunoIds = (todosAlunos ?? []).map((a: any) => a.id);
@@ -225,18 +233,15 @@ const profileIdPorAluno: Record<string, string> = Object.fromEntries(
 );
 const profilesComCheckin = new Set((checkinsAulaData ?? []).map((c: any) => c.aluno_id));
 
-// Filtra elegíveis: plano ativo com modalidade compatível (ou sem restrição)
+// Elegível = aluno ativo inscrito na modalidade desta aula (via aluno_modalidades)
 const alunosElegiveis = (todosAlunos ?? [])
+  .filter((a: any) => idsNaModalidade.has(a.id))
   .map((a: any) => {
     const planoAtivo = (a.aluno_planos ?? []).find((ap: any) => ap.status === 'ativo');
-    const modPlano   = planoAtivo?.planos?.modalidade ?? null;
-    const elegivel   = !!planoAtivo && (!modPlano || modPlano === aula.modalidade);
     const profileId  = profileIdPorAluno[a.id] ?? null;
     return { id: a.id, nome: a.nome, planoNome: planoAtivo?.planos?.nome ?? '—',
-             profileId, jaFezCheckin: profileId ? profilesComCheckin.has(profileId) : false,
-             elegivel };
-  })
-  .filter((a: any) => a.elegivel);
+             profileId, jaFezCheckin: profileId ? profilesComCheckin.has(profileId) : false };
+  });
 
 const totalCheckinManual = alunosElegiveis.filter((a: any) => a.jaFezCheckin).length;
 
