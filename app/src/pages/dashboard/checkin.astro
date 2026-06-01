@@ -25,8 +25,7 @@ const { data: academia } = await admin
   .eq('id', profile.academia_id!)
   .single();
 
-// Modalidade restrita pelo plano ativo do aluno
-let modalidadePlano: string | null = null;
+// Busca o vínculo do aluno (profile_id → aluno_id)
 const { data: vinculoAluno } = await admin
   .from('aluno_academias')
   .select('aluno_id')
@@ -35,19 +34,19 @@ const { data: vinculoAluno } = await admin
   .eq('ativo', true)
   .maybeSingle();
 
+// Modalidades vinculadas diretamente ao aluno (sem passar pelo plano)
+let modalidadesAluno: string[] = [];
 if (vinculoAluno?.aluno_id) {
-  const { data: ap } = await admin
-    .from('aluno_planos')
-    .select('planos(modalidade)')
+  const { data: mods } = await admin
+    .from('aluno_modalidades')
+    .select('modalidade')
     .eq('aluno_id', vinculoAluno.aluno_id)
-    .eq('status', 'ativo')
-    .order('data_inicio', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  modalidadePlano = (ap as any)?.planos?.modalidade ?? null;
+    .eq('academia_id', profile.academia_id!);
+  modalidadesAluno = (mods ?? []).map((m: any) => m.modalidade);
 }
 
-// Aulas de hoje — filtradas pela modalidade do plano (se restrito)
+// Aulas de hoje — filtradas pelas modalidades do aluno (se configuradas)
+// Se nenhuma modalidade configurada, o aluno vê todas as aulas
 let aulasQuery = supabase
   .from('aulas_agenda')
   .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, modalidade, wods(nome, score_type, treino)')
@@ -55,8 +54,8 @@ let aulasQuery = supabase
   .eq('data_aula', hojeISO)
   .order('horario_inicio');
 
-if (modalidadePlano) {
-  aulasQuery = aulasQuery.eq('modalidade', modalidadePlano);
+if (modalidadesAluno.length > 0) {
+  aulasQuery = aulasQuery.in('modalidade', modalidadesAluno);
 }
 const { data: aulas } = await aulasQuery;
 
