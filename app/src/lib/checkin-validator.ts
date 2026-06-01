@@ -56,9 +56,14 @@ export async function validarCheckin({
     return { permitido: false, motivo: 'AULA_NAO_ENCONTRADA' };
   }
 
-  // 2. A aula deve ser de hoje (fuso de Brasília)
+  // 2. A aula deve ser de hoje E não pode ter encerrado há mais de 10 min
   const hojeISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(agora);
   if (aula.data_aula !== hojeISO) {
+    return { permitido: false, motivo: 'AULA_NAO_DISPONIVEL' };
+  }
+  const hFim = aula.horario_fim.length === 5 ? aula.horario_fim + ':00' : aula.horario_fim;
+  const fechamento = new Date(new Date(`${aula.data_aula}T${hFim}-03:00`).getTime() + 10 * 60_000);
+  if (agora > fechamento) {
     return { permitido: false, motivo: 'AULA_NAO_DISPONIVEL' };
   }
 

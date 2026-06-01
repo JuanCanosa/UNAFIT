@@ -58,7 +58,14 @@ if (!semModalidade) {
     .eq('data_aula', hojeISO)
     .in('modalidade', modalidadesAluno)
     .order('horario_inicio');
-  aulas = data ?? [];
+
+  // Exibe apenas aulas que ainda não encerraram há mais de 10 min (fuso Brasília)
+  const agora = new Date();
+  aulas = (data ?? []).filter(a => {
+    const hFim = a.horario_fim.length === 5 ? a.horario_fim + ':00' : a.horario_fim;
+    const fechamento = new Date(new Date(`${a.data_aula}T${hFim}-03:00`).getTime() + 10 * 60_000);
+    return agora <= fechamento;
+  });
 }
 
 const aulaIds = aulas?.map(a => a.id) ?? [];
