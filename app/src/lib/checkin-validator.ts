@@ -2,8 +2,13 @@
  * Lógica de validação do check-in — executada APENAS no servidor (Astro SSR).
  *
  * Regras vigentes:
- *  1. Janela de Tempo: 10min antes do início até 10min após o FIM da aula.
+ *  1. A aula deve ser do dia de hoje (fuso de Brasília).
  *  2. Sem check-in duplicado na mesma aula.
+ *  3. Modalidade: se o aluno tiver modalidades configuradas, a aula deve ser de uma delas.
+ *  4. Capacidade máxima não pode ser excedida.
+ *
+ * Removido: janela de horário (10min antes/depois) — aluno pode fazer check-in
+ * em qualquer horário do dia da aula.
  *
  * Nota: a trava financeira foi removida por decisão de produto — o aluno
  * com pendências vê apenas um banner informativo, mas pode treinar normalmente.
@@ -12,11 +17,8 @@
 import { createSupabaseAdminClient } from './supabase';
 import type { AulaAgenda } from '@/types/database';
 
-const MINUTOS_ANTES_INICIO = 10;
-const MINUTOS_APOS_FIM     = 10;
-
 export type MotivoCheckin =
-  | 'FORA_DA_JANELA'
+  | 'AULA_NAO_DISPONIVEL'
   | 'JA_REALIZADO'
   | 'AULA_NAO_ENCONTRADA'
   | 'ALUNO_INATIVO'
@@ -54,9 +56,10 @@ export async function validarCheckin({
     return { permitido: false, motivo: 'AULA_NAO_ENCONTRADA' };
   }
 
-  // 2. Janela de tempo
-  if (!verificarJanelaTempo(aula, agora)) {
-    return { permitido: false, motivo: 'FORA_DA_JANELA' };
+  // 2. A aula deve ser de hoje (fuso de Brasília)
+  const hojeISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(agora);
+  if (aula.data_aula !== hojeISO) {
+    return { permitido: false, motivo: 'AULA_NAO_DISPONIVEL' };
   }
 
   // 3. Check-in duplicado + vínculo do aluno em paralelo
@@ -98,19 +101,4 @@ export async function validarCheckin({
   }
 
   return { permitido: true };
-}
-
-function verificarJanelaTempo(aula: AulaAgenda, agora: Date): boolean {
-  // Horários armazenados no fuso de Brasília (UTC-3) — offset explícito para comparação correta
-  const inicio     = parseBrazilDatetime(aula.data_aula, aula.horario_inicio);
-  const fim        = parseBrazilDatetime(aula.data_aula, aula.horario_fim);
-  const abertura   = new Date(inicio.getTime() - MINUTOS_ANTES_INICIO * 60_000);
-  const fechamento = new Date(fim.getTime()    + MINUTOS_APOS_FIM     * 60_000);
-  return agora >= abertura && agora <= fechamento;
-}
-
-function parseBrazilDatetime(data: string, horario: string): Date {
-  // Garante segundos para o formato ISO e usa offset -03:00 de Brasília
-  const hh = horario.length === 5 ? horario + ':00' : horario;
-  return new Date(`${data}T${hh}-03:00`);
 }

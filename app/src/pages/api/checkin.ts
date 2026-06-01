@@ -4,7 +4,7 @@ import { validarCheckin } from '@/lib/checkin-validator';
 import type { Profile } from '@/types/database';
 
 const MENSAGENS: Record<string, string> = {
-  FORA_DA_JANELA:      'Check-in indisponível no momento. Tente entre 10 minutos antes do início e 10 minutos após o fim da aula.',
+  AULA_NAO_DISPONIVEL: 'O check-in só está disponível no dia da aula.',
   JA_REALIZADO:        'Você já realizou check-in nesta aula.',
   AULA_NAO_ENCONTRADA: 'Aula não encontrada.',
   ALUNO_INATIVO:       'Sua conta está inativa. Contate a academia.',
