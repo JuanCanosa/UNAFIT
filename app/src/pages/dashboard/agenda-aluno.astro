@@ -102,6 +102,60 @@ const checkinCountMap = new Map<string, number>();
   checkinCountMap.set(c.aula_id, (checkinCountMap.get(c.aula_id) ?? 0) + 1);
 });
 
+// ── PRs do aluno e ranking da turma nas aulas confirmadas ────────────────────
+const confirmedIds = aulaIds.filter(id => checkinsFeitosSet.has(id));
+const [{ data: meusPRs }, { data: rankingTodos }] = await Promise.all([
+  confirmedIds.length > 0
+    ? admin.from('prs')
+        .select('id, aula_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, observacao')
+        .eq('aluno_id', user.id)
+        .in('aula_id', confirmedIds)
+    : Promise.resolve({ data: [] as any[] }),
+  confirmedIds.length > 0
+    ? admin.from('prs')
+        .select('aula_id, aluno_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, profiles(nome_completo)')
+        .eq('academia_id', profile.academia_id!)
+        .in('aula_id', confirmedIds)
+    : Promise.resolve({ data: [] as any[] }),
+]);
+
+const meuPRPorAula = new Map<string, any>(
+  (meusPRs ?? []).map((p: any) => [p.aula_id, p])
+);
+
+// Agrupa e ordena ranking por aula
+function scoreNum(pr: any): number {
+  if (pr.tipo === 'peso')        return pr.valor_peso ?? 0;
+  if (pr.tipo === 'tempo')       return -(pr.valor_tempo_seg ?? 999999);
+  if (pr.tipo === 'reps')        return pr.valor_reps ?? 0;
+  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
+  return 0;
+}
+function fmtScore(pr: any): string {
+  if (pr.tipo === 'peso') return `${pr.valor_peso} kg`;
+  if (pr.tipo === 'reps') return `${pr.valor_reps} rep${pr.valor_reps !== 1 ? 's' : ''}`;
+  if (pr.tipo === 'rounds_reps') {
+    const r = pr.valor_rounds ?? 0;
+    const x = pr.valor_reps_extra;
+    return x ? `${r} rounds + ${x}` : `${r} rounds`;
+  }
+  if (pr.tipo === 'tempo' && pr.valor_tempo_seg != null) {
+    const m = Math.floor(pr.valor_tempo_seg / 60);
+    const s = pr.valor_tempo_seg % 60;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+  return '—';
+}
+
+const rankingPorAula = new Map<string, any[]>();
+for (const pr of rankingTodos ?? []) {
+  if (!rankingPorAula.has(pr.aula_id)) rankingPorAula.set(pr.aula_id, []);
+  rankingPorAula.get(pr.aula_id)!.push(pr);
+}
+for (const [id, lista] of rankingPorAula) {
+  rankingPorAula.set(id, lista.sort((a: any, b: any) => scoreNum(b) - scoreNum(a)));
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const DIAS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -322,13 +376,84 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
                 </button>
               )}
 
-              <!-- Botão de ação -->
+              <!-- Botão de ação / resultado -->
               {jaFez ? (
-                <div class="flex items-center justify-center gap-2 py-3 rounded-xl bg-[#00FF85]/5 border border-[#00FF85]/20 text-sm font-bold text-[#00FF85]">
-                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Presença confirmada!
+                <div class="space-y-2">
+                  <div class="flex items-center justify-center gap-2 py-3 rounded-xl bg-[#00FF85]/5 border border-[#00FF85]/20 text-sm font-bold text-[#00FF85]">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Presença confirmada!
+                  </div>
+
+                  {/* Resultado + ranking — só para WODs com score mensurável */}
+                  {wod?.score_type && wod.score_type !== 'pass_fail' && (() => {
+                    const meuPR   = meuPRPorAula.get(aula.id);
+                    const ranking = rankingPorAula.get(aula.id) ?? [];
+                    const minhaPosicao = meuPR
+                      ? ranking.findIndex((r: any) => r.aluno_id === user.id) + 1
+                      : null;
+                    return (
+                      <div class="rounded-xl bg-zinc-900/60 border border-zinc-800 overflow-hidden">
+                        {/* Meu resultado */}
+                        {meuPR ? (
+                          <div class="px-3 py-2.5 border-b border-zinc-800 flex items-center justify-between gap-2">
+                            <div>
+                              <p class="text-[10px] font-bold text-[#00FF85] uppercase tracking-widest">Meu resultado</p>
+                              <p class="text-base font-black text-white mt-0.5">{fmtScore(meuPR)}</p>
+                              <div class="flex items-center gap-2 mt-0.5">
+                                {meuPR.rx && <span class="text-[9px] font-bold text-[#00FF85] bg-[#00FF85]/10 px-1.5 py-0.5 rounded">RX</span>}
+                                {minhaPosicao && <span class="text-[10px] text-zinc-500">#{minhaPosicao} na turma</span>}
+                                {meuPR.observacao && <span class="text-[10px] text-zinc-600 italic truncate">{meuPR.observacao}</span>}
+                              </div>
+                            </div>
+                            <button
+                              class="registrar-btn shrink-0 text-[10px] font-bold text-zinc-500 border border-zinc-700 px-2.5 py-1.5 rounded-lg hover:border-[#00FF85]/40 hover:text-[#00FF85] transition-all"
+                              data-aula-id={aula.id}
+                              data-score-type={wod.score_type}
+                              data-wod-nome={wod.nome}>
+                              Atualizar
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            class="registrar-btn w-full px-3 py-3 text-sm font-bold text-zinc-300 hover:text-[#00FF85] flex items-center justify-center gap-2 transition-colors"
+                            data-aula-id={aula.id}
+                            data-score-type={wod.score_type}
+                            data-wod-nome={wod.nome}>
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            Registrar Resultado
+                          </button>
+                        )}
+
+                        {/* Mini-ranking turma */}
+                        {ranking.length > 0 && (
+                          <div class="px-3 py-2">
+                            <p class="text-[9px] font-bold text-zinc-600 uppercase tracking-widest mb-1.5">Ranking da Turma</p>
+                            <div class="space-y-1">
+                              {ranking.slice(0, 5).map((r: any, i: number) => {
+                                const isMe = r.aluno_id === user.id;
+                                const nome = (r.profiles as any)?.nome_completo?.split(' ')[0] ?? 'Atleta';
+                                const medalhas = ['🥇','🥈','🥉'];
+                                return (
+                                  <div class={`flex items-center gap-2 text-xs rounded-lg px-2 py-1 ${isMe ? 'bg-[#00FF85]/5 border border-[#00FF85]/20' : ''}`}>
+                                    <span class="w-5 text-center shrink-0">
+                                      {i < 3 ? medalhas[i] : <span class="text-zinc-600 font-bold">{i+1}</span>}
+                                    </span>
+                                    <span class={`flex-1 truncate font-medium ${isMe ? 'text-[#00FF85]' : 'text-zinc-400'}`}>{nome}</span>
+                                    {r.rx && <span class="text-[9px] font-bold text-[#00FF85]/60 bg-[#00FF85]/5 px-1 rounded">RX</span>}
+                                    <span class={`shrink-0 font-bold ${isMe ? 'text-[#00FF85]' : 'text-zinc-300'}`}>{fmtScore(r)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : semVagas ? (
                 <button disabled class="w-full rounded-xl bg-zinc-800 py-3 text-sm font-bold text-zinc-600 cursor-not-allowed flex items-center justify-center gap-2">
@@ -400,6 +525,112 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
     </div>
   </div>
 
+  <!-- Modal Registrar Resultado -->
+  <div id="resultado-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-[#0a0a0a] border border-zinc-800 shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+        <div>
+          <p id="res-score-label" class="text-[10px] font-bold text-[#00FF85] uppercase tracking-widest mb-0.5"></p>
+          <h2 id="res-wod-nome" class="text-sm font-black text-white"></h2>
+        </div>
+        <button id="res-fechar" class="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-400 hover:text-white transition-colors">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <form id="resultado-form" class="px-5 py-4 space-y-4">
+        <input type="hidden" id="res-aula-id" name="aula_id" />
+        <input type="hidden" id="res-score-type" name="score_type" />
+
+        <!-- Tempo -->
+        <div id="campo-tempo" class="hidden">
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Tempo</label>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <input id="res-min" name="valor_min" type="number" min="0" max="999" placeholder="Minutos"
+                class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+              <p class="text-center text-[10px] text-zinc-600 mt-1">min</p>
+            </div>
+            <div>
+              <input id="res-sec" name="valor_sec" type="number" min="0" max="59" placeholder="Segundos"
+                class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+              <p class="text-center text-[10px] text-zinc-600 mt-1">seg</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reps -->
+        <div id="campo-reps" class="hidden">
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Repetições</label>
+          <input name="valor_reps" type="number" min="1" placeholder="ex: 150"
+            class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+        </div>
+
+        <!-- Carga -->
+        <div id="campo-carga" class="hidden">
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Carga (kg)</label>
+          <input name="valor_peso" type="number" min="0" step="0.5" placeholder="ex: 60"
+            class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+        </div>
+
+        <!-- Rounds + Reps -->
+        <div id="campo-rounds" class="hidden">
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Rounds + Reps</label>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <input name="valor_rounds" type="number" min="0" placeholder="Rounds"
+                class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+              <p class="text-center text-[10px] text-zinc-600 mt-1">rounds</p>
+            </div>
+            <div>
+              <input name="valor_reps_extra" type="number" min="0" placeholder="+ Reps"
+                class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-white text-base font-mono text-center focus:outline-none focus:border-[#00FF85]/50" />
+              <p class="text-center text-[10px] text-zinc-600 mt-1">+ reps</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- RX / Scaled -->
+        <div>
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Modalidade</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="cursor-pointer">
+              <input type="radio" name="rx" value="false" class="sr-only peer" checked />
+              <span class="block text-center py-2.5 rounded-xl border border-zinc-700 text-sm font-bold text-zinc-400
+                peer-checked:border-zinc-500 peer-checked:bg-zinc-800 peer-checked:text-white transition-all">
+                Scaled
+              </span>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="rx" value="true" class="sr-only peer" />
+              <span class="block text-center py-2.5 rounded-xl border border-zinc-700 text-sm font-bold text-zinc-400
+                peer-checked:border-[#00FF85]/50 peer-checked:bg-[#00FF85]/10 peer-checked:text-[#00FF85] transition-all">
+                RX
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Observação -->
+        <div>
+          <label class="block text-xs text-zinc-500 mb-1.5 uppercase tracking-wider font-bold">Observação <span class="normal-case font-normal">(opcional)</span></label>
+          <input name="observacao" type="text" placeholder="ex: novo PR, lesão..."
+            class="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-[#00FF85]/50" />
+        </div>
+
+        <p id="res-erro" class="hidden text-xs text-red-400 text-center"></p>
+
+        <button type="submit" id="res-submit"
+          class="w-full rounded-xl py-3.5 text-sm font-black text-black transition-all"
+          style="background: #00FF85;">
+          Salvar Resultado
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="hidden fixed bottom-6 left-4 right-4 z-50 max-w-sm mx-auto rounded-xl border px-4 py-3 text-sm font-bold text-center shadow-2xl"></div>
 
@@ -416,6 +647,103 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
 </style>
 
 <script>
+  // ── Modal Registrar Resultado ────────────────────────────────────────────────
+  const resModal    = document.getElementById('resultado-modal')!;
+  const resForm     = document.getElementById('resultado-form') as HTMLFormElement;
+  const resAulaId   = document.getElementById('res-aula-id')     as HTMLInputElement;
+  const resScoreType= document.getElementById('res-score-type')   as HTMLInputElement;
+  const resNome     = document.getElementById('res-wod-nome')!;
+  const resLabel    = document.getElementById('res-score-label')!;
+  const resErro     = document.getElementById('res-erro')!;
+  const resSubmit   = document.getElementById('res-submit') as HTMLButtonElement;
+
+  const SCORE_LABELS: Record<string, string> = {
+    tempo: 'Para Tempo', reps: 'Max Reps', carga: 'Max Carga',
+    rounds_reps: 'AMRAP — Rounds + Reps',
+  };
+
+  function abrirResultado(btn: HTMLElement) {
+    const aulaId    = btn.dataset.aulaId!;
+    const scoreType = btn.dataset.scoreType!;
+    const wodNome   = btn.dataset.wodNome ?? '';
+
+    resAulaId.value    = aulaId;
+    resScoreType.value = scoreType;
+    resNome.textContent  = wodNome;
+    resLabel.textContent = SCORE_LABELS[scoreType] ?? scoreType;
+
+    // Mostra campo correto
+    ['campo-tempo','campo-reps','campo-carga','campo-rounds'].forEach(id => {
+      document.getElementById(id)!.classList.add('hidden');
+    });
+    if (scoreType === 'tempo')       document.getElementById('campo-tempo')!.classList.remove('hidden');
+    if (scoreType === 'reps')        document.getElementById('campo-reps')!.classList.remove('hidden');
+    if (scoreType === 'carga')       document.getElementById('campo-carga')!.classList.remove('hidden');
+    if (scoreType === 'rounds_reps') document.getElementById('campo-rounds')!.classList.remove('hidden');
+
+    resErro.classList.add('hidden');
+    resForm.reset();
+    resAulaId.value    = aulaId;
+    resScoreType.value = scoreType;
+    resModal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function fecharResultado() {
+    resModal.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  document.getElementById('res-fechar')?.addEventListener('click', fecharResultado);
+  resModal.addEventListener('click', e => { if (e.target === resModal) fecharResultado(); });
+
+  document.querySelectorAll<HTMLElement>('.registrar-btn').forEach(btn => {
+    btn.addEventListener('click', () => abrirResultado(btn));
+  });
+
+  resForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    resErro.classList.add('hidden');
+    resSubmit.disabled = true;
+    resSubmit.textContent = 'Salvando...';
+
+    const fd = new FormData(resForm);
+    try {
+      const res = await fetch('/api/prs/registrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aula_id:          fd.get('aula_id'),
+          score_type:       fd.get('score_type'),
+          valor_min:        fd.get('valor_min')        || null,
+          valor_sec:        fd.get('valor_sec')        || null,
+          valor_reps:       fd.get('valor_reps')       || null,
+          valor_peso:       fd.get('valor_peso')       || null,
+          valor_rounds:     fd.get('valor_rounds')     || null,
+          valor_reps_extra: fd.get('valor_reps_extra') || null,
+          rx:               fd.get('rx') === 'true',
+          observacao:       fd.get('observacao')       || null,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        fecharResultado();
+        window.location.reload();
+      } else {
+        resErro.textContent = data.error ?? 'Erro ao salvar.';
+        resErro.classList.remove('hidden');
+        resSubmit.disabled = false;
+        resSubmit.textContent = 'Salvar Resultado';
+      }
+    } catch {
+      resErro.textContent = 'Erro de conexão.';
+      resErro.classList.remove('hidden');
+      resSubmit.disabled = false;
+      resSubmit.textContent = 'Salvar Resultado';
+    }
+  });
+
+  // ── Toast ────────────────────────────────────────────────────────────────────
   const toast = document.getElementById('toast')!;
 
   function showToast(msg: string, ok: boolean) {
