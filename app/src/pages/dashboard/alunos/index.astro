@@ -19,8 +19,21 @@ const busca        = url.searchParams.get('q')         || '';
 const filtroStatus = url.searchParams.get('status')    || '';
 const filtroPlano  = url.searchParams.get('plano')     || '';
 const filtroCat    = url.searchParams.get('categoria') || '';
+const paginaAtual  = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
+const PER_PAGE     = 20;
+const offset       = (paginaAtual - 1) * PER_PAGE;
 
-// Busca paralela de alunos + listas de filtros
+// Se filtrar por plano, resolve IDs no banco antes (evita paginação errada)
+let filtroAlunoIds: string[] | null = null;
+if (filtroPlano) {
+  const { data: apResult } = await supabase
+    .from('aluno_planos')
+    .select('aluno_id')
+    .eq('plano_id', filtroPlano)
+    .eq('status', 'ativo');
+  filtroAlunoIds = (apResult ?? []).map((ap: any) => ap.aluno_id);
+}
+
 let query = supabase
   .from('alunos')
   .select(`
@@ -28,16 +41,23 @@ let query = supabase
     categorias_alunos(id, nome, cor),
     aluno_planos(id, status, planos(id, nome)),
     aluno_modalidades(modalidade)
-  `)
+  `, { count: 'exact' })
   .eq('academia_id', profile.academia_id!)
-  .order('nome');
+  .order('nome')
+  .range(offset, offset + PER_PAGE - 1);
 
-if (busca)        query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
-if (filtroStatus) query = query.eq('status', filtroStatus);
-if (filtroCat)    query = query.eq('categoria_id', filtroCat);
+if (busca)          query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
+if (filtroStatus)   query = query.eq('status', filtroStatus);
+if (filtroCat)      query = query.eq('categoria_id', filtroCat);
+if (filtroAlunoIds !== null) {
+  // Se nenhum aluno bate com o plano, garante resultado vazio
+  query = filtroAlunoIds.length > 0
+    ? query.in('id', filtroAlunoIds)
+    : query.eq('id', '00000000-0000-0000-0000-000000000000');
+}
 
 const [
-  { data: todosAlunos },
+  { data: alunos, count: totalCount },
   { data: planos },
   { data: categorias },
 ] = await Promise.all([
@@ -46,12 +66,33 @@ const [
   supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
 ]);
 
-// Filtro por plano feito em JS (requer join por aluno_planos)
-const alunos = filtroPlano
-  ? (todosAlunos ?? []).filter((a: any) =>
-      a.aluno_planos?.some((ap: any) => ap.status === 'ativo' && ap.planos?.id === filtroPlano)
-    )
-  : (todosAlunos ?? []);
+const totalAlunos = totalCount ?? 0;
+const totalPages  = Math.ceil(totalAlunos / PER_PAGE);
+
+// Monta URL base preservando filtros (sem page)
+function buildUrl(page: number) {
+  const p = new URLSearchParams();
+  if (busca)        p.set('q',         busca);
+  if (filtroStatus) p.set('status',    filtroStatus);
+  if (filtroPlano)  p.set('plano',     filtroPlano);
+  if (filtroCat)    p.set('categoria', filtroCat);
+  if (page > 1)     p.set('page',      String(page));
+  const qs = p.toString();
+  return `/dashboard/alunos${qs ? `?${qs}` : ''}`;
+}
+
+// Páginas a exibir no paginador (máx 7 botões)
+function getPaginasBotoes(atual: number, total: number): (number | '...')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const set = new Set([1, total, atual, atual - 1, atual + 1].filter(p => p >= 1 && p <= total));
+  const sorted = [...set].sort((a, b) => a - b);
+  const result: (number | '...')[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && (sorted[i] as number) - (sorted[i - 1] as number) > 1) result.push('...');
+    result.push(sorted[i]);
+  }
+  return result;
+}
 
 const statusCores: Record<string, string> = {
   ativo:    'bg-green-900/50 text-green-400 border border-green-800/50',
@@ -61,6 +102,8 @@ const statusCores: Record<string, string> = {
 
 const canEdit   = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
+const inicioPag = totalAlunos === 0 ? 0 : offset + 1;
+const fimPag    = Math.min(offset + PER_PAGE, totalAlunos);
 ---
 
 <DashboardLayout title="Alunos">
@@ -71,7 +114,8 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
       <div>
         <h1 class="text-2xl font-bold text-white">Alunos</h1>
         <p class="text-zinc-400 text-sm mt-0.5">
-          {alunos.length} aluno{alunos.length !== 1 ? 's' : ''} encontrado{alunos.length !== 1 ? 's' : ''}
+          {totalAlunos} aluno{totalAlunos !== 1 ? 's' : ''} encontrado{totalAlunos !== 1 ? 's' : ''}
+          {totalPages > 1 && <span class="text-zinc-600"> · {inicioPag}–{fimPag}</span>}
         </p>
       </div>
       <div class="flex items-center gap-2 shrink-0">
@@ -288,6 +332,54 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
             </tbody>
           </table>
         </div>
+
+      <!-- ── Paginador ─────────────────────────────────────────────────── -->
+      {totalPages > 1 && (
+        <div class="flex items-center justify-center gap-1.5 pt-4 pb-1 no-print">
+          {paginaAtual > 1 ? (
+            <a href={buildUrl(paginaAtual - 1)}
+              class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white transition-colors">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+              </svg>
+            </a>
+          ) : (
+            <span class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-700 cursor-not-allowed">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+              </svg>
+            </span>
+          )}
+          {getPaginasBotoes(paginaAtual, totalPages).map(p =>
+            p === '...' ? (
+              <span class="flex h-9 w-9 items-center justify-center text-zinc-600 text-sm select-none">…</span>
+            ) : p === paginaAtual ? (
+              <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-black text-sm font-bold">
+                {p}
+              </span>
+            ) : (
+              <a href={buildUrl(p as number)}
+                class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white text-sm transition-colors">
+                {p}
+              </a>
+            )
+          )}
+          {paginaAtual < totalPages ? (
+            <a href={buildUrl(paginaAtual + 1)}
+              class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white transition-colors">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+              </svg>
+            </a>
+          ) : (
+            <span class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-700 cursor-not-allowed">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+              </svg>
+            </span>
+          )}
+        </div>
+      )}
 
       </div>
     )}
