@@ -9,6 +9,7 @@ const MENSAGENS: Record<string, string> = {
   AULA_NAO_ENCONTRADA: 'Aula não encontrada.',
   ALUNO_INATIVO:       'Sua conta está inativa. Contate a academia.',
   SEM_VAGAS:           'Não há vagas disponíveis nesta aula.',
+  MODALIDADE_BLOQUEADA:'Você não está inscrito na modalidade desta aula.',
 };
 
 export const POST: APIRoute = async ({ request, cookies }) => {

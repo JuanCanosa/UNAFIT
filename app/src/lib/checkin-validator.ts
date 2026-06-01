@@ -20,7 +20,8 @@ export type MotivoCheckin =
   | 'JA_REALIZADO'
   | 'AULA_NAO_ENCONTRADA'
   | 'ALUNO_INATIVO'
-  | 'SEM_VAGAS';
+  | 'SEM_VAGAS'
+  | 'MODALIDADE_BLOQUEADA';
 
 export type CheckinResultado =
   | { permitido: true }
@@ -41,13 +42,13 @@ export async function validarCheckin({
 }: ValidarCheckinParams): Promise<CheckinResultado> {
   const admin = createSupabaseAdminClient();
 
-  // 1. Busca a aula
+  // 1. Busca a aula (inclui modalidade para validação)
   const { data: aula, error: aulaError } = await admin
     .from('aulas_agenda')
-    .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, academia_id')
+    .select('id, data_aula, horario_inicio, horario_fim, capacidade_max, academia_id, modalidade')
     .eq('id', aulaId)
     .eq('academia_id', academiaId)
-    .single<AulaAgenda & { capacidade_max: number | null }>();
+    .single<AulaAgenda & { capacidade_max: number | null; modalidade: string }>();
 
   if (aulaError || !aula) {
     return { permitido: false, motivo: 'AULA_NAO_ENCONTRADA' };
@@ -58,19 +59,32 @@ export async function validarCheckin({
     return { permitido: false, motivo: 'FORA_DA_JANELA' };
   }
 
-  // 3. Check-in duplicado
-  const { data: existente } = await admin
-    .from('checkins')
-    .select('id')
-    .eq('aula_id', aulaId)
-    .eq('aluno_id', alunoId)
-    .maybeSingle();
+  // 3. Check-in duplicado + vínculo do aluno em paralelo
+  const [{ data: existente }, { data: vinculo }] = await Promise.all([
+    admin.from('checkins').select('id').eq('aula_id', aulaId).eq('aluno_id', alunoId).maybeSingle(),
+    admin.from('aluno_academias').select('aluno_id').eq('profile_id', alunoId).eq('academia_id', academiaId).maybeSingle(),
+  ]);
 
   if (existente) {
     return { permitido: false, motivo: 'JA_REALIZADO' };
   }
 
-  // 4. Capacidade (NULL ou 0 = ilimitado)
+  // 4. Validação de modalidade
+  // Se o aluno tiver modalidades configuradas, a aula deve ser de uma delas
+  if (vinculo?.aluno_id) {
+    const { data: mods } = await admin
+      .from('aluno_modalidades')
+      .select('modalidade')
+      .eq('aluno_id', vinculo.aluno_id)
+      .eq('academia_id', academiaId);
+
+    const modalidadesAluno = (mods ?? []).map((m: any) => m.modalidade as string);
+    if (modalidadesAluno.length > 0 && !modalidadesAluno.includes((aula as any).modalidade)) {
+      return { permitido: false, motivo: 'MODALIDADE_BLOQUEADA' };
+    }
+  }
+
+  // 5. Capacidade (NULL ou 0 = ilimitado)
   const cap = (aula as any).capacidade_max;
   if (cap && cap > 0) {
     const { count } = await admin
