@@ -26,7 +26,8 @@ let query = supabase
   .select(`
     id, nome, email, telefone, cpf, status, categoria_id, created_at,
     categorias_alunos(id, nome, cor),
-    aluno_planos(id, status, planos(id, nome))
+    aluno_planos(id, status, planos(id, nome)),
+    aluno_modalidades(modalidade)
   `)
   .eq('academia_id', profile.academia_id!)
   .order('nome');
@@ -227,7 +228,7 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
                 )}
                 <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Aluno</th>
                 <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider hidden md:table-cell">Plano</th>
-                <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider hidden lg:table-cell">Categoria</th>
+                <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider hidden lg:table-cell">Modalidade</th>
                 <th class="text-left px-4 py-3 text-xs font-semibold text-zinc-400 uppercase tracking-wider">Status</th>
                 <th class="px-4 py-3 no-print w-16"></th>
               </tr>
@@ -235,11 +236,11 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
             <tbody class="divide-y divide-zinc-800" id="tbody-alunos">
               {alunos.map((a: any) => {
                 const planoAtivo = a.aluno_planos?.find((ap: any) => ap.status === 'ativo');
-                const cat = a.categorias_alunos;
+                const mods: string[] = (a.aluno_modalidades ?? []).map((m: any) => m.modalidade);
                 return (
                   <tr class="hover:bg-zinc-800/40 transition-colors aluno-row"
                     data-id={a.id} data-nome={a.nome} data-email={a.email ?? ''} data-cpf={a.cpf ?? ''}
-                    data-plano={planoAtivo?.planos?.nome ?? ''} data-categoria={cat?.nome ?? ''} data-status={a.status}>
+                    data-plano={planoAtivo?.planos?.nome ?? ''} data-modalidade={mods.join(', ')} data-status={a.status}>
                     {canEdit && (
                       <td class="px-4 py-3 w-10 no-print">
                         <input type="checkbox" class="chk-aluno rounded border-zinc-600 bg-zinc-800 text-primary focus:ring-primary/40 cursor-pointer"
@@ -258,11 +259,14 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
                       )}
                     </td>
                     <td class="px-4 py-3 hidden lg:table-cell">
-                      {cat ? (
-                        <span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700">
-                          <span class="w-2 h-2 rounded-full shrink-0" style={`background:${cat.cor}`}></span>
-                          {cat.nome}
-                        </span>
+                      {mods.length > 0 ? (
+                        <div class="flex flex-wrap gap-1">
+                          {mods.map(m => (
+                            <span class="text-xs px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary font-medium">
+                              {m}
+                            </span>
+                          ))}
+                        </div>
                       ) : (
                         <span class="text-xs text-zinc-600">—</span>
                       )}
@@ -357,20 +361,20 @@ const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
   // ── Export helpers ───────────────────────────────────────────────────────────
   function getLinhas() {
     return Array.from(document.querySelectorAll<HTMLTableRowElement>('#tbody-alunos tr')).map(tr => ({
-      nome:      tr.dataset.nome      ?? '',
-      email:     tr.dataset.email     ?? '',
-      cpf:       tr.dataset.cpf       ?? '',
-      plano:     tr.dataset.plano     ?? '',
-      categoria: tr.dataset.categoria ?? '',
-      status:    tr.dataset.status    ?? '',
+      nome:       tr.dataset.nome       ?? '',
+      email:      tr.dataset.email      ?? '',
+      cpf:        tr.dataset.cpf        ?? '',
+      plano:      tr.dataset.plano      ?? '',
+      modalidade: tr.dataset.modalidade ?? '',
+      status:     tr.dataset.status     ?? '',
     }));
   }
 
   document.getElementById('btn-csv')?.addEventListener('click', () => {
     const linhas = getLinhas();
-    const header = ['Nome', 'Email', 'CPF', 'Plano', 'Categoria', 'Status'];
+    const header = ['Nome', 'Email', 'CPF', 'Plano', 'Modalidade', 'Status'];
     const rows   = linhas.map(l =>
-      [l.nome, l.email, l.cpf, l.plano, l.categoria, l.status]
+      [l.nome, l.email, l.cpf, l.plano, l.modalidade, l.status]
         .map(v => `"${v.replace(/"/g, '""')}"`)
         .join(',')
     );
