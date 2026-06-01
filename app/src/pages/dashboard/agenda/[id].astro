@@ -81,6 +81,9 @@ const scoreTypeMap: Record<string, string> = {
 };
 const tipoResultado = wod ? (scoreTypeMap[wod.score_type] ?? null) : null;
 
+// Admin client disponível para todo o handler (POST e GET)
+const adminCheckin = createSupabaseAdminClient();
+
 // Handle POST
 let formError = '';
 if (Astro.request.method === 'POST') {
@@ -198,8 +201,6 @@ if (Astro.request.method === 'POST') {
 }
 
 // ── Check-in: alunos elegíveis e presenças já registradas ────────────────────
-const adminCheckin = createSupabaseAdminClient();
-
 const [{ data: todosAlunos }, { data: checkinsAulaData }, { data: alunosNaModalidade }] = await Promise.all([
   adminCheckin
     .from('alunos')
