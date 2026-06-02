@@ -692,9 +692,9 @@ const presentesSemResultado = alunosElegiveis.filter((a: any) =>
           <!-- Lista de alunos -->
           <div id="checkin-lista" class="divide-y divide-border/40">
             {/* Presentes primeiro */}
-            {alunosElegiveis.filter((a: any) => a.jaFezCheckin).map((a: any) => (
+            {alunosElegiveis.filter((a: any) => a.jaFezCheckin).map((a: any, i: number) => (
               <div class="checkin-item flex items-center gap-3 px-4 py-3 bg-green-950/20 hover:bg-green-950/30 transition-colors"
-                data-nome={a.nome.toLowerCase()}>
+                data-nome={a.nome.toLowerCase()} data-idx={i}>
                 <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/20 text-green-400 text-sm font-bold">
                   {a.nome.charAt(0).toUpperCase()}
                 </div>
@@ -723,28 +723,37 @@ const presentesSemResultado = alunosElegiveis.filter((a: any) =>
             ))}
 
             {/* Não presentes */}
-            {alunosElegiveis.filter((a: any) => !a.jaFezCheckin).map((a: any) => (
-              <div class="checkin-item flex items-center gap-3 px-4 py-3 hover:bg-muted/20 transition-colors"
-                data-nome={a.nome.toLowerCase()}>
-                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground text-sm font-bold">
-                  {a.nome.charAt(0).toUpperCase()}
+            {(() => {
+              const presentes = alunosElegiveis.filter((a: any) => a.jaFezCheckin).length;
+              return alunosElegiveis.filter((a: any) => !a.jaFezCheckin).map((a: any, i: number) => (
+                <div class="checkin-item flex items-center gap-3 px-4 py-3 hover:bg-muted/20 transition-colors"
+                  data-nome={a.nome.toLowerCase()} data-idx={presentes + i}>
+                  <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground text-sm font-bold">
+                    {a.nome.charAt(0).toUpperCase()}
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-foreground truncate">{a.nome}</p>
+                    <p class="text-xs text-muted-foreground truncate">{a.planoNome}</p>
+                  </div>
+                  {canEdit && (
+                    <form method="POST" class="shrink-0">
+                      <input type="hidden" name="action" value="registrar_checkin_manual" />
+                      <input type="hidden" name="aluno_id" value={a.id} />
+                      <button type="submit"
+                        class="rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground hover:bg-green-900/30 hover:border-green-700/50 hover:text-green-400 transition-colors">
+                        + Check-in
+                      </button>
+                    </form>
+                  )}
                 </div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-foreground truncate">{a.nome}</p>
-                  <p class="text-xs text-muted-foreground truncate">{a.planoNome}</p>
-                </div>
-                {canEdit && (
-                  <form method="POST" class="shrink-0">
-                    <input type="hidden" name="action" value="registrar_checkin_manual" />
-                    <input type="hidden" name="aluno_id" value={a.id} />
-                    <button type="submit"
-                      class="rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground hover:bg-green-900/30 hover:border-green-700/50 hover:text-green-400 transition-colors">
-                      + Check-in
-                    </button>
-                  </form>
-                )}
-              </div>
-            ))}
+              ));
+            })()}
+          </div>
+
+          <!-- Paginador -->
+          <div id="checkin-pag" class="hidden flex items-center justify-between gap-2 px-4 py-3 border-t border-border/40">
+            <span id="pag-info" class="text-xs text-muted-foreground"></span>
+            <div id="pag-botoes" class="flex items-center gap-1"></div>
           </div>
         </div>
       )}
@@ -1265,14 +1274,101 @@ const presentesSemResultado = alunosElegiveis.filter((a: any) =>
     exBusca.value = '';
   });
 
+  // ── Paginação do check-in (10 por página) ─────────────
+  const PAG_SIZE   = 10;
+  let pagAtual     = 1;
+
+  const pagContainer = document.getElementById('checkin-pag');
+  const pagInfo      = document.getElementById('pag-info');
+  const pagBotoes    = document.getElementById('pag-botoes');
+
+  function getAllItems(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('.checkin-item'));
+  }
+
+  function getVisibleItems(): HTMLElement[] {
+    return getAllItems().filter(el => el.style.display !== 'none' || !el.dataset.hidden);
+  }
+
+  function renderPagina(items: HTMLElement[], pagina: number) {
+    const total = items.length;
+    const totalPags = Math.ceil(total / PAG_SIZE);
+    const start = (pagina - 1) * PAG_SIZE;
+    const end   = start + PAG_SIZE;
+
+    // Mostra/oculta itens
+    items.forEach((el, i) => {
+      el.style.display = (i >= start && i < end) ? '' : 'none';
+    });
+
+    // Atualiza paginador
+    if (!pagContainer || !pagInfo || !pagBotoes) return;
+
+    if (totalPags <= 1) {
+      pagContainer.classList.add('hidden');
+      return;
+    }
+    pagContainer.classList.remove('hidden');
+    pagInfo.textContent = `${start + 1}–${Math.min(end, total)} de ${total} alunos`;
+
+    pagBotoes.innerHTML = '';
+
+    // Botão anterior
+    const btnPrev = document.createElement('button');
+    btnPrev.type = 'button';
+    btnPrev.className = `flex h-7 w-7 items-center justify-center rounded border text-xs transition-colors ${pagina <= 1 ? 'border-border/30 text-muted-foreground/30 cursor-not-allowed' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
+    btnPrev.innerHTML = '‹';
+    btnPrev.disabled = pagina <= 1;
+    btnPrev.onclick = () => irPara(pagina - 1, items);
+    pagBotoes.appendChild(btnPrev);
+
+    // Páginas
+    for (let p = 1; p <= totalPags; p++) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = String(p);
+      btn.className = `flex h-7 w-7 items-center justify-center rounded border text-xs font-medium transition-colors ${p === pagina ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
+      btn.onclick = () => irPara(p, items);
+      pagBotoes.appendChild(btn);
+    }
+
+    // Botão próximo
+    const btnNext = document.createElement('button');
+    btnNext.type = 'button';
+    btnNext.className = `flex h-7 w-7 items-center justify-center rounded border text-xs transition-colors ${pagina >= totalPags ? 'border-border/30 text-muted-foreground/30 cursor-not-allowed' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
+    btnNext.innerHTML = '›';
+    btnNext.disabled = pagina >= totalPags;
+    btnNext.onclick = () => irPara(pagina + 1, items);
+    pagBotoes.appendChild(btnNext);
+  }
+
+  function irPara(p: number, items: HTMLElement[]) {
+    pagAtual = p;
+    renderPagina(items, pagAtual);
+  }
+
+  // Inicializa paginação com todos os itens
+  const todosItens = getAllItems();
+  if (todosItens.length > PAG_SIZE) renderPagina(todosItens, 1);
+
   // ── Busca rápida na lista de check-in ─────────────────
   const checkinBusca = document.getElementById('checkin-busca');
   checkinBusca?.addEventListener('input', () => {
     const q = checkinBusca.value.toLowerCase().trim();
-    document.querySelectorAll('.checkin-item').forEach(item => {
-      const nome = item.dataset.nome ?? '';
-      item.style.display = !q || nome.includes(q) ? '' : 'none';
-    });
+    const todos = getAllItems();
+    if (!q) {
+      // Sem busca: restaura paginação
+      todos.forEach(el => el.removeAttribute('style'));
+      pagAtual = 1;
+      if (todos.length > PAG_SIZE) renderPagina(todos, 1);
+      else if (pagContainer) pagContainer.classList.add('hidden');
+    } else {
+      // Com busca: mostra todos que batem, oculta paginador
+      todos.forEach(el => {
+        el.style.display = el.dataset.nome?.includes(q) ? '' : 'none';
+      });
+      if (pagContainer) pagContainer.classList.add('hidden');
+    }
   });
 
   formEx.addEventListener('submit', async (e) => {
