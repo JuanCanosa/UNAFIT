@@ -42,6 +42,9 @@ const { data: grupos } = await supabase
   .eq('wod_id', wodId)
   .order('ordem');
 
+// canEdit deve estar antes do bloco POST (evita TDZ — mesmo padrão de agenda/[id].astro)
+const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
+
 let formError = '';
 
 if (Astro.request.method === 'POST') {
@@ -127,8 +130,6 @@ const scoreLabels: Record<string, string> = {
   tempo: 'Tempo', reps: 'Reps', carga: 'Carga (kg)',
   rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
 };
-
-const canEdit = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
 
 // Agrupa exercícios por grupo
 const exsByGrupo: Record<string, any[]> = {};
