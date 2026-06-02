@@ -1,0 +1,344 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - link "UNAFIT" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - list [ref=e4]:
+      - listitem [ref=e5]:
+        - link "Funcionalidades" [ref=e6] [cursor=pointer]:
+          - /url: "#funcionalidades"
+      - listitem [ref=e7]:
+        - link "Como Funciona" [ref=e8] [cursor=pointer]:
+          - /url: "#como-funciona"
+      - listitem [ref=e9]:
+        - link "Preços" [ref=e10] [cursor=pointer]:
+          - /url: "#precos"
+      - listitem [ref=e11]:
+        - link "Entrar" [ref=e12] [cursor=pointer]:
+          - /url: /login
+      - listitem [ref=e13]:
+        - link "Começar Grátis" [ref=e14] [cursor=pointer]:
+          - /url: "#precos"
+  - generic [ref=e15]:
+    - generic [ref=e18]: Software para CrossFit
+    - heading "GERENCIE TUDO. FOQUE." [level=1] [ref=e19]:
+      - generic [ref=e20]: GERENCIE
+      - generic [ref=e21]: TUDO.
+      - generic [ref=e22]: FOQUE.
+    - generic [ref=e23]:
+      - paragraph [ref=e24]:
+        - text: Plataforma
+        - strong [ref=e25]: SaaS completa
+        - text: para academias de CrossFit. Alunos, WODs, pagamentos PIX, check-in digital e relatórios — tudo em um só lugar.
+      - generic [ref=e26]:
+        - link "COMEÇAR AGORA" [ref=e27] [cursor=pointer]:
+          - /url: "#precos"
+          - text: COMEÇAR AGORA
+          - img [ref=e28]
+        - link "VER DEMO" [ref=e30] [cursor=pointer]:
+          - /url: "#como-funciona"
+  - generic [ref=e31]:
+    - generic [ref=e32]:
+      - generic [ref=e33]: 0+
+      - generic [ref=e34]: Alunos Gerenciados
+    - generic [ref=e35]:
+      - generic [ref=e36]: 0+
+      - generic [ref=e37]: Academias Ativas
+    - generic [ref=e38]:
+      - generic [ref=e39]: 0%
+      - generic [ref=e40]: Uptime Garantido
+    - generic [ref=e41]:
+      - generic [ref=e42]: 0/7
+      - generic [ref=e43]: Disponibilidade
+  - generic [ref=e45]:
+    - generic [ref=e46]: GESTÃO DE ALUNOS ·
+    - generic [ref=e47]: WODS DIÁRIOS ·
+    - generic [ref=e48]: PAGAMENTO VIA PIX ·
+    - generic [ref=e49]: CHECK-IN DIGITAL ·
+    - generic [ref=e50]: AGENDA DE AULAS ·
+    - generic [ref=e51]: RELATÓRIOS FINANCEIROS ·
+    - generic [ref=e52]: WHITE-LABEL ·
+    - generic [ref=e53]: RANKINGS DE PRESENÇA ·
+    - generic [ref=e54]: GESTÃO DE ALUNOS ·
+    - generic [ref=e55]: WODS DIÁRIOS ·
+    - generic [ref=e56]: PAGAMENTO VIA PIX ·
+    - generic [ref=e57]: CHECK-IN DIGITAL ·
+    - generic [ref=e58]: AGENDA DE AULAS ·
+    - generic [ref=e59]: RELATÓRIOS FINANCEIROS ·
+    - generic [ref=e60]: WHITE-LABEL ·
+    - generic [ref=e61]: RANKINGS DE PRESENÇA ·
+  - generic [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e65]: Funcionalidades
+        - heading "TUDO QUE VOCÊ PRECISA" [level=2] [ref=e66]:
+          - text: TUDO QUE
+          - text: VOCÊ PRECISA
+      - paragraph [ref=e67]: Cada funcionalidade foi construída especificamente para o modelo de negócio de academias de CrossFit.
+    - generic [ref=e68]:
+      - generic [ref=e69]:
+        - generic [ref=e70]: "01"
+        - img [ref=e72]
+        - heading "GESTÃO DE ALUNOS" [level=3] [ref=e77]
+        - paragraph [ref=e78]: Cadastro completo com CPF, histórico de planos, cobranças automáticas via Asaas e acompanhamento de frequência.
+      - generic [ref=e79]:
+        - generic [ref=e80]: "02"
+        - img [ref=e82]
+        - heading "WODs DIÁRIOS" [level=3] [ref=e84]
+        - paragraph [ref=e85]: Monte seus treinos com grupos, seções e exercícios. Biblioteca de movimentos e registro de performance dos atletas.
+      - generic [ref=e86]:
+        - generic [ref=e87]: "03"
+        - img [ref=e89]
+        - heading "AGENDA DE AULAS" [level=3] [ref=e91]
+        - paragraph [ref=e92]: Horários por professor, capacidade máxima de alunos e visualização semanal. Alunos acessam a agenda pelo app.
+      - generic [ref=e93]:
+        - generic [ref=e94]: "04"
+        - img [ref=e96]
+        - heading "CHECK-IN DIGITAL" [level=3] [ref=e99]
+        - paragraph [ref=e100]: Registro de presença em tempo real. Controle de frequência, histórico por aluno e rankings de assiduidade.
+      - generic [ref=e101]:
+        - generic [ref=e102]: "05"
+        - img [ref=e104]
+        - heading "PAGAMENTOS" [level=3] [ref=e106]
+        - paragraph [ref=e107]: Cobranças automáticas via PIX, Boleto e Cartão pelo Asaas. Webhook de confirmação instantânea, faturas e inadimplência.
+      - generic [ref=e108]:
+        - generic [ref=e109]: "06"
+        - img [ref=e111]
+        - heading "RELATÓRIOS" [level=3] [ref=e112]
+        - paragraph [ref=e113]: Dashboard financeiro com MRR, inadimplência e faturamento por período. Relatórios de presença e performance.
+  - generic [ref=e114]:
+    - generic [ref=e115]: Como Funciona
+    - heading "3 PASSOS PARA COMEÇAR" [level=2] [ref=e116]:
+      - text: 3 PASSOS
+      - text: PARA COMEÇAR
+    - generic [ref=e117]:
+      - generic [ref=e118]:
+        - generic [ref=e119]: "1"
+        - heading "CRIE SUA CONTA" [level=3] [ref=e120]
+        - paragraph [ref=e121]: Escolha um plano, cadastre sua academia e personalize com seu logo e subdomínio exclusivo. Em menos de 5 minutos.
+      - generic [ref=e122]:
+        - generic [ref=e123]: "2"
+        - heading "CONFIGURE" [level=3] [ref=e124]
+        - paragraph [ref=e125]: Integre com o Asaas para pagamentos automáticos, cadastre seus planos e importe ou adicione seus alunos.
+      - generic [ref=e126]:
+        - generic [ref=e127]: "3"
+        - heading "GERENCIE" [level=3] [ref=e128]
+        - paragraph [ref=e129]: Publique WODs, agende aulas, monitore presença e receba pagamentos. Foque no treino — o sistema faz o resto.
+  - generic [ref=e131]:
+    - generic [ref=e132]:
+      - generic [ref=e136]: SUA BOX
+      - generic [ref=e146]:
+        - generic [ref=e147]: Check-ins hoje
+        - generic [ref=e148]: 47 alunos
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - text: +12% vs ontem
+      - generic [ref=e152]:
+        - generic [ref=e153]: Faturamento
+        - generic [ref=e154]: R$8.340
+        - generic [ref=e155]:
+          - img [ref=e156]
+          - text: Este mês
+    - generic [ref=e158]:
+      - generic [ref=e159]: White-label
+      - heading "SUA MARCA, NOSSA TECH" [level=2] [ref=e160]:
+        - text: SUA MARCA,
+        - text: NOSSA TECH
+      - paragraph [ref=e161]: Cada academia tem sua identidade visual, subdomínio e login personalizados. Seus alunos veem só a sua marca.
+      - list [ref=e162]:
+        - listitem [ref=e163]:
+          - img [ref=e165]
+          - generic [ref=e167]:
+            - strong [ref=e168]: Subdomínio exclusivo
+            - text: — unafit.com.br/suabox
+        - listitem [ref=e169]:
+          - img [ref=e171]
+          - generic [ref=e173]:
+            - strong [ref=e174]: Logo personalizada
+            - text: no painel e e-mails
+        - listitem [ref=e175]:
+          - img [ref=e177]
+          - generic [ref=e179]:
+            - strong [ref=e180]: Alunos e colaboradores
+            - text: acessam pelo login da box
+        - listitem [ref=e181]:
+          - img [ref=e183]
+          - generic [ref=e185]:
+            - strong [ref=e186]: Recebimentos direto
+            - text: para sua conta Asaas
+  - generic [ref=e187]:
+    - generic [ref=e188]: Planos
+    - heading "SIMPLES E TRANSPARENTE" [level=2] [ref=e189]:
+      - text: SIMPLES E
+      - text: TRANSPARENTE
+    - paragraph [ref=e190]: Sem taxa de setup. Sem fidelidade. Cancele quando quiser.
+    - generic [ref=e191]:
+      - generic [ref=e192]:
+        - generic [ref=e193]: STARTER
+        - paragraph [ref=e194]: Ideal para boxes em crescimento
+        - generic [ref=e195]:
+          - generic [ref=e196]: R$
+          - text: 99,90
+        - generic [ref=e197]: por mês · cobrado mensalmente
+        - list [ref=e199]:
+          - listitem [ref=e200]:
+            - generic [ref=e201]: ✓
+            - generic [ref=e202]:
+              - text: Até
+              - strong [ref=e203]: 50 alunos
+          - listitem [ref=e204]:
+            - generic [ref=e205]: ✓
+            - generic [ref=e206]: WODs e agenda de aulas
+          - listitem [ref=e207]:
+            - generic [ref=e208]: ✓
+            - generic [ref=e209]: Check-in digital
+          - listitem [ref=e210]:
+            - generic [ref=e211]: ✓
+            - generic [ref=e212]: Pagamentos via Asaas
+          - listitem [ref=e213]:
+            - generic [ref=e214]: ✓
+            - generic [ref=e215]: White-label básico
+          - listitem [ref=e216]:
+            - generic [ref=e217]: ✗
+            - generic [ref=e218]: Relatórios avançados
+          - listitem [ref=e219]:
+            - generic [ref=e220]: ✗
+            - generic [ref=e221]: API + Webhooks
+        - link "COMEÇAR GRÁTIS" [ref=e222] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e223]:
+        - generic [ref=e224]:
+          - img [ref=e225]
+          - text: MAIS POPULAR
+        - generic [ref=e227]: PRO
+        - paragraph [ref=e228]: Para boxes estabelecidas
+        - generic [ref=e229]:
+          - generic [ref=e230]: R$
+          - text: 199,90
+        - generic [ref=e231]: por mês · cobrado mensalmente
+        - list [ref=e233]:
+          - listitem [ref=e234]:
+            - generic [ref=e235]: ✓
+            - generic [ref=e236]:
+              - text: Até
+              - strong [ref=e237]: 200 alunos
+          - listitem [ref=e238]:
+            - generic [ref=e239]: ✓
+            - generic [ref=e240]: WODs e agenda de aulas
+          - listitem [ref=e241]:
+            - generic [ref=e242]: ✓
+            - generic [ref=e243]: Check-in digital
+          - listitem [ref=e244]:
+            - generic [ref=e245]: ✓
+            - generic [ref=e246]: Pagamentos via Asaas
+          - listitem [ref=e247]:
+            - generic [ref=e248]: ✓
+            - generic [ref=e249]: White-label completo
+          - listitem [ref=e250]:
+            - generic [ref=e251]: ✓
+            - strong [ref=e253]: Relatórios avançados
+          - listitem [ref=e254]:
+            - generic [ref=e255]: ✗
+            - generic [ref=e256]: API + Webhooks
+        - link "COMEÇAR GRÁTIS" [ref=e257] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e258]:
+        - generic [ref=e259]: SCALE
+        - paragraph [ref=e260]: Multi-unidade e grandes boxes
+        - generic [ref=e261]:
+          - generic [ref=e262]: R$
+          - text: 349,90
+        - generic [ref=e263]: por mês · cobrado mensalmente
+        - list [ref=e265]:
+          - listitem [ref=e266]:
+            - generic [ref=e267]: ✓
+            - strong [ref=e269]: Alunos ilimitados
+          - listitem [ref=e270]:
+            - generic [ref=e271]: ✓
+            - generic [ref=e272]: WODs e agenda de aulas
+          - listitem [ref=e273]:
+            - generic [ref=e274]: ✓
+            - generic [ref=e275]: Check-in digital
+          - listitem [ref=e276]:
+            - generic [ref=e277]: ✓
+            - generic [ref=e278]: Pagamentos via Asaas
+          - listitem [ref=e279]:
+            - generic [ref=e280]: ✓
+            - generic [ref=e281]: White-label completo
+          - listitem [ref=e282]:
+            - generic [ref=e283]: ✓
+            - generic [ref=e284]: Relatórios avançados
+          - listitem [ref=e285]:
+            - generic [ref=e286]: ✓
+            - strong [ref=e288]: API + Webhooks
+        - link "COMEÇAR GRÁTIS" [ref=e289] [cursor=pointer]:
+          - /url: "#"
+  - generic [ref=e290]:
+    - generic [ref=e292]: PRONTO?
+    - generic [ref=e293]:
+      - generic [ref=e294]: Próximo passo
+      - heading "COMECE HOJE, GRÁTIS" [level=2] [ref=e295]:
+        - text: COMECE HOJE,
+        - text: GRÁTIS
+      - paragraph [ref=e296]: 14 dias sem cobrar nada. Sem cartão de crédito. Configure sua box em minutos.
+      - generic [ref=e297]:
+        - link "CRIAR MINHA CONTA" [ref=e298] [cursor=pointer]:
+          - /url: "#precos"
+          - text: CRIAR MINHA CONTA
+          - img [ref=e299]
+        - link "JÁ TENHO CONTA" [ref=e301] [cursor=pointer]:
+          - /url: /login
+      - paragraph [ref=e302]: Dúvidas? Fale com nosso time — resposta em até 2 horas.
+  - contentinfo [ref=e303]:
+    - generic [ref=e304]:
+      - generic [ref=e305]:
+        - link "UNAFIT" [ref=e306] [cursor=pointer]:
+          - /url: /
+        - paragraph [ref=e307]: Software de gestão completo para academias de CrossFit. Do check-in ao pagamento.
+      - generic [ref=e308]:
+        - generic [ref=e309]: Produto
+        - list [ref=e310]:
+          - listitem [ref=e311]:
+            - link "Funcionalidades" [ref=e312] [cursor=pointer]:
+              - /url: "#funcionalidades"
+          - listitem [ref=e313]:
+            - link "Como Funciona" [ref=e314] [cursor=pointer]:
+              - /url: "#como-funciona"
+          - listitem [ref=e315]:
+            - link "Preços" [ref=e316] [cursor=pointer]:
+              - /url: "#precos"
+          - listitem [ref=e317]:
+            - link "Entrar" [ref=e318] [cursor=pointer]:
+              - /url: /login
+      - generic [ref=e319]:
+        - generic [ref=e320]: Recursos
+        - list [ref=e321]:
+          - listitem [ref=e322]:
+            - link "Documentação" [ref=e323] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e324]:
+            - link "Tutoriais" [ref=e325] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e326]:
+            - link "Blog" [ref=e327] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e328]:
+            - link "Status" [ref=e329] [cursor=pointer]:
+              - /url: "#"
+      - generic [ref=e330]:
+        - generic [ref=e331]: Empresa
+        - list [ref=e332]:
+          - listitem [ref=e333]:
+            - link "Sobre nós" [ref=e334] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e335]:
+            - link "Contato" [ref=e336] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e337]:
+            - link "Privacidade" [ref=e338] [cursor=pointer]:
+              - /url: "#"
+          - listitem [ref=e339]:
+            - link "Termos" [ref=e340] [cursor=pointer]:
+              - /url: "#"
+    - generic [ref=e341]:
+      - paragraph [ref=e342]: © 2025 UNAFIT. Todos os direitos reservados.
+      - paragraph [ref=e343]: Feito com ♥ para o CrossFit brasileiro

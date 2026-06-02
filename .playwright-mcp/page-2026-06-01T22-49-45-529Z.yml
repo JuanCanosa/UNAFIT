@@ -1,0 +1,22 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - img "UNAFIT" [ref=e4]
+    - paragraph [ref=e5]: Bem-vindo de volta. Entre na sua conta.
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - text: E-mail ou CPF
+      - generic [ref=e9]:
+        - img
+        - textbox "E-mail ou CPF" [ref=e10]:
+          - /placeholder: seu@email.com ou CPF
+    - generic [ref=e11]:
+      - text: Senha
+      - generic [ref=e12]:
+        - img
+        - textbox "Senha" [ref=e13]:
+          - /placeholder: ••••••••
+        - button "Mostrar senha" [ref=e14] [cursor=pointer]:
+          - img [ref=e15]
+    - button "Entrar" [ref=e18] [cursor=pointer]:
+      - img [ref=e19]
+      - text: Entrar

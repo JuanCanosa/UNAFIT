@@ -10,7 +10,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "mcp__firecrawl__firecrawl_scrape",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "mcp__ssh-vps__sudo-exec"
     ]
   }
 }
