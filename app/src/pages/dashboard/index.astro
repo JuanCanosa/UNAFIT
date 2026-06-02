@@ -18,8 +18,8 @@ const { data: profile } = await supabase
 // Nota: NÃO usar return Astro.redirect() aqui — DashboardLayout já iniciou
 // o streaming da resposta. Usar acesso null-safe nas queries abaixo.
 
-const hoje = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
-const hojeISO = new Date().toISOString().split('T')[0];
+const hoje    = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Sao_Paulo' }).format(new Date());
+const hojeISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const firstName = profile?.nome_completo?.split(' ')[0] ?? 'Admin';
 
 // ── SaaS Admin: stats globais ─────────────────────────────────────────────────

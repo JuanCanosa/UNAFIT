@@ -20,7 +20,7 @@ const { data: profile } = await supabase
 if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
 const canEdit  = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
-const hojeISO  = new Date().toISOString().split('T')[0];
+const hojeISO  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const url        = new URL(Astro.request.url);
 const view       = url.searchParams.get('view'); // null = próximos, 'historico' = passados
 const criarParam = url.searchParams.get('criar'); // '1' = auto-abre modal
@@ -70,7 +70,7 @@ const scoreLabels: Record<string, string> = {
 function fmtData(iso: string) {
   const d = new Date(iso + 'T12:00:00');
   if (iso === hojeISO) return 'Hoje';
-  const amanha = new Date(); amanha.setDate(amanha.getDate() + 1);
+  const amanha = new Date(hojeISO + 'T12:00:00Z'); amanha.setUTCDate(amanha.getUTCDate() + 1);
   if (iso === amanha.toISOString().split('T')[0]) return 'Amanhã';
   return d.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
