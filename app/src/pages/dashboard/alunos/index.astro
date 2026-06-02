@@ -16,15 +16,16 @@ if (!profile || profile.role === 'aluno') return Astro.redirect('/dashboard');
 
 const url          = new URL(Astro.request.url);
 const busca        = url.searchParams.get('q')         || '';
-const filtroStatus = url.searchParams.get('status')    || '';
-const filtroPlano  = url.searchParams.get('plano')     || '';
-const filtroCat    = url.searchParams.get('categoria') || '';
+const filtroStatus = url.searchParams.get('status')     || '';
+const filtroPlano  = url.searchParams.get('plano')      || '';
+const filtroMod    = url.searchParams.get('modalidade') || '';
 const paginaAtual  = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
 const PER_PAGE     = 20;
 const offset       = (paginaAtual - 1) * PER_PAGE;
 
-// Se filtrar por plano, resolve IDs no banco antes (evita paginação errada)
+// Resolve IDs no banco antes para filtros que exigem join (plano e modalidade)
 let filtroAlunoIds: string[] | null = null;
+
 if (filtroPlano) {
   const { data: apResult } = await supabase
     .from('aluno_planos')
@@ -34,11 +35,23 @@ if (filtroPlano) {
   filtroAlunoIds = (apResult ?? []).map((ap: any) => ap.aluno_id);
 }
 
+if (filtroMod) {
+  const { data: modResult } = await supabase
+    .from('aluno_modalidades')
+    .select('aluno_id')
+    .eq('academia_id', profile.academia_id!)
+    .eq('modalidade', filtroMod);
+  const modIds = (modResult ?? []).map((m: any) => m.aluno_id);
+  // Intersecção com filtro de plano se ambos ativos
+  filtroAlunoIds = filtroAlunoIds !== null
+    ? filtroAlunoIds.filter(id => modIds.includes(id))
+    : modIds;
+}
+
 let query = supabase
   .from('alunos')
   .select(`
     id, nome, email, telefone, cpf, status, categoria_id, created_at,
-    categorias_alunos(id, nome, cor),
     aluno_planos(id, status, planos(id, nome)),
     aluno_modalidades(modalidade)
   `, { count: 'exact' })
@@ -48,9 +61,7 @@ let query = supabase
 
 if (busca)          query = query.or(`nome.ilike.%${busca}%,email.ilike.%${busca}%,cpf.ilike.%${busca}%`);
 if (filtroStatus)   query = query.eq('status', filtroStatus);
-if (filtroCat)      query = query.eq('categoria_id', filtroCat);
 if (filtroAlunoIds !== null) {
-  // Se nenhum aluno bate com o plano, garante resultado vazio
   query = filtroAlunoIds.length > 0
     ? query.in('id', filtroAlunoIds)
     : query.eq('id', '00000000-0000-0000-0000-000000000000');
@@ -59,11 +70,11 @@ if (filtroAlunoIds !== null) {
 const [
   { data: alunos, count: totalCount },
   { data: planos },
-  { data: categorias },
+  { data: modalidades },
 ] = await Promise.all([
   query,
   supabase.from('planos').select('id, nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
-  supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
+  supabase.from('modalidades').select('nome').eq('academia_id', profile.academia_id!).eq('ativo', true).order('ordem'),
 ]);
 
 const totalAlunos = totalCount ?? 0;
@@ -72,11 +83,11 @@ const totalPages  = Math.ceil(totalAlunos / PER_PAGE);
 // Monta URL base preservando filtros (sem page)
 function buildUrl(page: number) {
   const p = new URLSearchParams();
-  if (busca)        p.set('q',         busca);
-  if (filtroStatus) p.set('status',    filtroStatus);
-  if (filtroPlano)  p.set('plano',     filtroPlano);
-  if (filtroCat)    p.set('categoria', filtroCat);
-  if (page > 1)     p.set('page',      String(page));
+  if (busca)        p.set('q',          busca);
+  if (filtroStatus) p.set('status',     filtroStatus);
+  if (filtroPlano)  p.set('plano',      filtroPlano);
+  if (filtroMod)    p.set('modalidade', filtroMod);
+  if (page > 1)     p.set('page',       String(page));
   const qs = p.toString();
   return `/dashboard/alunos${qs ? `?${qs}` : ''}`;
 }
@@ -101,7 +112,7 @@ const statusCores: Record<string, string> = {
 };
 
 const canEdit   = profile.role === 'dono' || profile.role === 'colaborador' || profile.role === 'saas_admin';
-const temFiltro = busca || filtroStatus || filtroPlano || filtroCat;
+const temFiltro = busca || filtroStatus || filtroPlano || filtroMod;
 const inicioPag = totalAlunos === 0 ? 0 : offset + 1;
 const fimPag    = Math.min(offset + PER_PAGE, totalAlunos);
 ---
@@ -156,10 +167,10 @@ const fimPag    = Math.min(offset + PER_PAGE, totalAlunos);
       />
       <!-- Filtros secundários -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <select name="categoria" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
-          <option value="">Categorias</option>
-          {categorias?.map(c => (
-            <option value={c.id} selected={filtroCat === c.id}>{c.nome}</option>
+        <select name="modalidade" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
+          <option value="">Modalidade</option>
+          {(modalidades ?? []).map((m: any) => (
+            <option value={m.nome} selected={filtroMod === m.nome}>{m.nome}</option>
           ))}
         </select>
         <select name="plano" class="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-3 text-base text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary/50">
