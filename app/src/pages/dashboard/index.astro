@@ -117,6 +117,10 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin' && academiaId) {
   const hojeISO_BR  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
   const inicioMesISO = hojeISO_BR.slice(0, 7) + '-01';
 
+  // Midnight de Brasília em UTC = hojeISO_BR + 03:00:00Z
+  const meiaNuiteBR      = `${hojeISO_BR}T03:00:00.000Z`;
+  const meiaNuiteMesBR   = `${inicioMesISO}T03:00:00.000Z`;
+
   const [
     { count: aulas },
     { count: checkins },
@@ -124,13 +128,13 @@ if (profile?.role !== 'aluno' && profile?.role !== 'saas_admin' && academiaId) {
     { count: checkinsmes },
   ] = await Promise.all([
     supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
-      .eq('academia_id', academiaId).eq('data_aula', hojeISO),
+      .eq('academia_id', academiaId).eq('data_aula', hojeISO_BR),
     supabase.from('checkins').select('id', { count: 'exact', head: true })
-      .eq('academia_id', academiaId).gte('feito_em', `${hojeISO}T00:00:00`),
+      .eq('academia_id', academiaId).gte('feito_em', meiaNuiteBR),
     supabase.from('aulas_agenda').select('id', { count: 'exact', head: true })
       .eq('academia_id', academiaId).gte('data_aula', inicioMesISO).lte('data_aula', hojeISO_BR),
     supabase.from('checkins').select('id', { count: 'exact', head: true })
-      .eq('academia_id', academiaId).gte('feito_em', `${inicioMesISO}T00:00:00`),
+      .eq('academia_id', academiaId).gte('feito_em', meiaNuiteMesBR),
   ]);
 
   totalAulasHoje      = aulas ?? 0;
