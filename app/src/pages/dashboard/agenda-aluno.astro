@@ -674,11 +674,11 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
     resLabel.textContent = SCORE_LABELS[scoreType] ?? scoreType;
 
     // Limpa apenas os campos visíveis (não os hidden)
-    resForm.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-      'input:not([type=hidden]), textarea'
-    ).forEach(el => { if (el.name !== 'rx') el.value = ''; });
+    resForm.querySelectorAll('input:not([type=hidden]), textarea').forEach(function(el) {
+      if (el.name !== 'rx') el.value = '';
+    });
     // Restaura rx para Scaled (padrão)
-    const rxScaled = resForm.querySelector<HTMLInputElement>('input[name="rx"][value="false"]');
+    const rxScaled = resForm.querySelector('input[name="rx"][value="false"]');
     if (rxScaled) rxScaled.checked = true;
 
     // Mostra campo correto
@@ -711,7 +711,7 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
   document.getElementById('res-fechar')?.addEventListener('click', fecharResultado);
   resModal.addEventListener('click', e => { if (e.target === resModal) fecharResultado(); });
 
-  document.querySelectorAll<HTMLElement>('.registrar-btn').forEach(btn => {
+  document.querySelectorAll('.registrar-btn').forEach(function(btn) {
     btn.addEventListener('click', () => abrirResultado(btn));
   });
 
@@ -774,7 +774,7 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
     setTimeout(() => toast.classList.add('hidden'), 4000);
   }
 
-  document.querySelectorAll<HTMLButtonElement>('.checkin-btn').forEach(btn => {
+  document.querySelectorAll('.checkin-btn').forEach(function(btn) {
     btn.addEventListener('click', async () => {
       const aulaId = btn.dataset.aulaId;
       if (!aulaId) return;

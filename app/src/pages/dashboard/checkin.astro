@@ -62,9 +62,12 @@ if (!semModalidade) {
   // Exibe apenas aulas que ainda não encerraram há mais de 10 min (fuso Brasília)
   const agora = new Date();
   aulas = (data ?? []).filter(a => {
-    const hFim = a.horario_fim.length === 5 ? a.horario_fim + ':00' : a.horario_fim;
-    const fechamento = new Date(new Date(`${a.data_aula}T${hFim}-03:00`).getTime() + 10 * 60_000);
-    return agora <= fechamento;
+    try {
+      const fim = a.horario_fim ?? '23:59';
+      const hFim = fim.length === 5 ? fim + ':00' : fim;
+      const fechamento = new Date(new Date(`${a.data_aula}T${hFim}-03:00`).getTime() + 10 * 60_000);
+      return agora <= fechamento;
+    } catch { return true; } // se der erro no parse, mostra a aula
   });
 }
 
