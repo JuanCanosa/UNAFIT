@@ -34,7 +34,12 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const aulaId = (body as Record<string, unknown>)?.aula_id;
   if (typeof aulaId !== 'string' || !aulaId) return json({ ok: false, motivo: 'Campo aula_id é obrigatório.' }, 400);
 
-  const resultado = await validarCheckin({ aulaId, alunoId: user.id, academiaId: profile.academia_id });
+  let resultado;
+  try {
+    resultado = await validarCheckin({ aulaId, alunoId: user.id, academiaId: profile.academia_id });
+  } catch (err: any) {
+    return json({ ok: false, motivo: 'Erro interno ao validar check-in. Tente novamente.' }, 500);
+  }
   if (!resultado.permitido) return json({ ok: false, motivo: MENSAGENS[resultado.motivo] ?? resultado.motivo }, 400);
 
   const { error: insertError } = await supabase

@@ -663,28 +663,42 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
   };
 
   function abrirResultado(btn: HTMLElement) {
-    const aulaId    = btn.dataset.aulaId!;
-    const scoreType = btn.dataset.scoreType!;
+    const aulaId    = btn.dataset.aulaId ?? '';
+    const scoreType = btn.dataset.scoreType ?? '';
     const wodNome   = btn.dataset.wodNome ?? '';
 
+    // Define campos hidden ANTES de qualquer reset
     resAulaId.value    = aulaId;
     resScoreType.value = scoreType;
     resNome.textContent  = wodNome;
     resLabel.textContent = SCORE_LABELS[scoreType] ?? scoreType;
 
+    // Limpa apenas os campos visíveis (não os hidden)
+    resForm.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      'input:not([type=hidden]), textarea'
+    ).forEach(el => { if (el.name !== 'rx') el.value = ''; });
+    // Restaura rx para Scaled (padrão)
+    const rxScaled = resForm.querySelector<HTMLInputElement>('input[name="rx"][value="false"]');
+    if (rxScaled) rxScaled.checked = true;
+
     // Mostra campo correto
     ['campo-tempo','campo-reps','campo-carga','campo-rounds'].forEach(id => {
-      document.getElementById(id)!.classList.add('hidden');
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
     });
-    if (scoreType === 'tempo')       document.getElementById('campo-tempo')!.classList.remove('hidden');
-    if (scoreType === 'reps')        document.getElementById('campo-reps')!.classList.remove('hidden');
-    if (scoreType === 'carga')       document.getElementById('campo-carga')!.classList.remove('hidden');
-    if (scoreType === 'rounds_reps') document.getElementById('campo-rounds')!.classList.remove('hidden');
+    const campoMap: Record<string, string> = {
+      tempo: 'campo-tempo', reps: 'campo-reps',
+      carga: 'campo-carga', rounds_reps: 'campo-rounds',
+    };
+    const campoId = campoMap[scoreType];
+    if (campoId) document.getElementById(campoId)?.classList.remove('hidden');
 
     resErro.classList.add('hidden');
-    resForm.reset();
+
+    // Re-confirma hidden inputs (garantia extra)
     resAulaId.value    = aulaId;
     resScoreType.value = scoreType;
+
     resModal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   }
@@ -708,13 +722,16 @@ const diaSelecionadoLabel = `${DIAS[diaSelecionadoDate.getUTCDay()]}, ${diaSelec
     resSubmit.textContent = 'Salvando...';
 
     const fd = new FormData(resForm);
+    // Lê aula_id e score_type diretamente dos inputs (mais robusto que FormData para hidden)
+    const aulaIdVal    = resAulaId?.value    || fd.get('aula_id')    as string | null;
+    const scoreTypeVal = resScoreType?.value || fd.get('score_type') as string | null;
     try {
       const res = await fetch('/api/prs/registrar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          aula_id:          fd.get('aula_id'),
-          score_type:       fd.get('score_type'),
+          aula_id:          aulaIdVal,
+          score_type:       scoreTypeVal,
           valor_min:        fd.get('valor_min')        || null,
           valor_sec:        fd.get('valor_sec')        || null,
           valor_reps:       fd.get('valor_reps')       || null,
