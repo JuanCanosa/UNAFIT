@@ -11,7 +11,13 @@
       "Bash(git commit -m ' *)",
       "mcp__firecrawl__firecrawl_scrape",
       "Bash(npx tsc *)",
-      "mcp__ssh-vps__sudo-exec"
+      "mcp__ssh-vps__sudo-exec",
+      "mcp__claude_ai_Supabase__get_logs",
+      "Bash(ssh -i \"C:/Users/juani/.ssh/hublagos_vps\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@187.127.2.24 \"docker logs unafit --tail 50 2>&1\")",
+      "Bash(ssh -i \"C:/Users/juani/.ssh/hublagos_vps\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@187.127.2.24 \"docker logs unafit --tail 100 2>&1 | grep -E 'Error|error|TypeError|crash|SIGTERM|exit|502|checkin' | head -50\")",
+      "Bash(ssh -i \"C:/Users/juani/.ssh/hublagos_vps\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@187.127.2.24 \"docker logs unafit --since=1h 2>&1 | tail -80\")",
+      "Bash(ssh -i \"C:/Users/juani/.ssh/hublagos_vps\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@187.127.2.24 \"docker logs unafit 2>&1 | wc -l && docker logs unafit 2>&1 | head -5\")",
+      "Bash(ssh -i \"C:/Users/juani/.ssh/hublagos_vps\" -o StrictHostKeyChecking=no root@187.127.2.24 \"docker ps --filter name=unafit --format 'Status: {{.Status}}'\")"
     ]
   }
 }
