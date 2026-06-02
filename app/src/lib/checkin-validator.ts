@@ -62,7 +62,7 @@ export async function validarCheckin({
     return { permitido: false, motivo: 'AULA_NAO_DISPONIVEL' };
   }
   const hFim = aula.horario_fim.length === 5 ? aula.horario_fim + ':00' : aula.horario_fim;
-  const fechamento = new Date(new Date(`${aula.data_aula}T${hFim}-03:00`).getTime() + 10 * 60_000);
+  const fechamento = new Date(new Date(`${aula.data_aula}T${hFim}-03:00`).getTime() + 20 * 60_000);
   if (agora > fechamento) {
     return { permitido: false, motivo: 'AULA_NAO_DISPONIVEL' };
   }
