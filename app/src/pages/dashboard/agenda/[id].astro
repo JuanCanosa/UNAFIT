@@ -751,7 +751,7 @@ const presentesSemResultado = alunosElegiveis.filter((a: any) =>
           </div>
 
           <!-- Paginador -->
-          <div id="checkin-pag" class="hidden flex items-center justify-between gap-2 px-4 py-3 border-t border-border/40">
+          <div id="checkin-pag" style="display:none" class="items-center justify-between gap-2 px-4 py-3 border-t border-border/40">
             <span id="pag-info" class="text-xs text-muted-foreground"></span>
             <div id="pag-botoes" class="flex items-center gap-1"></div>
           </div>
@@ -1275,99 +1275,81 @@ const presentesSemResultado = alunosElegiveis.filter((a: any) =>
   });
 
   // ── Paginação do check-in (10 por página) ─────────────
-  const PAG_SIZE   = 10;
-  let pagAtual     = 1;
+  var PAG_SIZE = 10;
+  var pagAtual = 1;
 
-  const pagContainer = document.getElementById('checkin-pag');
-  const pagInfo      = document.getElementById('pag-info');
-  const pagBotoes    = document.getElementById('pag-botoes');
-
-  function getAllItems(): HTMLElement[] {
-    return Array.from(document.querySelectorAll<HTMLElement>('.checkin-item'));
+  function getPagItems() {
+    return Array.from(document.querySelectorAll('.checkin-item'));
   }
 
-  function getVisibleItems(): HTMLElement[] {
-    return getAllItems().filter(el => el.style.display !== 'none' || !el.dataset.hidden);
+  function irPara(p, items) {
+    pagAtual = p;
+    renderCheckinPag(items, pagAtual);
   }
 
-  function renderPagina(items: HTMLElement[], pagina: number) {
-    const total = items.length;
-    const totalPags = Math.ceil(total / PAG_SIZE);
-    const start = (pagina - 1) * PAG_SIZE;
-    const end   = start + PAG_SIZE;
+  function renderCheckinPag(items, pagina) {
+    var total     = items.length;
+    var totalPags = Math.ceil(total / PAG_SIZE);
+    var start     = (pagina - 1) * PAG_SIZE;
+    var end       = start + PAG_SIZE;
 
-    // Mostra/oculta itens
-    items.forEach((el, i) => {
+    items.forEach(function(el, i) {
       el.style.display = (i >= start && i < end) ? '' : 'none';
     });
 
-    // Atualiza paginador
-    if (!pagContainer || !pagInfo || !pagBotoes) return;
+    var pagDiv    = document.getElementById('checkin-pag');
+    var pagInfo   = document.getElementById('pag-info');
+    var pagBotoes = document.getElementById('pag-botoes');
+    if (!pagDiv) return;
 
-    if (totalPags <= 1) {
-      pagContainer.classList.add('hidden');
-      return;
-    }
-    pagContainer.classList.remove('hidden');
-    pagInfo.textContent = `${start + 1}–${Math.min(end, total)} de ${total} alunos`;
+    if (totalPags <= 1) { pagDiv.style.display = 'none'; return; }
 
+    pagDiv.style.display = 'flex';
+    if (pagInfo) pagInfo.textContent = (start + 1) + '–' + Math.min(end, total) + ' de ' + total + ' alunos';
+    if (!pagBotoes) return;
     pagBotoes.innerHTML = '';
 
-    // Botão anterior
-    const btnPrev = document.createElement('button');
-    btnPrev.type = 'button';
-    btnPrev.className = `flex h-7 w-7 items-center justify-center rounded border text-xs transition-colors ${pagina <= 1 ? 'border-border/30 text-muted-foreground/30 cursor-not-allowed' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
-    btnPrev.innerHTML = '‹';
-    btnPrev.disabled = pagina <= 1;
-    btnPrev.onclick = () => irPara(pagina - 1, items);
-    pagBotoes.appendChild(btnPrev);
-
-    // Páginas
-    for (let p = 1; p <= totalPags; p++) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = String(p);
-      btn.className = `flex h-7 w-7 items-center justify-center rounded border text-xs font-medium transition-colors ${p === pagina ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
-      btn.onclick = () => irPara(p, items);
-      pagBotoes.appendChild(btn);
+    function mkBtn(label, disabled, onClick) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.innerHTML = label;
+      b.className = 'flex h-7 min-w-[28px] px-1 items-center justify-center rounded border text-xs font-medium transition-colors ' +
+        (disabled ? 'border-border/30 text-muted-foreground/30 cursor-not-allowed' : 'border-border text-muted-foreground hover:text-foreground');
+      b.disabled = disabled;
+      if (!disabled) b.onclick = onClick;
+      return b;
     }
 
-    // Botão próximo
-    const btnNext = document.createElement('button');
-    btnNext.type = 'button';
-    btnNext.className = `flex h-7 w-7 items-center justify-center rounded border text-xs transition-colors ${pagina >= totalPags ? 'border-border/30 text-muted-foreground/30 cursor-not-allowed' : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'}`;
-    btnNext.innerHTML = '›';
-    btnNext.disabled = pagina >= totalPags;
-    btnNext.onclick = () => irPara(pagina + 1, items);
-    pagBotoes.appendChild(btnNext);
+    pagBotoes.appendChild(mkBtn('‹', pagina <= 1, function() { irPara(pagina - 1, items); }));
+    for (var p = 1; p <= totalPags; p++) {
+      (function(pg) {
+        var b = mkBtn(String(pg), false, function() { irPara(pg, items); });
+        if (pg === pagina) b.className = 'flex h-7 min-w-[28px] px-1 items-center justify-center rounded border text-xs font-medium border-primary bg-primary/10 text-primary';
+        pagBotoes.appendChild(b);
+      })(p);
+    }
+    pagBotoes.appendChild(mkBtn('›', pagina >= totalPags, function() { irPara(pagina + 1, items); }));
   }
 
-  function irPara(p: number, items: HTMLElement[]) {
-    pagAtual = p;
-    renderPagina(items, pagAtual);
-  }
-
-  // Inicializa paginação com todos os itens
-  const todosItens = getAllItems();
-  if (todosItens.length > PAG_SIZE) renderPagina(todosItens, 1);
+  // Inicializa
+  var todosCheckin = getPagItems();
+  if (todosCheckin.length > PAG_SIZE) renderCheckinPag(todosCheckin, 1);
 
   // ── Busca rápida na lista de check-in ─────────────────
   const checkinBusca = document.getElementById('checkin-busca');
   checkinBusca?.addEventListener('input', () => {
     const q = checkinBusca.value.toLowerCase().trim();
-    const todos = getAllItems();
+    const todos = getPagItems();
+    const pagDiv = document.getElementById('checkin-pag');
     if (!q) {
-      // Sem busca: restaura paginação
-      todos.forEach(el => el.removeAttribute('style'));
       pagAtual = 1;
-      if (todos.length > PAG_SIZE) renderPagina(todos, 1);
-      else if (pagContainer) pagContainer.classList.add('hidden');
+      if (todos.length > PAG_SIZE) renderCheckinPag(todos, 1);
+      else {
+        todos.forEach(el => el.style.display = '');
+        if (pagDiv) pagDiv.style.display = 'none';
+      }
     } else {
-      // Com busca: mostra todos que batem, oculta paginador
-      todos.forEach(el => {
-        el.style.display = el.dataset.nome?.includes(q) ? '' : 'none';
-      });
-      if (pagContainer) pagContainer.classList.add('hidden');
+      todos.forEach(el => { el.style.display = el.dataset.nome && el.dataset.nome.includes(q) ? '' : 'none'; });
+      if (pagDiv) pagDiv.style.display = 'none';
     }
   });
 
