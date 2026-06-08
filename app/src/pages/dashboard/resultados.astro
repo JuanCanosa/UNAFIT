@@ -13,7 +13,7 @@ if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
 const { data: exercicios } = await supabase
   .from('exercicios')
-  .select('id, nome, tipo_resultado')
+  .select('id, nome, tipo_resultado, categoria')
   .eq('academia_id', profile.academia_id!)
   .order('nome');
 
@@ -41,6 +41,24 @@ const prsPorExercicio = new Map<string, PR[]>();
 for (const pr of (prs ?? []) as PR[]) {
   if (!prsPorExercicio.has(pr.exercicio_id)) prsPorExercicio.set(pr.exercicio_id, []);
   prsPorExercicio.get(pr.exercicio_id)!.push(pr);
+}
+
+const categoriasLabel: Record<string, string> = {
+  ginastico:          'Ginástico – 1 Rep Máx',
+  ginastico_unbroken: 'Ginástico – Unbroken',
+  condicionamento:    'Condicionamento',
+  peso:               'Peso',
+  heroes_girls:       'Heroes / Girls',
+};
+const ordemCategorias = ['ginastico', 'ginastico_unbroken', 'condicionamento', 'peso', 'heroes_girls'];
+
+type ExRow = { id: string; nome: string; tipo_resultado: string; categoria: string | null };
+const exerciciosComPR = (exercicios ?? [] as ExRow[]).filter(e => prsPorExercicio.has(e.id));
+const exerciciosPorCategoria = new Map<string, ExRow[]>();
+for (const e of exerciciosComPR) {
+  const cat = (e as ExRow).categoria ?? 'outros';
+  if (!exerciciosPorCategoria.has(cat)) exerciciosPorCategoria.set(cat, []);
+  exerciciosPorCategoria.get(cat)!.push(e);
 }
 
 function valorNum(pr: PR): number {
@@ -120,7 +138,6 @@ function sparkline(lista: PR[], tipo: string, W = 200, H = 48) {
   return { linePoints, areaPoints, trend, pts, sorted };
 }
 
-const exerciciosComPR = (exercicios ?? []).filter(e => prsPorExercicio.has(e.id));
 ---
 
 <DashboardLayout title="Meus Resultados">
@@ -172,8 +189,14 @@ const exerciciosComPR = (exercicios ?? []).filter(e => prsPorExercicio.has(e.id)
       </button>
     </div>
   ) : (
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {exerciciosComPR.map(ex => {
+    <div class="space-y-8">
+      {[...ordemCategorias, 'outros'].filter(cat => exerciciosPorCategoria.has(cat)).map(cat => (
+        <div>
+          <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground border-b border-border pb-2">
+            {categoriasLabel[cat] ?? cat}
+          </h2>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(exerciciosPorCategoria.get(cat) ?? []).map(ex => {
         const lista   = prsPorExercicio.get(ex.id)!;
         const pr      = melhorPR(lista);
         const historico = [...lista].sort((a, b) =>
@@ -282,7 +305,10 @@ const exerciciosComPR = (exercicios ?? []).filter(e => prsPorExercicio.has(e.id)
             </div>
           </div>
         );
-      })}
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   )}
 

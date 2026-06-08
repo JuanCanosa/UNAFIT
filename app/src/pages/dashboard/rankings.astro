@@ -48,12 +48,30 @@ function hrefPresenca(over: { periodo?: string; mod?: string } = {}): string {
   return `/dashboard/rankings?${params.toString()}`;
 }
 
-// Exercícios com PRs registrados na academia
-const { data: exerciciosComPRs } = await supabase
+// Categorias de exercícios para o ranking de performance
+const categoriasConfig: { key: string; label: string }[] = [
+  { key: 'ginastico',         label: 'Ginástico – 1 Rep Máx' },
+  { key: 'ginastico_unbroken',label: 'Ginástico – Unbroken'  },
+  { key: 'condicionamento',   label: 'Condicionamento'        },
+  { key: 'peso',              label: 'Peso'                   },
+  { key: 'heroes_girls',      label: 'Heroes / Girls'         },
+];
+const categoriaSelecionada = urlParams.get('cat') ?? '';
+
+// Todos os exercícios da academia (com categoria), ordenados por nome
+const { data: exerciciosTodos } = await supabase
   .from('exercicios')
-  .select('id, nome, tipo_resultado')
+  .select('id, nome, tipo_resultado, categoria')
   .eq('academia_id', profile.academia_id!)
   .order('nome');
+
+// Exercícios visíveis na categoria selecionada (para o seletor de exercício)
+const exerciciosDaCategoria = categoriaSelecionada
+  ? (exerciciosTodos ?? []).filter(e => e.categoria === categoriaSelecionada)
+  : [];
+
+// Compatibilidade com queries anteriores que esperam exerciciosComPRs
+const exerciciosComPRs = exerciciosTodos;
 
 // Busca dados em paralelo
 const [
@@ -370,30 +388,61 @@ const medalhas = ['🥇', '🥈', '🥉'];
   <!-- ── TAB PERFORMANCE ─────────────────────────────────────────────────── -->
   {tabAtiva === 'performance' && (
     <div>
-      <!-- Seletor de exercício -->
-      <div class="mb-6 flex flex-wrap items-center gap-3">
-        <label class="text-sm text-muted-foreground shrink-0">Exercício:</label>
+      <!-- 1. Seletor de categoria -->
+      <div class="mb-5 flex flex-wrap items-center gap-3">
+        <label class="text-sm text-muted-foreground shrink-0">Categoria:</label>
         <div class="flex flex-wrap gap-2">
-          {(exerciciosComPRs ?? []).length === 0 ? (
-            <p class="text-sm text-muted-foreground">Nenhum exercício cadastrado.</p>
-          ) : (
-            (exerciciosComPRs ?? []).map(e => (
-              <a
-                href={`/dashboard/rankings?tab=performance&ex=${e.id}`}
-                class:list={[
-                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                  exSelecionadoId === e.id
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-                ]}>
-                {e.nome}
-              </a>
-            ))
-          )}
+          {categoriasConfig.map(cat => (
+            <a
+              href={`/dashboard/rankings?tab=performance&cat=${cat.key}`}
+              class:list={[
+                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                categoriaSelecionada === cat.key
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+              ]}>
+              {cat.label}
+            </a>
+          ))}
         </div>
       </div>
 
-      {!exSelecionado ? (
+      <!-- 2. Seletor de exercício (visível só quando há categoria selecionada) -->
+      {categoriaSelecionada && (
+        <div class="mb-6 flex flex-wrap items-center gap-3">
+          <label class="text-sm text-muted-foreground shrink-0">Exercício:</label>
+          <div class="flex flex-wrap gap-2">
+            {exerciciosDaCategoria.length === 0 ? (
+              <p class="text-sm text-muted-foreground">Nenhum exercício nesta categoria.</p>
+            ) : (
+              exerciciosDaCategoria.map(e => (
+                <a
+                  href={`/dashboard/rankings?tab=performance&cat=${categoriaSelecionada}&ex=${e.id}`}
+                  class:list={[
+                    'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                    exSelecionadoId === e.id
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+                  ]}>
+                  {e.nome}
+                </a>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {!categoriaSelecionada ? (
+        <div class="rounded-xl border border-border bg-card p-12 text-center">
+          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+            <svg class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <p class="text-sm font-medium text-foreground mb-1">Selecione uma categoria</p>
+          <p class="text-xs text-muted-foreground">Escolha a categoria acima para ver os exercícios</p>
+        </div>
+      ) : !exSelecionado ? (
         <div class="rounded-xl border border-border bg-card p-12 text-center">
           <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <svg class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
