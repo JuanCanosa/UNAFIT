@@ -30,4 +30,5 @@ Thumbs.db
 .idea/
 
 # Claude Code
+.claude/settings.json
 .claude/settings.local.json
