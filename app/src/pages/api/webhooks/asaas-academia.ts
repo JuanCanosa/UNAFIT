@@ -20,21 +20,37 @@ export const POST: APIRoute = async ({ request }) => {
 
   const admin = createSupabaseAdminClient();
 
-  // Valida token da academia (se configurado)
+  // ── Valida token da academia ────────────────────────────────────────────────
+  // Resolve a academia dona deste evento por dois caminhos (cobre todos os
+  // tipos de evento, não só PAYMENT_CREATED) e exige correspondência do token
+  // sempre que a academia tiver um configurado — sem isso, bastava omitir o
+  // header "asaas-access-token" para o webhook processar eventos forjados
+  // (ex: marcar uma cobrança como paga) sem nenhuma autenticação.
   const receivedToken = request.headers.get('asaas-access-token') ?? '';
-  if (receivedToken && payment.subscription) {
-    // Token validado via assinatura → academia
+
+  let academiaId: string | null = null;
+  if (payment.subscription) {
     const { data: ap } = await admin
       .from('aluno_planos')
       .select('academia_id')
       .eq('asaas_subscription_id', payment.subscription)
       .maybeSingle();
-    if (ap?.academia_id) {
-      const { data: acad } = await admin
-        .from('academias').select('asaas_webhook_token').eq('id', ap.academia_id).single();
-      if (acad?.asaas_webhook_token && receivedToken !== acad.asaas_webhook_token) {
-        return new Response('Unauthorized', { status: 401 });
-      }
+    academiaId = ap?.academia_id ?? null;
+  }
+  if (!academiaId) {
+    const { data: pagExistente } = await admin
+      .from('pagamentos')
+      .select('academia_id')
+      .eq('asaas_payment_id', payment.id)
+      .maybeSingle();
+    academiaId = pagExistente?.academia_id ?? null;
+  }
+
+  if (academiaId) {
+    const { data: acad } = await admin
+      .from('academias').select('asaas_webhook_token').eq('id', academiaId).maybeSingle();
+    if (acad?.asaas_webhook_token && receivedToken !== acad.asaas_webhook_token) {
+      return new Response('Unauthorized', { status: 401 });
     }
   }
 
