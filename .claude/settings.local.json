@@ -22,7 +22,8 @@
       "Bash(grep -rn \"\\\\.from\\('aluno_planos'\\)\" src/pages -r)",
       "Bash(grep -rn \"\\\\.from\\('planos'\\)\" src/pages -r)",
       "Bash(grep -rn \"\\\\.from\\('checkin_resultados'\\)\" src/pages -r)",
-      "Bash(grep -rn \"\\\\.from\\('checkins'\\)\" src/pages -r)"
+      "Bash(grep -rn \"\\\\.from\\('checkins'\\)\" src/pages -r)",
+      "Bash(git rm *)"
     ]
   }
 }
