@@ -66,6 +66,11 @@ if (profile.role === 'aluno') {
     <meta name="apple-mobile-web-app-title" content="UNAFIT" />
     <link rel="apple-touch-icon" href="/icon-unafit-192x192.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js');
+      }
+    </script>
     <!-- Inter font -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
