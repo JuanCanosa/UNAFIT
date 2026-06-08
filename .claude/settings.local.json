@@ -24,7 +24,10 @@
       "Bash(grep -rn \"\\\\.from\\('checkin_resultados'\\)\" src/pages -r)",
       "Bash(grep -rn \"\\\\.from\\('checkins'\\)\" src/pages -r)",
       "Bash(git rm *)",
-      "Bash(git ls-tree *)"
+      "Bash(git ls-tree *)",
+      "Bash(npx astro *)",
+      "Bash(pkill -f \"astro dev\")",
+      "Bash(pkill -f \"node.*astro\")"
     ]
   }
 }

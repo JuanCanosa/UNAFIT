@@ -16,6 +16,7 @@ const isAluno = profile.role === 'aluno';
 // Exercício selecionado para ranking de performance
 const urlParams = new URL(Astro.request.url).searchParams;
 const exSelecionadoId = urlParams.get('ex') ?? '';
+const modalidadeSelecionada = urlParams.get('mod') ?? '';
 const tabAtiva = urlParams.get('tab') ?? (isAluno ? 'performance' : 'presenca');
 
 // Mês atual em horário de Brasília
@@ -35,6 +36,7 @@ const [
   { data: aulasDoMes },
   { data: checkinsDoMes },
   { data: prsExercicio },
+  { data: modalidadesAcademia },
 ] = await Promise.all([
   !isAluno ? supabase
     .from('aulas_agenda')
@@ -58,15 +60,38 @@ const [
     .eq('academia_id', profile.academia_id!)
     .eq('exercicio_id', exSelecionadoId)
     : Promise.resolve({ data: [] }),
+
+  !isAluno ? supabase
+    .from('modalidades')
+    .select('id, nome, cor')
+    .eq('academia_id', profile.academia_id!)
+    .eq('ativo', true)
+    .order('ordem')
+    : Promise.resolve({ data: [] }),
 ]);
 
 // Exercício selecionado
 const exSelecionado = (exerciciosComPRs ?? []).find(e => e.id === exSelecionadoId) ?? null;
 
+// Mapa aula → modalidade, para filtrar check-ins por modalidade (checkins não
+// guarda a modalidade diretamente, só o vínculo com a aula)
+const aulaIdParaModalidade: Record<string, string> = {};
+for (const a of aulasDoMes ?? []) {
+  if (a.id) aulaIdParaModalidade[a.id] = a.modalidade ?? '';
+}
+
+// Filtra aulas/check-ins do mês pela modalidade selecionada (se houver)
+const aulasFiltradas = modalidadeSelecionada
+  ? (aulasDoMes ?? []).filter(a => a.modalidade === modalidadeSelecionada)
+  : (aulasDoMes ?? []);
+const checkinsFiltrados = modalidadeSelecionada
+  ? (checkinsDoMes ?? []).filter(c => aulaIdParaModalidade[c.aula_id ?? ''] === modalidadeSelecionada)
+  : (checkinsDoMes ?? []);
+
 // Ranking presença
 const presencasPorAula: Record<string, number> = {};
 const rankingPresenca: Record<string, { nome: string; total: number }> = {};
-for (const c of checkinsDoMes ?? []) {
+for (const c of checkinsFiltrados) {
   if (c.aula_id) presencasPorAula[c.aula_id] = (presencasPorAula[c.aula_id] ?? 0) + 1;
   const nome = (c.profiles as any)?.nome_completo ?? '?';
   if (!rankingPresenca[c.aluno_id]) rankingPresenca[c.aluno_id] = { nome, total: 0 };
@@ -77,8 +102,8 @@ const topPresenca = Object.entries(rankingPresenca)
   .sort((a, b) => b.total - a.total)
   .slice(0, 20);
 
-const totalAulasNoMes     = aulasDoMes?.length ?? 0;
-const totalPresencasNoMes = checkinsDoMes?.length ?? 0;
+const totalAulasNoMes     = aulasFiltradas.length;
+const totalPresencasNoMes = checkinsFiltrados.length;
 const alunosUnicos        = Object.keys(rankingPresenca).length;
 const mediaPresenca = totalAulasNoMes > 0 ? (totalPresencasNoMes / totalAulasNoMes).toFixed(1) : '—';
 
@@ -161,6 +186,35 @@ const medalhas = ['🥇', '🥈', '🥉'];
   <!-- ── TAB PRESENÇA ─────────────────────────────────────────────────────── -->
   {tabAtiva === 'presenca' && !isAluno && (
     <div>
+      <!-- Filtro por modalidade -->
+      {(modalidadesAcademia ?? []).length > 0 && (
+        <div class="mb-5 flex flex-wrap items-center gap-3">
+          <label class="text-sm text-muted-foreground shrink-0">Modalidade:</label>
+          <div class="flex flex-wrap gap-2">
+            <a href="/dashboard/rankings?tab=presenca"
+              class:list={[
+                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                !modalidadeSelecionada
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+              ]}>
+              Todas
+            </a>
+            {(modalidadesAcademia ?? []).map(m => (
+              <a href={`/dashboard/rankings?tab=presenca&mod=${encodeURIComponent(m.nome)}`}
+                class:list={[
+                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  modalidadeSelecionada === m.nome
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+                ]}>
+                {m.nome}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <div class="rounded-xl border border-border bg-card p-4">
           <p class="text-xs text-muted-foreground uppercase tracking-wider font-medium">Aulas no Mês</p>
@@ -184,10 +238,14 @@ const medalhas = ['🥇', '🥈', '🥉'];
         <!-- Top Presença -->
         <div class="rounded-xl border border-border bg-card p-5">
           <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Top Presença — Este Mês
+            Top Presença — Este Mês{modalidadeSelecionada && <span class="normal-case text-foreground/70"> · {modalidadeSelecionada}</span>}
           </h2>
           {topPresenca.length === 0 ? (
-            <p class="py-8 text-center text-sm text-muted-foreground">Nenhum check-in registrado este mês.</p>
+            <p class="py-8 text-center text-sm text-muted-foreground">
+              {modalidadeSelecionada
+                ? `Nenhum check-in registrado em ${modalidadeSelecionada} este mês.`
+                : 'Nenhum check-in registrado este mês.'}
+            </p>
           ) : (
             <div class="space-y-1.5">
               {topPresenca.map((r, i) => (
@@ -214,13 +272,17 @@ const medalhas = ['🥇', '🥈', '🥉'];
         <!-- Histórico de Aulas -->
         <div class="rounded-xl border border-border bg-card p-5">
           <h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Histórico de Aulas — Este Mês
+            Histórico de Aulas — Este Mês{modalidadeSelecionada && <span class="normal-case text-foreground/70"> · {modalidadeSelecionada}</span>}
           </h2>
-          {!aulasDoMes || aulasDoMes.length === 0 ? (
-            <p class="py-8 text-center text-sm text-muted-foreground">Nenhuma aula registrada este mês.</p>
+          {aulasFiltradas.length === 0 ? (
+            <p class="py-8 text-center text-sm text-muted-foreground">
+              {modalidadeSelecionada
+                ? `Nenhuma aula de ${modalidadeSelecionada} registrada este mês.`
+                : 'Nenhuma aula registrada este mês.'}
+            </p>
           ) : (
             <div class="space-y-1.5 max-h-[520px] overflow-y-auto pr-1">
-              {aulasDoMes.map((a: any) => {
+              {aulasFiltradas.map((a: any) => {
                 const presencas = presencasPorAula[a.id] ?? 0;
                 const cap = Number(a.capacidade_max) || 0;
                 const pct = cap > 0 ? Math.min(100, Math.round((presencas / cap) * 100)) : null;
