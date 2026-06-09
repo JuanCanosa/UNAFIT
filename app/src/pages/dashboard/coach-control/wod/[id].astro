@@ -351,7 +351,6 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
               Sem resultado (<span id="sr-count">{semResultadoData.length}</span>)
             </p>
             <select id="sr-mod-filter"
-              onchange="filtrarSR()"
               class="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:border-primary transition-colors">
               <option value="">Todas as modalidades</option>
               {modalidades.map(m => (
@@ -365,7 +364,6 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
               <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <input id="sr-nome-filter" type="text" placeholder="Buscar aluno por nome..."
-              oninput="filtrarSR()"
               class="w-full rounded-lg border border-border bg-background pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors" />
           </div>
         </div>
@@ -375,12 +373,12 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
 
         <!-- Paginador -->
         <div id="sr-pag" class="hidden px-4 py-3 border-t border-border flex items-center justify-between gap-3">
-          <button id="sr-prev" onclick="srGoTo(srPage - 1)"
+          <button id="sr-prev"
             class="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors">
             ← Anterior
           </button>
           <span id="sr-info" class="text-xs text-muted-foreground"></span>
-          <button id="sr-next" onclick="srGoTo(srPage + 1)"
+          <button id="sr-next"
             class="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors">
             Próximo →
           </button>
@@ -613,8 +611,12 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
         }
       }
     }
-    // Render inicial
+    // Render inicial + event listeners (evita dependência de escopo global)
     renderSR();
+    document.getElementById('sr-mod-filter')?.addEventListener('change', filtrarSR);
+    document.getElementById('sr-nome-filter')?.addEventListener('input', filtrarSR);
+    document.getElementById('sr-prev')?.addEventListener('click', function() { srGoTo(srPage - 1); });
+    document.getElementById('sr-next')?.addEventListener('click', function() { srGoTo(srPage + 1); });
   </script>
 
   <script is:inline>
