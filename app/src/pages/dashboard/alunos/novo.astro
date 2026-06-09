@@ -26,8 +26,8 @@ if (Astro.request.method === 'POST') {
   const senha       = (form.get('senha') as string)?.trim();
   const telefone    = (form.get('telefone') as string)?.trim();
   const cpf         = (form.get('cpf') as string)?.replace(/\D/g, '');
-  const categoria_id = form.get('categoria_id') as string || null;
   const plano_id    = form.get('plano_id') as string || null;
+  const modalidadesSelecionadas = form.getAll('modalidade') as string[];
 
   const data_nascimento = (form.get('data_nascimento') as string) || null;
   const endereco_cep         = (form.get('endereco_cep') as string)?.trim() || null;
@@ -41,8 +41,10 @@ if (Astro.request.method === 'POST') {
   // Email é opcional — se vazio, usa CPF como identificador de login
   const authEmail = email || `${cpf}@aluno.unafit.com.br`;
 
-  if (!nome || !senha || !telefone || !cpf) {
-    formError = 'Preencha todos os campos obrigatórios.';
+  if (!nome || !senha || !telefone || !cpf || modalidadesSelecionadas.length === 0) {
+    formError = !nome || !senha || !telefone || !cpf
+      ? 'Preencha todos os campos obrigatórios.'
+      : 'Selecione pelo menos uma modalidade.';
   } else if (senha.length < 6) {
     formError = 'A senha deve ter pelo menos 6 caracteres.';
   } else if (cpf.length !== 11) {
@@ -65,7 +67,6 @@ if (Astro.request.method === 'POST') {
         academia_id: profile.academia_id,
         nome, email, telefone, cpf,
         data_nascimento: data_nascimento || null,
-        categoria_id: categoria_id || null,
         endereco_cep, endereco_rua, endereco_numero,
         endereco_complemento, endereco_bairro, endereco_cidade, endereco_estado,
         status: 'pendente',
@@ -75,6 +76,17 @@ if (Astro.request.method === 'POST') {
         formError = insErr.message;
       } else {
         const adminClient = createSupabaseAdminClient();
+
+        // Vincula modalidades selecionadas
+        if (modalidadesSelecionadas.length > 0) {
+          await adminClient.from('aluno_modalidades').insert(
+            modalidadesSelecionadas.map(m => ({
+              aluno_id:    aluno!.id,
+              academia_id: profile.academia_id,
+              modalidade:  m,
+            }))
+          );
+        }
 
         // Vincula ao plano e auto-sincroniza no Asaas se selecionado
         let asaasWarn = '';
@@ -153,8 +165,8 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const [{ data: categorias }, { data: planos }] = await Promise.all([
-  supabase.from('categorias_alunos').select('id, nome, cor').eq('academia_id', profile.academia_id!).order('nome'),
+const [{ data: modalidades }, { data: planos }] = await Promise.all([
+  supabase.from('modalidades').select('nome, cor').eq('academia_id', profile.academia_id!).eq('ativo', true).order('ordem'),
   supabase.from('planos').select('id, nome, valor').eq('academia_id', profile.academia_id!).eq('ativo', true).order('nome'),
 ]);
 ---
@@ -276,33 +288,46 @@ const [{ data: categorias }, { data: planos }] = await Promise.all([
       <section class="bg-zinc-900 border border-zinc-700 rounded-xl p-5 space-y-4">
         <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Classificação</h2>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm text-zinc-400 mb-1">Categoria</label>
-            <select name="categoria_id"
-              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none">
-              <option value="">Sem categoria</option>
-              {categorias?.map((c: any) => (
-                <option value={c.id}>{c.nome}</option>
+        <!-- Modalidades (obrigatório) -->
+        <div>
+          <label class="block text-sm text-zinc-400 mb-2">
+            Modalidades <span class="text-red-400">*</span>
+          </label>
+          {(modalidades ?? []).length === 0 ? (
+            <p class="text-xs text-zinc-500">
+              Nenhuma modalidade cadastrada.
+              <a href="/dashboard/configuracoes" class="underline hover:text-zinc-300">Cadastrar modalidades</a>
+            </p>
+          ) : (
+            <div class="space-y-2">
+              {(modalidades ?? []).map((m: any) => (
+                <label class="flex items-center gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    name="modalidade"
+                    value={m.nome}
+                    class="h-4 w-4 rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+                  />
+                  <span class="text-sm text-zinc-300 group-hover:text-white transition-colors">{m.nome}</span>
+                </label>
               ))}
-            </select>
-            <a href="/dashboard/planos" class="text-xs text-zinc-500 hover:text-zinc-300 mt-1 block">
-              + Gerenciar categorias
-            </a>
-          </div>
-          <div>
-            <label class="block text-sm text-zinc-400 mb-1">Plano inicial</label>
-            <select name="plano_id"
-              class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none">
-              <option value="">Sem plano</option>
-              {planos?.map((p: any) => (
-                <option value={p.id}>{p.nome} — R$ {Number(p.valor).toFixed(2).replace('.', ',')}</option>
-              ))}
-            </select>
-            <a href="/dashboard/planos" class="text-xs text-zinc-500 hover:text-zinc-300 mt-1 block">
-              + Gerenciar planos
-            </a>
-          </div>
+            </div>
+          )}
+        </div>
+
+        <!-- Plano inicial -->
+        <div>
+          <label class="block text-sm text-zinc-400 mb-1">Plano inicial</label>
+          <select name="plano_id"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:border-red-500 focus:outline-none">
+            <option value="">Sem plano</option>
+            {planos?.map((p: any) => (
+              <option value={p.id}>{p.nome} — R$ {Number(p.valor).toFixed(2).replace('.', ',')}</option>
+            ))}
+          </select>
+          <a href="/dashboard/planos" class="text-xs text-zinc-500 hover:text-zinc-300 mt-1 block">
+            + Gerenciar planos
+          </a>
         </div>
       </section>
 
