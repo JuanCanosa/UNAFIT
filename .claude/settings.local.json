@@ -27,7 +27,10 @@
       "Bash(git ls-tree *)",
       "Bash(npx astro *)",
       "Bash(pkill -f \"astro dev\")",
-      "Bash(pkill -f \"node.*astro\")"
+      "Bash(pkill -f \"node.*astro\")",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }
