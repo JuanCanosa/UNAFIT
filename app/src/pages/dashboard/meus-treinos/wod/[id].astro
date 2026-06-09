@@ -1,0 +1,571 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+const wodId      = Astro.params.id as string;
+const adminClient = createSupabaseAdminClient();
+
+// ── POST: submeter resultado ─────────────────────────────────────────────────
+let formError = '';
+if (Astro.request.method === 'POST') {
+  const form      = await Astro.request.formData();
+  const categoria = form.get('categoria') as string;
+  const deu_cap   = form.get('deu_cap') === '1';
+  const pse       = form.get('pse') ? parseInt(form.get('pse') as string) : null;
+
+  // Validações
+  if (!['rx','intermediario','scaled','iniciante'].includes(categoria)) {
+    formError = 'Selecione uma categoria.';
+  } else {
+    const { data: wodInfo } = await adminClient.from('wods')
+      .select('score_type')
+      .eq('id', wodId)
+      .single();
+
+    let tempo_segundos: number | null = null;
+    let repeticoes: number | null = null;
+    let carga_kg: number | null = null;
+    let scoreValido = false;
+
+    if (wodInfo?.score_type === 'tempo') {
+      if (deu_cap) {
+        repeticoes = parseInt(form.get('repeticoes') as string);
+        scoreValido = !isNaN(repeticoes) && repeticoes >= 0;
+      } else {
+        const min = parseInt(form.get('tempo_min') as string) || 0;
+        const sec = parseInt(form.get('tempo_sec') as string) || 0;
+        tempo_segundos = min * 60 + sec;
+        scoreValido = tempo_segundos > 0;
+      }
+    } else if (wodInfo?.score_type === 'carga') {
+      carga_kg = parseFloat(form.get('carga_kg') as string);
+      scoreValido = !isNaN(carga_kg) && carga_kg > 0;
+    } else {
+      repeticoes = parseInt(form.get('repeticoes') as string);
+      scoreValido = !isNaN(repeticoes) && repeticoes >= 0;
+    }
+
+    if (!scoreValido) {
+      formError = 'Preencha o resultado corretamente.';
+    } else {
+      const { error } = await adminClient.from('wod_resultados')
+        .upsert({
+          academia_id: profile.academia_id,
+          wod_id:      wodId,
+          aluno_id:    user.id,
+          categoria,
+          deu_cap,
+          tempo_segundos,
+          repeticoes,
+          carga_kg,
+          pse,
+        }, { onConflict: 'wod_id,aluno_id' });
+
+      if (error) formError = error.message;
+      else return Astro.redirect(`/dashboard/meus-treinos/wod/${wodId}?ok=1`);
+    }
+  }
+}
+
+// ── GET ──────────────────────────────────────────────────────────────────────
+const catParam = new URL(Astro.request.url).searchParams.get('cat') || 'geral';
+const submitted = new URL(Astro.request.url).searchParams.get('ok') === '1';
+
+const [
+  { data: wod },
+  { data: meuResultadoRaw },
+  { data: rankingRaw },
+] = await Promise.all([
+  adminClient.from('wods')
+    .select('id, nome, treino, score_type, data_aplicacao, aberto_para_avaliacao, time_cap_min')
+    .eq('id', wodId)
+    .eq('academia_id', profile.academia_id)
+    .single(),
+  adminClient.from('wod_resultados')
+    .select('categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse')
+    .eq('wod_id', wodId)
+    .eq('aluno_id', user.id)
+    .maybeSingle(),
+  adminClient.from('wod_resultados')
+    .select('categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, aluno_id, profiles!wod_resultados_aluno_id_fkey(nome_completo)')
+    .eq('wod_id', wodId),
+]);
+
+if (!wod || !wod.aberto_para_avaliacao) return Astro.redirect('/dashboard/meus-treinos');
+
+type MeuResultado = { categoria: string; deu_cap: boolean; tempo_segundos: number | null; repeticoes: number | null; carga_kg: number | null; pse: number | null };
+type RankRow = { categoria: string; deu_cap: boolean; tempo_segundos: number | null; repeticoes: number | null; carga_kg: number | null; aluno_id: string; profiles: { nome_completo: string } | null };
+
+const meuResultado = meuResultadoRaw as MeuResultado | null;
+const todosRanking = (rankingRaw ?? []) as RankRow[];
+const filtrados    = catParam === 'geral' ? todosRanking : todosRanking.filter(r => r.categoria === catParam);
+
+function sortRanking(rs: RankRow[]): RankRow[] {
+  if (wod.score_type === 'tempo') {
+    return [...rs].sort((a, b) => {
+      if (!a.deu_cap && !b.deu_cap) return (a.tempo_segundos ?? 0) - (b.tempo_segundos ?? 0);
+      if (a.deu_cap && !b.deu_cap)  return 1;
+      if (!a.deu_cap && b.deu_cap)  return -1;
+      return (b.repeticoes ?? 0) - (a.repeticoes ?? 0);
+    });
+  }
+  if (wod.score_type === 'carga') return [...rs].sort((a, b) => (b.carga_kg ?? 0) - (a.carga_kg ?? 0));
+  return [...rs].sort((a, b) => (b.repeticoes ?? 0) - (a.repeticoes ?? 0));
+}
+
+const ranking = sortRanking(filtrados);
+const meuRankPos = ranking.findIndex(r => r.aluno_id === user.id) + 1;
+
+function formatScore(r: { deu_cap: boolean; tempo_segundos: number | null; repeticoes: number | null; carga_kg: number | null }) {
+  if (wod.score_type === 'tempo') {
+    if (r.deu_cap) return `CAP → ${r.repeticoes ?? 0} reps`;
+    if (r.tempo_segundos) {
+      const m = Math.floor(r.tempo_segundos / 60).toString().padStart(2, '0');
+      const s = (r.tempo_segundos % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+  }
+  if (wod.score_type === 'carga') return `${r.carga_kg} kg`;
+  if (wod.score_type === 'reps')  return `${r.repeticoes} reps`;
+  return '—';
+}
+function catLabel(c: string) {
+  if (c === 'rx') return 'RX';
+  if (c === 'intermediario') return 'Intermediário';
+  if (c === 'scaled') return 'Scaled';
+  return 'Iniciante';
+}
+function catColor(c: string) {
+  if (c === 'rx') return 'bg-yellow-500/15 text-yellow-400';
+  if (c === 'intermediario') return 'bg-blue-500/15 text-blue-400';
+  if (c === 'scaled') return 'bg-purple-500/15 text-purple-400';
+  return 'bg-green-500/15 text-green-400';
+}
+function formatDate(d: string) {
+  if (!d) return '';
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}/${y}`;
+}
+
+const CATS = ['geral','rx','intermediario','scaled','iniciante'];
+const countByCat = (cat: string) => cat === 'geral' ? todosRanking.length : todosRanking.filter(r => r.categoria === cat).length;
+---
+<DashboardLayout title={wod.nome}>
+  <div class="max-w-lg mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-start gap-3">
+      <a href="/dashboard/meus-treinos"
+        class="mt-0.5 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </a>
+      <div>
+        <h1 class="text-xl font-bold text-foreground">{wod.nome}</h1>
+        <p class="text-xs text-muted-foreground mt-0.5">{formatDate(wod.data_aplicacao)}</p>
+      </div>
+    </div>
+
+    <!-- Prescrição -->
+    {wod.treino && (
+      <div class="rounded-xl border border-border bg-card p-4">
+        <pre class="text-sm text-foreground font-mono whitespace-pre-wrap leading-relaxed">{wod.treino}</pre>
+        {wod.time_cap_min && (
+          <p class="mt-2 text-xs text-orange-400 font-semibold">Time Cap: {wod.time_cap_min} minutos</p>
+        )}
+      </div>
+    )}
+
+    <!-- ── Resultado já enviado ── -->
+    {meuResultado && (
+      <div class="rounded-xl border border-primary/30 bg-primary/5 p-4">
+        <div class="flex items-center gap-2 mb-3">
+          <svg class="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          <p class="text-sm font-bold text-primary">Resultado registrado!</p>
+        </div>
+        <div class="flex items-center gap-4">
+          <div>
+            <p class="text-3xl font-black text-foreground tabular-nums">{formatScore(meuResultado)}</p>
+            <div class="flex items-center gap-2 mt-1">
+              <span class:list={['px-2 py-0.5 rounded text-xs font-bold', catColor(meuResultado.categoria)]}>
+                {catLabel(meuResultado.categoria)}
+              </span>
+              {meuResultado.pse && <span class="text-xs text-muted-foreground">PSE {meuResultado.pse}</span>}
+            </div>
+          </div>
+          {meuRankPos > 0 && (
+            <div class="ml-auto text-center">
+              <p class:list={[
+                'text-2xl font-black',
+                meuRankPos === 1 ? 'text-yellow-400' :
+                meuRankPos <= 3 ? 'text-primary' : 'text-muted-foreground'
+              ]}>#{meuRankPos}</p>
+              <p class="text-[10px] text-muted-foreground">{catParam === 'geral' ? 'Geral' : catLabel(catParam)}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    <!-- ── Formulário de registro ── -->
+    {!meuResultado && (
+      <div class="rounded-xl border border-border bg-card overflow-hidden">
+        <div class="px-5 py-4 border-b border-border">
+          <h2 class="font-bold text-foreground">Registrar Resultado</h2>
+          <p class="text-xs text-muted-foreground mt-0.5">Preencha rápido enquanto o treino está fresco!</p>
+        </div>
+
+        <form method="POST" id="form-resultado" class="p-5 space-y-6">
+          {formError && (
+            <div class="rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-2.5 text-sm text-red-400">
+              {formError}
+            </div>
+          )}
+
+          <!-- Categoria -->
+          <div>
+            <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Sua Categoria</p>
+            <input type="hidden" name="categoria" id="cat-hidden" required />
+            <div class="grid grid-cols-2 gap-2.5">
+              {[
+                { val: 'rx',           label: 'RX',           sub: 'Peso padrão oficial' },
+                { val: 'intermediario',label: 'Intermediário', sub: 'Adaptação de peso' },
+                { val: 'scaled',       label: 'Scaled',       sub: 'Mov. adaptados' },
+                { val: 'iniciante',    label: 'Iniciante',    sub: 'Aprendendo os mov.' },
+              ].map(op => (
+                <button
+                  type="button"
+                  data-cat={op.val}
+                  onclick={`selecionarCat('${op.val}')`}
+                  class="cat-btn flex flex-col items-center justify-center rounded-xl border-2 border-border bg-background py-4 px-3 text-center transition-all hover:border-primary/50"
+                >
+                  <span class="text-lg font-black text-foreground">{op.label}</span>
+                  <span class="text-[10px] text-muted-foreground mt-0.5 leading-tight">{op.sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <!-- Score: TEMPO -->
+          {wod.score_type === 'tempo' && (
+            <div>
+              <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Resultado</p>
+              <input type="hidden" name="deu_cap" id="deu-cap-hidden" value="0" />
+
+              <!-- Toggle Terminei / CAP -->
+              <div class="flex gap-2 mb-4">
+                <button type="button" id="btn-terminei"
+                  onclick="setFinished(true)"
+                  class="flex-1 rounded-xl border-2 border-primary bg-primary/10 py-3 text-sm font-bold text-primary transition-all">
+                  Terminei ✓
+                </button>
+                <button type="button" id="btn-cap"
+                  onclick="setFinished(false)"
+                  class="flex-1 rounded-xl border-2 border-border py-3 text-sm font-bold text-muted-foreground transition-all hover:border-muted">
+                  Deu CAP
+                </button>
+              </div>
+
+              <!-- Terminei: MM:SS -->
+              <div id="input-tempo">
+                <div class="flex items-center justify-center gap-3">
+                  <div class="text-center">
+                    <input type="number" name="tempo_min" min="0" max="99" inputmode="numeric"
+                      placeholder="00"
+                      class="w-28 rounded-xl border-2 border-border bg-background text-5xl font-black text-center text-foreground py-3 focus:outline-none focus:border-primary transition-colors" />
+                    <p class="text-xs text-muted-foreground mt-1 font-medium">min</p>
+                  </div>
+                  <span class="text-5xl font-black text-primary pb-5">:</span>
+                  <div class="text-center">
+                    <input type="number" name="tempo_sec" min="0" max="59" inputmode="numeric"
+                      placeholder="00"
+                      class="w-28 rounded-xl border-2 border-border bg-background text-5xl font-black text-center text-foreground py-3 focus:outline-none focus:border-primary transition-colors" />
+                    <p class="text-xs text-muted-foreground mt-1 font-medium">seg</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- CAP: reps -->
+              <div id="input-cap" class="hidden">
+                <p class="text-xs text-muted-foreground mb-2 text-center">Quantas reps você completou antes do cap?</p>
+                <input type="number" name="repeticoes" min="0" inputmode="numeric"
+                  placeholder="0"
+                  class="w-full rounded-xl border-2 border-border bg-background text-5xl font-black text-center text-foreground py-4 focus:outline-none focus:border-primary transition-colors" />
+                <p class="text-center text-xs text-muted-foreground mt-1">reps</p>
+              </div>
+            </div>
+          )}
+
+          <!-- Score: CARGA -->
+          {wod.score_type === 'carga' && (
+            <div>
+              <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Carga Máxima</p>
+              <div class="text-center">
+                <input type="number" name="carga_kg" min="0" step="0.5" inputmode="numeric"
+                  placeholder="0"
+                  class="w-48 rounded-xl border-2 border-border bg-background text-5xl font-black text-center text-foreground py-4 focus:outline-none focus:border-primary transition-colors" />
+                <p class="text-xs text-muted-foreground mt-1 font-medium">kg</p>
+              </div>
+            </div>
+          )}
+
+          <!-- Score: REPS -->
+          {wod.score_type === 'reps' && (
+            <div>
+              <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Total de Repetições</p>
+              <div class="text-center">
+                <input type="number" name="repeticoes" min="0" inputmode="numeric"
+                  placeholder="0"
+                  class="w-48 rounded-xl border-2 border-border bg-background text-5xl font-black text-center text-foreground py-4 focus:outline-none focus:border-primary transition-colors" />
+                <p class="text-xs text-muted-foreground mt-1 font-medium">reps</p>
+              </div>
+            </div>
+          )}
+
+          <!-- PSE -->
+          <div>
+            <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-1">PSE — Percepção de Esforço</p>
+            <p class="text-[10px] text-muted-foreground mb-3">
+              <span class="text-green-500">1-3 Fácil</span> ·
+              <span class="text-yellow-500">4-6 Moderado</span> ·
+              <span class="text-orange-500">7-9 Intenso</span> ·
+              <span class="text-red-500">10 Máximo</span>
+            </p>
+            <input type="hidden" name="pse" id="pse-hidden" />
+            <div class="flex gap-1.5">
+              {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                <button type="button" data-pse={n} onclick={`selectPse(${n})`}
+                  class:list={[
+                    'pse-btn flex-1 h-11 rounded-lg border-2 font-black text-sm transition-all',
+                    n <= 3 ? 'border-green-500/30 text-green-500 hover:bg-green-500/15' :
+                    n <= 6 ? 'border-yellow-500/30 text-yellow-500 hover:bg-yellow-500/15' :
+                    n <= 9 ? 'border-orange-500/30 text-orange-500 hover:bg-orange-500/15' :
+                             'border-red-500/30 text-red-500 hover:bg-red-500/15'
+                  ]}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <button type="submit" id="btn-submit"
+            class="w-full rounded-xl bg-primary py-4 text-base font-black text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all">
+            ENVIAR RESULTADO
+          </button>
+        </form>
+      </div>
+    )}
+
+    <!-- Botão editar resultado já enviado -->
+    {meuResultado && (
+      <details class="rounded-xl border border-border bg-card overflow-hidden">
+        <summary class="px-4 py-3 cursor-pointer text-sm text-muted-foreground hover:text-foreground transition-colors select-none">
+          Corrigir resultado
+        </summary>
+        <form method="POST" class="px-4 pb-4 space-y-4 border-t border-border pt-4">
+          <!-- versão compacta do mesmo form -->
+          <input type="hidden" name="categoria" id="cat-hidden-edit" value={meuResultado.categoria} />
+          <div>
+            <p class="text-xs font-semibold text-muted-foreground mb-2">Categoria</p>
+            <div class="grid grid-cols-4 gap-1.5">
+              {[{v:'rx',l:'RX'},{v:'intermediario',l:'Inter.'},{v:'scaled',l:'Scaled'},{v:'iniciante',l:'Inic.'}].map(op => (
+                <button type="button" data-cat-edit={op.v} onclick={`selecionarCatEdit('${op.v}')`}
+                  class:list={['cat-btn-edit rounded-lg border-2 py-2 text-xs font-bold transition-all',
+                    meuResultado.categoria === op.v ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground']}>
+                  {op.l}
+                </button>
+              ))}
+            </div>
+          </div>
+          {wod.score_type === 'tempo' && (
+            <div class="flex items-center gap-2">
+              <input type="hidden" name="deu_cap" id="deu-cap-edit" value={meuResultado.deu_cap ? '1' : '0'} />
+              <label class="flex items-center gap-1.5 cursor-pointer text-sm text-foreground">
+                <input type="checkbox" onchange="document.getElementById('deu-cap-edit').value = this.checked ? '1' : '0'"
+                  checked={meuResultado.deu_cap}
+                  class="accent-primary" />
+                Deu CAP
+              </label>
+              <input type="number" name="tempo_min" inputmode="numeric" placeholder="min"
+                value={!meuResultado.deu_cap && meuResultado.tempo_segundos ? Math.floor(meuResultado.tempo_segundos / 60) : ''}
+                class="w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center text-foreground focus:outline-none focus:border-primary" />
+              <span class="text-muted-foreground font-bold">:</span>
+              <input type="number" name="tempo_sec" inputmode="numeric" placeholder="seg"
+                value={!meuResultado.deu_cap && meuResultado.tempo_segundos ? meuResultado.tempo_segundos % 60 : ''}
+                class="w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center text-foreground focus:outline-none focus:border-primary" />
+              {meuResultado.deu_cap && (
+                <input type="number" name="repeticoes" inputmode="numeric" placeholder="reps"
+                  value={meuResultado.repeticoes ?? ''}
+                  class="w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center text-foreground focus:outline-none focus:border-primary" />
+              )}
+            </div>
+          )}
+          {wod.score_type === 'carga' && (
+            <input type="number" name="carga_kg" inputmode="numeric" step="0.5"
+              value={meuResultado.carga_kg ?? ''}
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-lg font-bold text-center text-foreground focus:outline-none focus:border-primary" />
+          )}
+          {wod.score_type === 'reps' && (
+            <input type="number" name="repeticoes" inputmode="numeric"
+              value={meuResultado.repeticoes ?? ''}
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-lg font-bold text-center text-foreground focus:outline-none focus:border-primary" />
+          )}
+          <button type="submit"
+            class="w-full rounded-lg bg-muted py-2.5 text-sm font-semibold text-foreground hover:bg-card transition-colors border border-border">
+            Salvar Correção
+          </button>
+        </form>
+      </details>
+    )}
+
+    <!-- ── Leaderboard ── -->
+    <div class="space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="font-bold text-foreground">Leaderboard</h2>
+        <span class="text-xs text-muted-foreground">{todosRanking.length} resultado{todosRanking.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      <!-- Filtro categorias -->
+      <div class="flex gap-1.5 flex-wrap">
+        {CATS.map(cat => {
+          const cnt = countByCat(cat);
+          return (
+            <a href={`?cat=${cat}`}
+              class:list={[
+                'px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors border',
+                catParam === cat
+                  ? 'bg-primary border-primary text-primary-foreground'
+                  : 'bg-card border-border text-muted-foreground hover:text-foreground'
+              ]}>
+              {cat === 'geral' ? 'Geral' : catLabel(cat)}
+              <span class="opacity-60 ml-0.5">({cnt})</span>
+            </a>
+          );
+        })}
+      </div>
+
+      {ranking.length === 0 && (
+        <div class="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground text-sm">
+          Nenhum resultado nesta categoria ainda. Seja o primeiro!
+        </div>
+      )}
+
+      {ranking.length > 0 && (
+        <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <ul class="divide-y divide-border">
+            {ranking.map((r, i) => {
+              const isMe = r.aluno_id === user.id;
+              return (
+                <li class:list={[
+                  'flex items-center gap-3 px-4 py-3',
+                  isMe ? 'bg-primary/5 border-l-2 border-l-primary' : ''
+                ]}>
+                  <div class:list={[
+                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-black',
+                    i === 0 ? 'bg-yellow-500/20 text-yellow-400' :
+                    i === 1 ? 'bg-slate-400/20 text-slate-400' :
+                    i === 2 ? 'bg-amber-600/20 text-amber-600' :
+                              'bg-muted text-muted-foreground'
+                  ]}>
+                    {i + 1}
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class:list={['text-sm font-semibold truncate', isMe ? 'text-primary' : 'text-foreground']}>
+                      {(r.profiles as any)?.nome_completo ?? '—'}
+                      {isMe && <span class="ml-1.5 text-[10px] font-bold text-primary">(você)</span>}
+                    </p>
+                    <span class:list={['text-[10px] font-semibold px-1.5 py-0.5 rounded', catColor(r.categoria)]}>
+                      {catLabel(r.categoria)}
+                    </span>
+                  </div>
+                  <p class:list={[
+                    'text-sm font-bold tabular-nums shrink-0',
+                    r.deu_cap ? 'text-muted-foreground' : isMe ? 'text-primary' : 'text-foreground'
+                  ]}>
+                    {formatScore(r)}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+
+  </div>
+
+  <script is:inline>
+    // Categoria
+    function selecionarCat(val) {
+      document.getElementById('cat-hidden').value = val;
+      document.querySelectorAll('.cat-btn').forEach(btn => {
+        const active = btn.getAttribute('data-cat') === val;
+        btn.classList.toggle('border-primary', active);
+        btn.classList.toggle('bg-primary/10', active);
+        btn.classList.toggle('text-primary', active);
+        btn.classList.toggle('border-border', !active);
+        btn.classList.toggle('text-foreground', !active);
+      });
+    }
+    function selecionarCatEdit(val) {
+      document.getElementById('cat-hidden-edit').value = val;
+      document.querySelectorAll('.cat-btn-edit').forEach(btn => {
+        const active = btn.getAttribute('data-cat-edit') === val;
+        btn.classList.toggle('border-primary', active);
+        btn.classList.toggle('bg-primary/10', active);
+        btn.classList.toggle('text-primary', active);
+        btn.classList.toggle('border-border', !active);
+        btn.classList.toggle('text-muted-foreground', !active);
+      });
+    }
+
+    // Terminei / CAP toggle
+    function setFinished(finished) {
+      document.getElementById('deu-cap-hidden').value = finished ? '0' : '1';
+      document.getElementById('input-tempo').classList.toggle('hidden', !finished);
+      document.getElementById('input-cap').classList.toggle('hidden', finished);
+      const btnT = document.getElementById('btn-terminei');
+      const btnC = document.getElementById('btn-cap');
+      btnT.classList.toggle('border-primary', finished);
+      btnT.classList.toggle('bg-primary/10', finished);
+      btnT.classList.toggle('text-primary', finished);
+      btnT.classList.toggle('border-border', !finished);
+      btnT.classList.toggle('text-muted-foreground', !finished);
+      btnC.classList.toggle('border-primary', !finished);
+      btnC.classList.toggle('bg-primary/10', !finished);
+      btnC.classList.toggle('text-primary', !finished);
+      btnC.classList.toggle('border-border', finished);
+      btnC.classList.toggle('text-muted-foreground', finished);
+    }
+
+    // PSE
+    function selectPse(n) {
+      document.getElementById('pse-hidden').value = n;
+      document.querySelectorAll('.pse-btn').forEach(btn => {
+        const v = parseInt(btn.getAttribute('data-pse'));
+        const active = v === n;
+        const colorClass = v <= 3 ? 'bg-green-500/20' : v <= 6 ? 'bg-yellow-500/20' : v <= 9 ? 'bg-orange-500/20' : 'bg-red-500/20';
+        btn.classList.toggle(colorClass, active);
+        btn.classList.toggle('scale-110', active);
+        btn.classList.toggle('ring-2', active);
+        btn.classList.toggle('ring-primary', active);
+      });
+    }
+  </script>
+</DashboardLayout>

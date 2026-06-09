@@ -1,0 +1,241 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || !['dono', 'colaborador', 'saas_admin'].includes(profile.role))
+  return Astro.redirect('/dashboard');
+
+const wodId      = Astro.params.id as string;
+const adminClient = createSupabaseAdminClient();
+
+// POST: toggle avaliação aqui também
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const aberto = form.get('aberto') === '1';
+  await adminClient.from('wods')
+    .update({ aberto_para_avaliacao: aberto })
+    .eq('id', wodId)
+    .eq('academia_id', profile.academia_id);
+  return Astro.redirect(`/dashboard/coach-control/wod/${wodId}`);
+}
+
+const catParam = new URL(Astro.request.url).searchParams.get('cat') || 'geral';
+
+const [
+  { data: wod },
+  { data: resultadosRaw },
+] = await Promise.all([
+  adminClient.from('wods')
+    .select('id, nome, treino, score_type, data_aplicacao, aberto_para_avaliacao, time_cap_min')
+    .eq('id', wodId)
+    .eq('academia_id', profile.academia_id)
+    .single(),
+  adminClient.from('wod_resultados')
+    .select('id, categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse, criado_em, aluno_id, profiles!wod_resultados_aluno_id_fkey(nome_completo)')
+    .eq('wod_id', wodId),
+]);
+
+if (!wod) return Astro.redirect('/dashboard/coach-control');
+
+type Resultado = {
+  id: string; categoria: string; deu_cap: boolean;
+  tempo_segundos: number | null; repeticoes: number | null; carga_kg: number | null;
+  pse: number | null; aluno_id: string;
+  profiles: { nome_completo: string } | null;
+};
+
+const todos = (resultadosRaw ?? []) as Resultado[];
+const filtrados = catParam === 'geral' ? todos : todos.filter(r => r.categoria === catParam);
+
+function sortResultados(rs: Resultado[], scoreType: string): Resultado[] {
+  if (scoreType === 'tempo') {
+    return [...rs].sort((a, b) => {
+      if (!a.deu_cap && !b.deu_cap) return (a.tempo_segundos ?? 0) - (b.tempo_segundos ?? 0);
+      if (a.deu_cap && !b.deu_cap) return 1;
+      if (!a.deu_cap && b.deu_cap) return -1;
+      return (b.repeticoes ?? 0) - (a.repeticoes ?? 0);
+    });
+  }
+  if (scoreType === 'carga') return [...rs].sort((a, b) => (b.carga_kg ?? 0) - (a.carga_kg ?? 0));
+  return [...rs].sort((a, b) => (b.repeticoes ?? 0) - (a.repeticoes ?? 0));
+}
+
+const ranking = sortResultados(filtrados, wod.score_type);
+
+function formatScore(r: Resultado, scoreType: string) {
+  if (scoreType === 'tempo') {
+    if (r.deu_cap) return `CAP → ${r.repeticoes ?? 0} reps`;
+    if (r.tempo_segundos) {
+      const m = Math.floor(r.tempo_segundos / 60).toString().padStart(2, '0');
+      const s = (r.tempo_segundos % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+  }
+  if (scoreType === 'carga') return `${r.carga_kg} kg`;
+  if (scoreType === 'reps')  return `${r.repeticoes} reps`;
+  return '—';
+}
+function isCAP(r: Resultado) { return r.deu_cap; }
+
+function catLabel(c: string) {
+  if (c === 'rx') return 'RX';
+  if (c === 'intermediario') return 'Intermediário';
+  if (c === 'scaled') return 'Scaled';
+  return 'Iniciante';
+}
+function catColor(c: string) {
+  if (c === 'rx') return 'bg-yellow-500/15 text-yellow-400';
+  if (c === 'intermediario') return 'bg-blue-500/15 text-blue-400';
+  if (c === 'scaled') return 'bg-purple-500/15 text-purple-400';
+  return 'bg-green-500/15 text-green-400';
+}
+function scoreLabel(s: string) {
+  if (s === 'tempo') return 'Para Tempo';
+  if (s === 'carga') return 'Carga Máx';
+  return 'Max Reps';
+}
+function formatDate(d: string) {
+  if (!d) return '';
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}/${y}`;
+}
+
+const CATS = ['geral','rx','intermediario','scaled','iniciante'];
+const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filter(r => r.categoria === cat).length;
+---
+<DashboardLayout title={wod.nome}>
+  <div class="max-w-2xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-start gap-3">
+      <a href="/dashboard/coach-control"
+        class="mt-0.5 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </a>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h1 class="text-xl font-bold text-foreground">{wod.nome}</h1>
+          <span class:list={[
+            'px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide',
+            wod.score_type === 'tempo' ? 'bg-blue-500/15 text-blue-400' :
+            wod.score_type === 'carga' ? 'bg-orange-500/15 text-orange-400' :
+                                         'bg-purple-500/15 text-purple-400'
+          ]}>
+            {scoreLabel(wod.score_type)}
+          </span>
+        </div>
+        <p class="text-xs text-muted-foreground mt-0.5">
+          {formatDate(wod.data_aplicacao)} · {todos.length} resultado{todos.length !== 1 ? 's' : ''}
+        </p>
+      </div>
+      <!-- Toggle aberto/fechado -->
+      <form method="POST" class="flex items-center gap-2 shrink-0 mt-1">
+        <input type="hidden" name="aberto" value={wod.aberto_para_avaliacao ? '0' : '1'} />
+        <button type="submit"
+          class:list={[
+            'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+            wod.aberto_para_avaliacao ? 'bg-primary' : 'bg-muted'
+          ]}>
+          <span class:list={[
+            'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200',
+            wod.aberto_para_avaliacao ? 'translate-x-5' : 'translate-x-0'
+          ]} />
+        </button>
+        <span class="text-xs text-muted-foreground">
+          {wod.aberto_para_avaliacao ? 'Aberto' : 'Fechado'}
+        </span>
+      </form>
+    </div>
+
+    <!-- Prescrição -->
+    {wod.treino && (
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Prescrição</p>
+        <pre class="text-sm text-foreground font-mono whitespace-pre-wrap">{wod.treino}</pre>
+      </div>
+    )}
+
+    <!-- Filtro por categoria -->
+    <div class="flex gap-1.5 flex-wrap">
+      {CATS.map(cat => {
+        const count = countByCat(cat);
+        return (
+          <a href={`?cat=${cat}`}
+            class:list={[
+              'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border',
+              catParam === cat
+                ? 'bg-primary border-primary text-primary-foreground'
+                : 'bg-card border-border text-muted-foreground hover:text-foreground'
+            ]}>
+            {cat === 'geral' ? 'Geral' : catLabel(cat)}
+            <span class="ml-1 opacity-70">({count})</span>
+          </a>
+        );
+      })}
+    </div>
+
+    <!-- Leaderboard -->
+    {ranking.length === 0 && (
+      <div class="rounded-xl border border-border bg-card p-8 text-center text-muted-foreground text-sm">
+        Nenhum resultado nesta categoria ainda.
+      </div>
+    )}
+
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      {ranking.length > 0 && (
+        <ul class="divide-y divide-border">
+          {ranking.map((r, i) => (
+            <li class="flex items-center gap-3 px-4 py-3">
+              <!-- Rank -->
+              <div class:list={[
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold',
+                i === 0 ? 'bg-yellow-500/20 text-yellow-400' :
+                i === 1 ? 'bg-slate-400/20 text-slate-400' :
+                i === 2 ? 'bg-amber-600/20 text-amber-600' :
+                          'bg-muted text-muted-foreground'
+              ]}>
+                {i + 1}
+              </div>
+              <!-- Nome -->
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-foreground truncate">
+                  {(r.profiles as any)?.nome_completo ?? '—'}
+                </p>
+                <div class="flex items-center gap-2 mt-0.5">
+                  <span class:list={['px-1.5 py-0.5 rounded text-[10px] font-semibold', catColor(r.categoria)]}>
+                    {catLabel(r.categoria)}
+                  </span>
+                  {r.pse && (
+                    <span class="text-[10px] text-muted-foreground">PSE {r.pse}</span>
+                  )}
+                </div>
+              </div>
+              <!-- Score -->
+              <div class="text-right shrink-0">
+                <p class:list={[
+                  'text-sm font-bold tabular-nums',
+                  isCAP(r) ? 'text-muted-foreground' : 'text-primary'
+                ]}>
+                  {formatScore(r, wod.score_type)}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+
+  </div>
+</DashboardLayout>

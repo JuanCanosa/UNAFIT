@@ -16,152 +16,148 @@ if (!profile || !['dono', 'colaborador'].includes(profile.role))
   return Astro.redirect('/dashboard');
 
 const adminClient = createSupabaseAdminClient();
-const hojeISO = new Date().toISOString().slice(0, 10);
-const h7d  = new Date(Date.now() - 7  * 86400000).toISOString().slice(0, 10);
-const h30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-const [
-  { data: alunosRaw },
-  { data: sessoesRecentes },
-  { data: proximasRaw },
-] = await Promise.all([
-  adminClient.from('profiles')
-    .select('id, nome_completo')
-    .eq('academia_id', profile.academia_id)
-    .eq('role', 'aluno')
-    .eq('ativo', true)
-    .order('nome_completo'),
-  adminClient.from('coach_sessoes')
-    .select('aluno_id, status, data_agendada')
-    .eq('academia_id', profile.academia_id)
-    .gte('data_agendada', h30d)
-    .lte('data_agendada', hojeISO),
-  adminClient.from('coach_sessoes')
-    .select('aluno_id, data_agendada, titulo')
-    .eq('academia_id', profile.academia_id)
-    .eq('status', 'pendente')
-    .gte('data_agendada', hojeISO)
-    .order('data_agendada'),
-]);
-
-type Aluno   = { id: string; nome_completo: string };
-type Sessao  = { aluno_id: string; status: string; data_agendada: string };
-type Proxima = { aluno_id: string; data_agendada: string; titulo: string };
-
-const alunos  = (alunosRaw  ?? []) as Aluno[];
-const sessoes = (sessoesRecentes ?? []) as Sessao[];
-const proximas = new Map<string, Proxima>();
-for (const p of (proximasRaw ?? []) as Proxima[]) {
-  if (!proximas.has(p.aluno_id)) proximas.set(p.aluno_id, p);
+// POST: toggle avaliação
+if (Astro.request.method === 'POST') {
+  const form    = await Astro.request.formData();
+  const wodId   = form.get('wod_id') as string;
+  const aberto  = form.get('aberto') === '1';
+  await adminClient.from('wods')
+    .update({ aberto_para_avaliacao: aberto })
+    .eq('id', wodId)
+    .eq('academia_id', profile.academia_id);
+  return Astro.redirect('/dashboard/coach-control');
 }
 
-function adh(alunoId: string, desde: string) {
-  const s = sessoes.filter(s => s.aluno_id === alunoId && s.data_agendada >= desde);
-  if (!s.length) return null;
-  const c = s.filter(s => s.status === 'concluida').length;
-  return { pct: Math.round((c / s.length) * 100), c, t: s.length };
+const url   = new URL(Astro.request.url);
+const view  = url.searchParams.get('view') || 'abertos';
+
+// Carrega WODs
+const query = adminClient
+  .from('wods')
+  .select('id, nome, score_type, data_aplicacao, aberto_para_avaliacao')
+  .eq('academia_id', profile.academia_id)
+  .order('data_aplicacao', { ascending: false })
+  .limit(60);
+
+const { data: wodsRaw } = await query;
+
+// Contagem de resultados por WOD
+const wodIds = (wodsRaw ?? []).map((w: any) => w.id);
+const { data: contagemRaw } = wodIds.length
+  ? await adminClient.from('wod_resultados')
+      .select('wod_id')
+      .in('wod_id', wodIds)
+  : { data: [] };
+
+const contagem = new Map<string, number>();
+for (const r of (contagemRaw ?? [])) {
+  contagem.set(r.wod_id, (contagem.get(r.wod_id) ?? 0) + 1);
 }
 
-const busca = new URL(Astro.request.url).searchParams.get('q') || '';
-const lista = busca
-  ? alunos.filter(a => a.nome_completo.toLowerCase().includes(busca.toLowerCase()))
-  : alunos;
+type Wod = { id: string; nome: string; score_type: string; data_aplicacao: string; aberto_para_avaliacao: boolean };
+const wods = (wodsRaw ?? []) as Wod[];
+const abertos  = wods.filter(w => w.aberto_para_avaliacao);
+const fechados = wods.filter(w => !w.aberto_para_avaliacao);
+const lista    = view === 'abertos' ? abertos : fechados;
 
+function scoreLabel(s: string) {
+  if (s === 'tempo') return 'Para Tempo';
+  if (s === 'carga') return 'Carga Máx';
+  return 'Max Reps';
+}
 function formatDate(d: string) {
+  if (!d) return '';
   const [y, m, dia] = d.split('-');
-  return `${dia}/${m}`;
+  return `${dia}/${m}/${y}`;
 }
 ---
 <DashboardLayout title="Coach Control">
-  <div class="max-w-4xl mx-auto space-y-6">
+  <div class="max-w-3xl mx-auto space-y-5">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between gap-4 flex-wrap">
-      <div>
-        <h1 class="text-2xl font-bold text-foreground">Coach Control</h1>
-        <p class="text-sm text-muted-foreground mt-0.5">{alunos.length} alunos ativos</p>
-      </div>
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">Coach Control</h1>
+      <p class="text-sm text-muted-foreground mt-0.5">
+        Abra WODs para que os alunos registrem seus resultados.
+      </p>
     </div>
 
-    <!-- Busca -->
-    <form method="GET" class="relative">
-      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"
-        fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round"
-          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
-      </svg>
-      <input
-        type="search" name="q" value={busca} placeholder="Buscar aluno..."
-        class="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-      />
-    </form>
+    <!-- Tabs -->
+    <div class="flex gap-1 rounded-lg bg-card border border-border p-1 w-fit">
+      {(['abertos','historico'] as const).map(t => (
+        <a href={`?view=${t}`}
+          class:list={[
+            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+            view === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+          ]}>
+          {t === 'abertos' ? `Abertos (${abertos.length})` : `Histórico (${fechados.length})`}
+        </a>
+      ))}
+    </div>
 
     {lista.length === 0 && (
-      <div class="rounded-xl border border-border bg-card p-10 text-center">
-        <p class="text-muted-foreground text-sm">
-          {busca ? 'Nenhum aluno encontrado para a busca.' : 'Nenhum aluno ativo cadastrado.'}
-        </p>
+      <div class="rounded-xl border border-border bg-card p-10 text-center text-muted-foreground text-sm">
+        {view === 'abertos'
+          ? 'Nenhum WOD aberto para avaliação. Ative um WOD abaixo em "Histórico".'
+          : 'Nenhum WOD encontrado.'}
       </div>
     )}
 
-    <!-- Lista de alunos -->
-    <div class="grid gap-3">
-      {lista.map(aluno => {
-        const a7  = adh(aluno.id, h7d);
-        const a30 = adh(aluno.id, h30d);
-        const prox = proximas.get(aluno.id);
+    <div class="space-y-3">
+      {lista.map(w => {
+        const n = contagem.get(w.id) ?? 0;
         return (
-          <a
-            href={`/dashboard/coach-control/aluno/${aluno.id}`}
-            class="group block rounded-xl border border-border bg-card hover:border-primary/40 hover:bg-primary/5 transition-all p-4"
-          >
-            <div class="flex items-start gap-4">
-              <!-- Avatar -->
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary font-bold text-sm">
-                {aluno.nome_completo.charAt(0).toUpperCase()}
-              </div>
-
+          <div class="rounded-xl border border-border bg-card p-4">
+            <div class="flex items-start gap-3">
               <!-- Info -->
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <p class="font-semibold text-foreground text-sm truncate">{aluno.nome_completo}</p>
+                  <a href={`/dashboard/coach-control/wod/${w.id}`}
+                    class="font-semibold text-foreground hover:text-primary transition-colors">
+                    {w.nome}
+                  </a>
+                  <span class:list={[
+                    'px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide',
+                    w.score_type === 'tempo' ? 'bg-blue-500/15 text-blue-400' :
+                    w.score_type === 'carga' ? 'bg-orange-500/15 text-orange-400' :
+                                               'bg-purple-500/15 text-purple-400'
+                  ]}>
+                    {scoreLabel(w.score_type)}
+                  </span>
                 </div>
-
-                <!-- Métricas de adesão -->
-                <div class="mt-2 flex items-center gap-4 flex-wrap">
-                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span class="font-medium">7d:</span>
-                    {a7
-                      ? <span class:list={['font-semibold', a7.pct >= 70 ? 'text-green-500' : a7.pct >= 40 ? 'text-yellow-500' : 'text-red-500']}>{a7.pct}%</span>
-                      : <span class="text-muted-foreground/50">—</span>
-                    }
-                    {a7 && <span class="text-muted-foreground/60">({a7.c}/{a7.t})</span>}
-                  </div>
-                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span class="font-medium">30d:</span>
-                    {a30
-                      ? <span class:list={['font-semibold', a30.pct >= 70 ? 'text-green-500' : a30.pct >= 40 ? 'text-yellow-500' : 'text-red-500']}>{a30.pct}%</span>
-                      : <span class="text-muted-foreground/50">—</span>
-                    }
-                    {a30 && <span class="text-muted-foreground/60">({a30.c}/{a30.t})</span>}
-                  </div>
-                  {prox && (
-                    <div class="flex items-center gap-1 text-xs">
-                      <span class="text-muted-foreground">Próximo:</span>
-                      <span class="text-primary font-medium">{formatDate(prox.data_agendada)}</span>
-                      <span class="text-muted-foreground truncate max-w-[140px]">— {prox.titulo}</span>
-                    </div>
+                <div class="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                  <span>{formatDate(w.data_aplicacao)}</span>
+                  {n > 0 && (
+                    <a href={`/dashboard/coach-control/wod/${w.id}`}
+                      class="text-primary hover:underline font-medium">
+                      {n} resultado{n !== 1 ? 's' : ''}
+                    </a>
                   )}
                 </div>
               </div>
 
-              <!-- Arrow -->
-              <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0 mt-1"
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
+              <!-- Toggle -->
+              <form method="POST" class="flex items-center gap-2 shrink-0">
+                <input type="hidden" name="wod_id" value={w.id} />
+                <input type="hidden" name="aberto" value={w.aberto_para_avaliacao ? '0' : '1'} />
+                <button type="submit"
+                  class:list={[
+                    'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                    w.aberto_para_avaliacao ? 'bg-primary' : 'bg-muted'
+                  ]}
+                  title={w.aberto_para_avaliacao ? 'Fechar avaliação' : 'Abrir para avaliação'}
+                >
+                  <span class:list={[
+                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200',
+                    w.aberto_para_avaliacao ? 'translate-x-5' : 'translate-x-0'
+                  ]} />
+                </button>
+                <span class="text-xs text-muted-foreground w-16">
+                  {w.aberto_para_avaliacao ? 'Aberto' : 'Fechado'}
+                </span>
+              </form>
             </div>
-          </a>
+          </div>
         );
       })}
     </div>

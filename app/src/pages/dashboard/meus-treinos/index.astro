@@ -15,170 +15,157 @@ const { data: profile } = await supabase
 if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
 const adminClient = createSupabaseAdminClient();
-const aba = new URL(Astro.request.url).searchParams.get('aba') || 'proximas';
-const hojeISO = new Date().toISOString().slice(0, 10);
 
-const { data: sessoesRaw } = await adminClient
-  .from('coach_sessoes')
-  .select('id, titulo, data_agendada, status, pse, tempo_segundos, tags, concluida_em')
-  .eq('academia_id', profile.academia_id)
-  .eq('aluno_id', user.id)
-  .order('data_agendada', { ascending: aba === 'proximas' });
+const [
+  { data: wodsRaw },
+  { data: meusResultados },
+] = await Promise.all([
+  adminClient.from('wods')
+    .select('id, nome, score_type, data_aplicacao, treino, time_cap_min')
+    .eq('academia_id', profile.academia_id)
+    .eq('aberto_para_avaliacao', true)
+    .order('data_aplicacao', { ascending: false }),
+  adminClient.from('wod_resultados')
+    .select('wod_id, categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse')
+    .eq('aluno_id', user.id),
+]);
 
-type Sessao = {
-  id: string; titulo: string; data_agendada: string; status: string;
-  pse: number | null; tempo_segundos: number | null; tags: string[]; concluida_em: string | null;
-};
+type Wod = { id: string; nome: string; score_type: string; data_aplicacao: string; treino: string; time_cap_min: number | null };
+type MeuResultado = { wod_id: string; categoria: string; deu_cap: boolean; tempo_segundos: number | null; repeticoes: number | null; carga_kg: number | null; pse: number | null };
 
-const todas   = (sessoesRaw ?? []) as Sessao[];
-const proximas = todas.filter(s => s.data_agendada >= hojeISO && s.status !== 'cancelada');
-const passadas  = todas.filter(s => s.data_agendada < hojeISO || s.status === 'concluida' || s.status === 'cancelada');
-const exibir    = aba === 'proximas' ? proximas : passadas;
-const pendentes = proximas.filter(s => s.status === 'pendente').length;
-
-function formatTempo(s: number) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}h${m > 0 ? m + 'min' : ''}`;
-  return `${m}min`;
+const wods = (wodsRaw ?? []) as Wod[];
+const resultadosPorWod = new Map<string, MeuResultado>();
+for (const r of (meusResultados ?? []) as MeuResultado[]) {
+  resultadosPorWod.set(r.wod_id, r);
 }
-function pseColor(pse: number) {
-  if (pse <= 3) return 'text-green-500 bg-green-500/10';
-  if (pse <= 6) return 'text-yellow-500 bg-yellow-500/10';
-  return 'text-red-500 bg-red-500/10';
+
+const pendentes  = wods.filter(w => !resultadosPorWod.has(w.id));
+const concluidos = wods.filter(w => resultadosPorWod.has(w.id));
+
+function scoreLabel(s: string) {
+  if (s === 'tempo') return 'Para Tempo';
+  if (s === 'carga') return 'Carga Máx';
+  return 'Max Reps';
 }
-function statusBadge(s: string) {
-  if (s === 'concluida') return 'bg-green-500/15 text-green-400';
-  if (s === 'cancelada') return 'bg-muted text-muted-foreground';
-  return 'bg-blue-500/15 text-blue-400';
+function formatScore(r: MeuResultado, scoreType: string) {
+  if (scoreType === 'tempo') {
+    if (r.deu_cap) return `CAP → ${r.repeticoes ?? 0} reps`;
+    if (r.tempo_segundos) {
+      const m = Math.floor(r.tempo_segundos / 60).toString().padStart(2, '0');
+      const s = (r.tempo_segundos % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+  }
+  if (scoreType === 'carga') return `${r.carga_kg} kg`;
+  if (scoreType === 'reps')  return `${r.repeticoes} reps`;
+  return '—';
 }
-function statusLabel(s: string) {
-  if (s === 'concluida') return 'Concluída';
-  if (s === 'cancelada') return 'Cancelada';
-  return 'Pendente';
+function catLabel(c: string) {
+  if (c === 'rx') return 'RX';
+  if (c === 'intermediario') return 'Intermediário';
+  if (c === 'scaled') return 'Scaled';
+  return 'Iniciante';
+}
+function formatDate(d: string) {
+  if (!d) return '';
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}`;
 }
 ---
 <DashboardLayout title="Meus Treinos">
-  <div class="max-w-2xl mx-auto space-y-5">
+  <div class="max-w-2xl mx-auto space-y-6">
 
-    <!-- Header -->
     <div>
       <h1 class="text-2xl font-bold text-foreground">Meus Treinos</h1>
-      <p class="text-sm text-muted-foreground mt-0.5">
-        {pendentes > 0
-          ? `${pendentes} treino${pendentes > 1 ? 's' : ''} pendente${pendentes > 1 ? 's' : ''} para você completar`
-          : 'Seus treinos atribuídos pelo coach'}
-      </p>
+      <p class="text-sm text-muted-foreground mt-0.5">WODs abertos para registro de resultado.</p>
     </div>
 
-    <!-- Stats rápidos -->
-    <div class="grid grid-cols-3 gap-3">
-      <div class="rounded-xl border border-border bg-card p-3 text-center">
-        <p class="text-2xl font-bold text-foreground">{proximas.length}</p>
-        <p class="text-xs text-muted-foreground mt-0.5">Próximos</p>
-      </div>
-      <div class="rounded-xl border border-border bg-card p-3 text-center">
-        <p class="text-2xl font-bold text-green-500">{passadas.filter(s => s.status === 'concluida').length}</p>
-        <p class="text-xs text-muted-foreground mt-0.5">Concluídos</p>
-      </div>
-      <div class="rounded-xl border border-border bg-card p-3 text-center">
-        {(() => {
-          const c = passadas.filter(s => s.status === 'concluida').length;
-          const t = passadas.filter(s => s.status !== 'cancelada').length;
-          const pct = t > 0 ? Math.round((c / t) * 100) : 0;
-          return (
-            <>
-              <p class:list={['text-2xl font-bold', pct >= 70 ? 'text-green-500' : pct >= 40 ? 'text-yellow-500' : 'text-muted-foreground']}>{pct}%</p>
-              <p class="text-xs text-muted-foreground mt-0.5">Adesão</p>
-            </>
-          );
-        })()}
-      </div>
-    </div>
-
-    <!-- Tabs -->
-    <div class="flex gap-1 rounded-lg bg-card border border-border p-1 w-fit">
-      {(['proximas','passadas'] as const).map(t => (
-        <a href={`?aba=${t}`}
-          class:list={[
-            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
-            aba === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-          ]}>
-          {t === 'proximas' ? `Próximos (${proximas.length})` : `Passados (${passadas.length})`}
-        </a>
-      ))}
-    </div>
-
-    <!-- Cards -->
-    {exibir.length === 0 && (
-      <div class="rounded-xl border border-border bg-card p-10 text-center">
-        <svg class="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-        </svg>
-        <p class="text-muted-foreground text-sm">
-          {aba === 'proximas' ? 'Nenhum treino agendado.' : 'Nenhum treino registrado ainda.'}
+    <!-- Pendentes (call to action) -->
+    {pendentes.length > 0 && (
+      <section>
+        <p class="text-xs font-semibold text-primary uppercase tracking-widest mb-3">
+          Aguardando seu resultado ({pendentes.length})
         </p>
+        <div class="space-y-3">
+          {pendentes.map(w => (
+            <a href={`/dashboard/meus-treinos/wod/${w.id}`}
+              class="group flex items-center gap-4 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-all p-4">
+              <!-- Date bubble -->
+              <div class="flex flex-col items-center justify-center rounded-lg h-14 w-14 shrink-0 bg-primary text-primary-foreground text-center">
+                <span class="text-xl font-bold leading-tight">{formatDate(w.data_aplicacao).split('/')[0]}</span>
+                <span class="text-[10px] uppercase font-semibold">
+                  {new Date(w.data_aplicacao + 'T12:00').toLocaleDateString('pt-BR', { month: 'short' })}
+                </span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="font-bold text-foreground truncate">{w.nome}</p>
+                <span class:list={[
+                  'inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide',
+                  w.score_type === 'tempo' ? 'bg-blue-500/15 text-blue-400' :
+                  w.score_type === 'carga' ? 'bg-orange-500/15 text-orange-400' :
+                                             'bg-purple-500/15 text-purple-400'
+                ]}>
+                  {scoreLabel(w.score_type)}
+                </span>
+              </div>
+              <div class="flex flex-col items-center gap-1">
+                <span class="text-xs text-primary font-semibold group-hover:underline">Registrar</span>
+                <svg class="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+
+    {wods.length === 0 && (
+      <div class="rounded-xl border border-border bg-card p-10 text-center">
+        <svg class="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <p class="text-muted-foreground text-sm">Nenhum WOD aberto para avaliação no momento.</p>
+        <p class="text-muted-foreground/60 text-xs mt-1">Aguarde o professor abrir o próximo WOD.</p>
       </div>
     )}
 
-    <div class="space-y-3">
-      {exibir.map(s => {
-        const isFutura = s.data_agendada >= hojeISO && s.status === 'pendente';
-        return (
-          <a
-            href={`/dashboard/coach-control/sessao/${s.id}`}
-            class="group flex gap-4 rounded-xl border border-border bg-card hover:border-primary/40 hover:bg-primary/5 transition-all p-4"
-          >
-            <!-- Date bubble -->
-            <div class:list={[
-              'flex flex-col items-center justify-center rounded-lg h-14 w-14 shrink-0 text-center',
-              isFutura ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-            ]}>
-              <span class="text-xl font-bold leading-tight">{s.data_agendada.split('-')[2]}</span>
-              <span class="text-[10px] uppercase font-semibold">
-                {new Date(s.data_agendada + 'T12:00').toLocaleDateString('pt-BR', { month: 'short' })}
-              </span>
-            </div>
-
-            <!-- Info -->
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 flex-wrap">
-                <p class="font-semibold text-sm text-foreground truncate">{s.titulo}</p>
-                <span class:list={['px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide', statusBadge(s.status)]}>
-                  {statusLabel(s.status)}
-                </span>
-              </div>
-              {s.tags.length > 0 && (
-                <div class="mt-1 flex flex-wrap gap-1">
-                  {s.tags.slice(0, 4).map((t: string) => (
-                    <span class="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-medium">{t}</span>
-                  ))}
+    <!-- Concluídos -->
+    {concluidos.length > 0 && (
+      <section>
+        <p class="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3">
+          Já registrados ({concluidos.length})
+        </p>
+        <div class="space-y-2">
+          {concluidos.map(w => {
+            const r = resultadosPorWod.get(w.id)!;
+            return (
+              <a href={`/dashboard/meus-treinos/wod/${w.id}`}
+                class="group flex items-center gap-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors p-4">
+                <div class="flex flex-col items-center justify-center rounded-lg h-12 w-12 shrink-0 bg-muted text-muted-foreground text-center">
+                  <span class="text-lg font-bold leading-tight">{formatDate(w.data_aplicacao).split('/')[0]}</span>
+                  <span class="text-[10px] uppercase font-medium">
+                    {new Date(w.data_aplicacao + 'T12:00').toLocaleDateString('pt-BR', { month: 'short' })}
+                  </span>
                 </div>
-              )}
-              {s.status === 'concluida' && (s.pse || s.tempo_segundos) && (
-                <div class="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
-                  {s.pse && (
-                    <span class:list={['px-1.5 py-0.5 rounded font-semibold text-[10px]', pseColor(s.pse)]}>
-                      PSE {s.pse}
-                    </span>
-                  )}
-                  {s.tempo_segundos && <span>{formatTempo(s.tempo_segundos)}</span>}
+                <div class="flex-1 min-w-0">
+                  <p class="font-semibold text-sm text-foreground truncate">{w.nome}</p>
+                  <div class="flex items-center gap-2 mt-0.5">
+                    <span class="text-xs font-bold text-primary">{formatScore(r, w.score_type)}</span>
+                    <span class="text-[10px] text-muted-foreground">{catLabel(r.categoria)}</span>
+                    {r.pse && <span class="text-[10px] text-muted-foreground">· PSE {r.pse}</span>}
+                  </div>
                 </div>
-              )}
-              {isFutura && (
-                <p class="mt-1.5 text-xs text-primary font-medium">Toque para ver detalhes e concluir</p>
-              )}
-            </div>
-
-            <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0 self-center"
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </a>
-        );
-      })}
-    </div>
+                <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0"
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </a>
+            );
+          })}
+        </div>
+      </section>
+    )}
 
   </div>
 </DashboardLayout>
