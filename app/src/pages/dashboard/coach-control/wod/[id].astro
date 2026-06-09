@@ -2,7 +2,7 @@
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
 import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
-const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const supabase    = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 if (!user) return Astro.redirect('/login');
 
@@ -15,25 +15,82 @@ const { data: profile } = await supabase
 if (!profile || !['dono', 'colaborador', 'saas_admin'].includes(profile.role))
   return Astro.redirect('/dashboard');
 
-const wodId      = Astro.params.id as string;
+const wodId       = Astro.params.id as string;
 const adminClient = createSupabaseAdminClient();
 
-// POST: toggle avaliação aqui também
+// ── POST ─────────────────────────────────────────────────────────────────────
 if (Astro.request.method === 'POST') {
   const form   = await Astro.request.formData();
-  const aberto = form.get('aberto') === '1';
-  await adminClient.from('wods')
-    .update({ aberto_para_avaliacao: aberto })
-    .eq('id', wodId)
-    .eq('academia_id', profile.academia_id);
+  const action = form.get('action') as string;
+
+  if (action === 'toggle_avaliacao') {
+    const aberto = form.get('aberto') === '1';
+    await adminClient.from('wods')
+      .update({ aberto_para_avaliacao: aberto })
+      .eq('id', wodId)
+      .eq('academia_id', profile.academia_id);
+  }
+
+  if (action === 'registrar_para_aluno') {
+    const alunoId   = form.get('aluno_id') as string;
+    const categoria = form.get('categoria') as string;
+    const deu_cap   = form.get('deu_cap') === '1';
+    const pse       = form.get('pse') ? parseInt(form.get('pse') as string) : null;
+
+    const { data: wodInfo } = await adminClient.from('wods')
+      .select('score_type').eq('id', wodId).single();
+
+    let tempo_segundos: number | null = null;
+    let repeticoes: number | null = null;
+    let carga_kg: number | null = null;
+
+    if (wodInfo?.score_type === 'tempo') {
+      if (deu_cap) {
+        repeticoes = parseInt(form.get('repeticoes') as string) || 0;
+      } else {
+        const min = parseInt(form.get('tempo_min') as string) || 0;
+        const sec = parseInt(form.get('tempo_sec') as string) || 0;
+        tempo_segundos = min * 60 + sec;
+      }
+    } else if (wodInfo?.score_type === 'carga') {
+      carga_kg = parseFloat(form.get('carga_kg') as string) || null;
+    } else {
+      repeticoes = parseInt(form.get('repeticoes') as string) || null;
+    }
+
+    if (alunoId && ['rx','intermediario','scaled','iniciante'].includes(categoria)) {
+      await adminClient.from('wod_resultados').upsert({
+        academia_id: profile.academia_id,
+        wod_id:      wodId,
+        aluno_id:    alunoId,
+        categoria,
+        deu_cap,
+        tempo_segundos,
+        repeticoes,
+        carga_kg,
+        pse,
+      }, { onConflict: 'wod_id,aluno_id' });
+    }
+  }
+
+  if (action === 'deletar_resultado') {
+    const resultadoId = form.get('resultado_id') as string;
+    await adminClient.from('wod_resultados')
+      .delete()
+      .eq('id', resultadoId)
+      .eq('academia_id', profile.academia_id);
+  }
+
   return Astro.redirect(`/dashboard/coach-control/wod/${wodId}`);
 }
 
+// ── GET ───────────────────────────────────────────────────────────────────────
 const catParam = new URL(Astro.request.url).searchParams.get('cat') || 'geral';
 
 const [
   { data: wod },
   { data: resultadosRaw },
+  { data: alunosRaw },
 ] = await Promise.all([
   adminClient.from('wods')
     .select('id, nome, treino, score_type, data_aplicacao, aberto_para_avaliacao, time_cap_min')
@@ -41,8 +98,14 @@ const [
     .eq('academia_id', profile.academia_id)
     .single(),
   adminClient.from('wod_resultados')
-    .select('id, categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse, criado_em, aluno_id, profiles!wod_resultados_aluno_id_fkey(nome_completo)')
+    .select('id, categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse, aluno_id, profiles!wod_resultados_aluno_id_fkey(nome_completo)')
     .eq('wod_id', wodId),
+  adminClient.from('profiles')
+    .select('id, nome_completo')
+    .eq('academia_id', profile.academia_id)
+    .eq('role', 'aluno')
+    .eq('ativo', true)
+    .order('nome_completo'),
 ]);
 
 if (!wod) return Astro.redirect('/dashboard/coach-control');
@@ -53,27 +116,33 @@ type Resultado = {
   pse: number | null; aluno_id: string;
   profiles: { nome_completo: string } | null;
 };
+type Aluno = { id: string; nome_completo: string };
 
-const todos = (resultadosRaw ?? []) as Resultado[];
+const todos    = (resultadosRaw ?? []) as Resultado[];
+const alunos   = (alunosRaw   ?? []) as Aluno[];
 const filtrados = catParam === 'geral' ? todos : todos.filter(r => r.categoria === catParam);
 
-function sortResultados(rs: Resultado[], scoreType: string): Resultado[] {
-  if (scoreType === 'tempo') {
+// Alunos sem resultado ainda
+const comResultado = new Set(todos.map(r => r.aluno_id));
+const semResultado = alunos.filter(a => !comResultado.has(a.id));
+
+function sortResultados(rs: Resultado[]): Resultado[] {
+  if (wod.score_type === 'tempo') {
     return [...rs].sort((a, b) => {
       if (!a.deu_cap && !b.deu_cap) return (a.tempo_segundos ?? 0) - (b.tempo_segundos ?? 0);
-      if (a.deu_cap && !b.deu_cap) return 1;
-      if (!a.deu_cap && b.deu_cap) return -1;
+      if (a.deu_cap && !b.deu_cap)  return 1;
+      if (!a.deu_cap && b.deu_cap)  return -1;
       return (b.repeticoes ?? 0) - (a.repeticoes ?? 0);
     });
   }
-  if (scoreType === 'carga') return [...rs].sort((a, b) => (b.carga_kg ?? 0) - (a.carga_kg ?? 0));
+  if (wod.score_type === 'carga') return [...rs].sort((a, b) => (b.carga_kg ?? 0) - (a.carga_kg ?? 0));
   return [...rs].sort((a, b) => (b.repeticoes ?? 0) - (a.repeticoes ?? 0));
 }
 
-const ranking = sortResultados(filtrados, wod.score_type);
+const ranking = sortResultados(filtrados);
 
-function formatScore(r: Resultado, scoreType: string) {
-  if (scoreType === 'tempo') {
+function formatScore(r: Resultado) {
+  if (wod.score_type === 'tempo') {
     if (r.deu_cap) return `CAP → ${r.repeticoes ?? 0} reps`;
     if (r.tempo_segundos) {
       const m = Math.floor(r.tempo_segundos / 60).toString().padStart(2, '0');
@@ -81,12 +150,10 @@ function formatScore(r: Resultado, scoreType: string) {
       return `${m}:${s}`;
     }
   }
-  if (scoreType === 'carga') return `${r.carga_kg} kg`;
-  if (scoreType === 'reps')  return `${r.repeticoes} reps`;
+  if (wod.score_type === 'carga') return `${r.carga_kg} kg`;
+  if (wod.score_type === 'reps')  return `${r.repeticoes} reps`;
   return '—';
 }
-function isCAP(r: Resultado) { return r.deu_cap; }
-
 function catLabel(c: string) {
   if (c === 'rx') return 'RX';
   if (c === 'intermediario') return 'Intermediário';
@@ -142,6 +209,7 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
       </div>
       <!-- Toggle aberto/fechado -->
       <form method="POST" class="flex items-center gap-2 shrink-0 mt-1">
+        <input type="hidden" name="action" value="toggle_avaliacao" />
         <input type="hidden" name="aberto" value={wod.aberto_para_avaliacao ? '0' : '1'} />
         <button type="submit"
           class:list={[
@@ -167,23 +235,33 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
       </div>
     )}
 
-    <!-- Filtro por categoria -->
-    <div class="flex gap-1.5 flex-wrap">
-      {CATS.map(cat => {
-        const count = countByCat(cat);
-        return (
-          <a href={`?cat=${cat}`}
-            class:list={[
-              'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border',
-              catParam === cat
-                ? 'bg-primary border-primary text-primary-foreground'
-                : 'bg-card border-border text-muted-foreground hover:text-foreground'
-            ]}>
-            {cat === 'geral' ? 'Geral' : catLabel(cat)}
-            <span class="ml-1 opacity-70">({count})</span>
-          </a>
-        );
-      })}
+    <!-- Registrar para aluno -->
+    <div class="flex items-center justify-between">
+      <div class="flex gap-1.5 flex-wrap">
+        {CATS.map(cat => {
+          const count = countByCat(cat);
+          return (
+            <a href={`?cat=${cat}`}
+              class:list={[
+                'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border',
+                catParam === cat
+                  ? 'bg-primary border-primary text-primary-foreground'
+                  : 'bg-card border-border text-muted-foreground hover:text-foreground'
+              ]}>
+              {cat === 'geral' ? 'Geral' : catLabel(cat)}
+              <span class="ml-1 opacity-70">({count})</span>
+            </a>
+          );
+        })}
+      </div>
+      <button
+        onclick="document.getElementById('modal-registrar').classList.remove('hidden')"
+        class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition-colors shrink-0">
+        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Registrar para aluno
+      </button>
     </div>
 
     <!-- Leaderboard -->
@@ -193,12 +271,11 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
       </div>
     )}
 
-    <div class="rounded-xl border border-border bg-card overflow-hidden">
-      {ranking.length > 0 && (
+    {ranking.length > 0 && (
+      <div class="rounded-xl border border-border bg-card overflow-hidden">
         <ul class="divide-y divide-border">
           {ranking.map((r, i) => (
             <li class="flex items-center gap-3 px-4 py-3">
-              <!-- Rank -->
               <div class:list={[
                 'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold',
                 i === 0 ? 'bg-yellow-500/20 text-yellow-400' :
@@ -208,7 +285,6 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
               ]}>
                 {i + 1}
               </div>
-              <!-- Nome -->
               <div class="flex-1 min-w-0">
                 <p class="text-sm font-medium text-foreground truncate">
                   {(r.profiles as any)?.nome_completo ?? '—'}
@@ -217,25 +293,258 @@ const countByCat = (cat: string) => cat === 'geral' ? todos.length : todos.filte
                   <span class:list={['px-1.5 py-0.5 rounded text-[10px] font-semibold', catColor(r.categoria)]}>
                     {catLabel(r.categoria)}
                   </span>
-                  {r.pse && (
-                    <span class="text-[10px] text-muted-foreground">PSE {r.pse}</span>
-                  )}
+                  {r.pse && <span class="text-[10px] text-muted-foreground">PSE {r.pse}</span>}
                 </div>
               </div>
-              <!-- Score -->
-              <div class="text-right shrink-0">
-                <p class:list={[
-                  'text-sm font-bold tabular-nums',
-                  isCAP(r) ? 'text-muted-foreground' : 'text-primary'
-                ]}>
-                  {formatScore(r, wod.score_type)}
-                </p>
-              </div>
+              <p class:list={[
+                'text-sm font-bold tabular-nums shrink-0',
+                r.deu_cap ? 'text-muted-foreground' : 'text-primary'
+              ]}>
+                {formatScore(r)}
+              </p>
+              <!-- Deletar resultado -->
+              <form method="POST"
+                onsubmit={`return confirm('Remover resultado de ${(r.profiles as any)?.nome_completo ?? 'aluno'}?')`}>
+                <input type="hidden" name="action"       value="deletar_resultado" />
+                <input type="hidden" name="resultado_id" value={r.id} />
+                <button type="submit"
+                  class="text-muted-foreground/40 hover:text-red-500 transition-colors ml-1"
+                  title="Remover resultado">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </form>
             </li>
           ))}
         </ul>
-      )}
-    </div>
+      </div>
+    )}
+
+    <!-- Alunos sem resultado -->
+    {semResultado.length > 0 && (
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          Sem resultado ({semResultado.length})
+        </p>
+        <div class="flex flex-wrap gap-2">
+          {semResultado.map(a => (
+            <button
+              type="button"
+              onclick={`abrirModalParaAluno('${a.id}', '${a.nome_completo.replace(/'/g, "\\'")}')`}
+              class="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors">
+              <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              {a.nome_completo.split(' ')[0]}
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
 
   </div>
+
+  <!-- Modal: Registrar para aluno -->
+  <div id="modal-registrar" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      onclick="document.getElementById('modal-registrar').classList.add('hidden')"></div>
+    <div class="relative z-10 w-full max-w-md rounded-xl border border-border bg-background shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="font-semibold text-foreground">Registrar resultado para aluno</h2>
+        <button onclick="document.getElementById('modal-registrar').classList.add('hidden')"
+          class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <form method="POST" class="p-5 space-y-5">
+        <input type="hidden" name="action" value="registrar_para_aluno" />
+
+        <!-- Aluno -->
+        <div>
+          <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+            Aluno *
+          </label>
+          <select name="aluno_id" id="modal-aluno-select" required
+            class="w-full rounded-lg border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary">
+            <option value="">Selecione o aluno...</option>
+            {alunos.map(a => (
+              <option value={a.id}>{a.nome_completo}</option>
+            ))}
+          </select>
+        </div>
+
+        <!-- Categoria -->
+        <div>
+          <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+            Categoria *
+          </label>
+          <input type="hidden" name="categoria" id="modal-cat-hidden" required />
+          <div class="grid grid-cols-2 gap-2">
+            {[
+              { val: 'rx',            label: 'RX' },
+              { val: 'intermediario', label: 'Intermediário' },
+              { val: 'scaled',        label: 'Scaled' },
+              { val: 'iniciante',     label: 'Iniciante' },
+            ].map(op => (
+              <button type="button" data-mcat={op.val}
+                onclick={`selecionarModalCat('${op.val}')`}
+                class="mcat-btn rounded-lg border-2 border-border py-2.5 text-sm font-bold text-muted-foreground transition-all hover:border-primary/50 hover:text-foreground">
+                {op.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <!-- Score: TEMPO -->
+        {wod.score_type === 'tempo' && (
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Resultado *
+            </label>
+            <input type="hidden" name="deu_cap" id="modal-deu-cap" value="0" />
+            <div class="flex gap-2 mb-3">
+              <button type="button" id="modal-btn-terminou"
+                onclick="modalSetFinished(true)"
+                class="flex-1 rounded-lg border-2 border-primary bg-primary/10 py-2 text-xs font-bold text-primary">
+                Terminou ✓
+              </button>
+              <button type="button" id="modal-btn-cap"
+                onclick="modalSetFinished(false)"
+                class="flex-1 rounded-lg border-2 border-border py-2 text-xs font-bold text-muted-foreground hover:border-muted">
+                Deu CAP
+              </button>
+            </div>
+            <div id="modal-input-tempo" class="flex items-center gap-2 justify-center">
+              <input type="number" name="tempo_min" min="0" max="99" inputmode="numeric"
+                placeholder="00"
+                class="w-20 rounded-lg border border-border bg-card text-2xl font-black text-center py-2 focus:outline-none focus:border-primary" />
+              <span class="text-2xl font-black text-primary">:</span>
+              <input type="number" name="tempo_sec" min="0" max="59" inputmode="numeric"
+                placeholder="00"
+                class="w-20 rounded-lg border border-border bg-card text-2xl font-black text-center py-2 focus:outline-none focus:border-primary" />
+              <span class="text-xs text-muted-foreground">min : seg</span>
+            </div>
+            <div id="modal-input-cap" class="hidden">
+              <input type="number" name="repeticoes" min="0" inputmode="numeric"
+                placeholder="0"
+                class="w-full rounded-lg border border-border bg-card text-2xl font-black text-center py-2 focus:outline-none focus:border-primary" />
+              <p class="text-center text-xs text-muted-foreground mt-1">reps completadas</p>
+            </div>
+          </div>
+        )}
+
+        <!-- Score: CARGA -->
+        {wod.score_type === 'carga' && (
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Carga (kg) *
+            </label>
+            <input type="number" name="carga_kg" min="0" step="0.5" inputmode="numeric"
+              placeholder="0"
+              class="w-full rounded-lg border border-border bg-card text-2xl font-black text-center py-2 focus:outline-none focus:border-primary" />
+          </div>
+        )}
+
+        <!-- Score: REPS -->
+        {wod.score_type === 'reps' && (
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              Repetições *
+            </label>
+            <input type="number" name="repeticoes" min="0" inputmode="numeric"
+              placeholder="0"
+              class="w-full rounded-lg border border-border bg-card text-2xl font-black text-center py-2 focus:outline-none focus:border-primary" />
+          </div>
+        )}
+
+        <!-- PSE (opcional) -->
+        <div>
+          <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+            PSE <span class="normal-case font-normal">(opcional)</span>
+          </label>
+          <input type="hidden" name="pse" id="modal-pse-hidden" />
+          <div class="flex gap-1">
+            {[1,2,3,4,5,6,7,8,9,10].map(n => (
+              <button type="button" data-mpse={n} onclick={`selectModalPse(${n})`}
+                class:list={[
+                  'mpse-btn flex-1 h-9 rounded-lg border font-bold text-xs transition-all',
+                  n <= 3 ? 'border-green-500/30 text-green-500 hover:bg-green-500/15' :
+                  n <= 6 ? 'border-yellow-500/30 text-yellow-500 hover:bg-yellow-500/15' :
+                  n <= 9 ? 'border-orange-500/30 text-orange-500 hover:bg-orange-500/15' :
+                           'border-red-500/30 text-red-500 hover:bg-red-500/15'
+                ]}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div class="flex gap-3 pt-1">
+          <button type="button"
+            onclick="document.getElementById('modal-registrar').classList.add('hidden')"
+            class="flex-1 rounded-lg border border-border py-2.5 text-sm font-medium text-foreground hover:bg-card transition-colors">
+            Cancelar
+          </button>
+          <button type="submit"
+            class="flex-1 rounded-lg bg-primary py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors">
+            Salvar Resultado
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script is:inline>
+    function abrirModalParaAluno(id, nome) {
+      document.getElementById('modal-registrar').classList.remove('hidden');
+      const sel = document.getElementById('modal-aluno-select');
+      if (sel) sel.value = id;
+    }
+
+    function selecionarModalCat(val) {
+      document.getElementById('modal-cat-hidden').value = val;
+      document.querySelectorAll('.mcat-btn').forEach(btn => {
+        const active = btn.getAttribute('data-mcat') === val;
+        btn.classList.toggle('border-primary', active);
+        btn.classList.toggle('bg-primary/10', active);
+        btn.classList.toggle('text-primary', active);
+        btn.classList.toggle('border-border', !active);
+        btn.classList.toggle('text-muted-foreground', !active);
+      });
+    }
+
+    function modalSetFinished(finished) {
+      document.getElementById('modal-deu-cap').value = finished ? '0' : '1';
+      document.getElementById('modal-input-tempo').classList.toggle('hidden', !finished);
+      document.getElementById('modal-input-cap').classList.toggle('hidden', finished);
+      const bT = document.getElementById('modal-btn-terminou');
+      const bC = document.getElementById('modal-btn-cap');
+      bT.classList.toggle('border-primary', finished);
+      bT.classList.toggle('bg-primary/10', finished);
+      bT.classList.toggle('text-primary', finished);
+      bT.classList.toggle('border-border', !finished);
+      bT.classList.toggle('text-muted-foreground', !finished);
+      bC.classList.toggle('border-primary', !finished);
+      bC.classList.toggle('bg-primary/10', !finished);
+      bC.classList.toggle('text-primary', !finished);
+      bC.classList.toggle('border-border', finished);
+      bC.classList.toggle('text-muted-foreground', finished);
+    }
+
+    function selectModalPse(n) {
+      document.getElementById('modal-pse-hidden').value = n;
+      document.querySelectorAll('.mpse-btn').forEach(btn => {
+        const v = parseInt(btn.getAttribute('data-mpse'));
+        const active = v === n;
+        const cl = v <= 3 ? 'bg-green-500/20' : v <= 6 ? 'bg-yellow-500/20' : v <= 9 ? 'bg-orange-500/20' : 'bg-red-500/20';
+        btn.classList.toggle(cl, active);
+        btn.classList.toggle('ring-1', active);
+        btn.classList.toggle('ring-primary', active);
+      });
+    }
+  </script>
 </DashboardLayout>
