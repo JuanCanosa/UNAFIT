@@ -29,7 +29,19 @@ const dataParam  = url.searchParams.get('data');  // YYYY-MM-DD pre-fill
 let formError = '';
 
 if (Astro.request.method === 'POST') {
-  const form            = await Astro.request.formData();
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'toggle_avaliacao') {
+    const wodId  = form.get('wod_id') as string;
+    const aberto = form.get('aberto') === '1';
+    await supabase.from('wods')
+      .update({ aberto_para_avaliacao: aberto })
+      .eq('id', wodId)
+      .eq('academia_id', profile.academia_id!);
+    return Astro.redirect(`/dashboard/wods${view ? '?view=' + view : ''}`);
+  }
+
   const nome            = (form.get('nome') as string)?.trim();
   const treino          = (form.get('treino') as string)?.trim();
   const score_type      = form.get('score_type') as string;
@@ -54,7 +66,7 @@ if (Astro.request.method === 'POST') {
 // Busca WODs filtrados por data
 const query = supabase
   .from('wods')
-  .select('id, nome, score_type, treino, data_aplicacao, criado_em, time_cap_min, duracao_min')
+  .select('id, nome, score_type, treino, data_aplicacao, criado_em, time_cap_min, duracao_min, aberto_para_avaliacao')
   .eq('academia_id', profile.academia_id!);
 
 const { data: wods } = await (view === 'historico'
@@ -123,30 +135,34 @@ function fmtData(iso: string) {
   ) : (
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {wods.map((wod) => {
-        const isHoje   = wod.data_aplicacao === hojeISO;
+        const isHoje  = wod.data_aplicacao === hojeISO;
+        const aberto  = (wod as any).aberto_para_avaliacao as boolean;
         return (
-          <a href={`/dashboard/wods/${wod.id}`}
-            class="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 hover:border-primary/30 transition-colors">
+          <div class="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 hover:border-primary/30 transition-colors">
 
             <!-- Nome + score -->
             <div class="flex items-start justify-between gap-2">
-              <h3 class="font-bold text-foreground group-hover:text-primary transition-colors leading-tight">{wod.nome}</h3>
+              <a href={`/dashboard/wods/${wod.id}`}
+                class="font-bold text-foreground group-hover:text-primary transition-colors leading-tight hover:underline">
+                {wod.nome}
+              </a>
               <Badge variant="primary" class="shrink-0">{scoreLabels[wod.score_type] ?? wod.score_type}</Badge>
             </div>
 
             <!-- Treino preview -->
-            <div class="rounded-lg bg-muted/50 px-3 py-2.5 flex-1">
+            <a href={`/dashboard/wods/${wod.id}`} class="block rounded-lg bg-muted/50 px-3 py-2.5 flex-1 hover:bg-muted/70 transition-colors">
               <p class="text-xs font-mono text-foreground whitespace-pre-line line-clamp-3">{wod.treino}</p>
-            </div>
+            </a>
 
-            <div class="flex items-center justify-between mt-auto">
-              {wod.data_aplicacao
-                ? <span class:list={['text-xs font-medium', isHoje ? 'text-primary' : 'text-muted-foreground']}>
-                    {fmtData(wod.data_aplicacao)}
-                  </span>
-                : <span class="text-xs text-muted-foreground/50 italic">Sem data</span>
-              }
-              <div class="flex items-center gap-1.5">
+            <!-- Rodapé: data + caps + toggle avaliação -->
+            <div class="flex items-center justify-between mt-auto gap-2">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                {wod.data_aplicacao
+                  ? <span class:list={['text-xs font-medium', isHoje ? 'text-primary' : 'text-muted-foreground']}>
+                      {fmtData(wod.data_aplicacao)}
+                    </span>
+                  : <span class="text-xs text-muted-foreground/50 italic">Sem data</span>
+                }
                 {(wod as any).time_cap_min && (
                   <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-orange-500/10 text-orange-400">
                     Cap {(wod as any).time_cap_min}min
@@ -157,10 +173,33 @@ function fmtData(iso: string) {
                     {(wod as any).duracao_min}min
                   </span>
                 )}
-                <span class="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
               </div>
+
+              <!-- Toggle avaliação -->
+              {canEdit && (
+                <form method="POST" class="flex items-center gap-1.5 shrink-0">
+                  <input type="hidden" name="action"  value="toggle_avaliacao" />
+                  <input type="hidden" name="wod_id"  value={wod.id} />
+                  <input type="hidden" name="aberto"  value={aberto ? '0' : '1'} />
+                  <button type="submit"
+                    class:list={[
+                      'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                      aberto ? 'bg-primary' : 'bg-muted'
+                    ]}
+                    title={aberto ? 'Fechar avaliação' : 'Abrir para avaliação'}
+                  >
+                    <span class:list={[
+                      'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200',
+                      aberto ? 'translate-x-4' : 'translate-x-0'
+                    ]} />
+                  </button>
+                  <span class:list={['text-[10px] font-medium', aberto ? 'text-primary' : 'text-muted-foreground']}>
+                    {aberto ? 'Aberto' : 'Avaliação'}
+                  </span>
+                </form>
+              )}
             </div>
-          </a>
+          </div>
         );
       })}
     </div>
