@@ -1,6 +1,6 @@
 ---
 import DashboardLayout from '@/layouts/DashboardLayout.astro';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
 
 const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -8,27 +8,23 @@ if (!user) return Astro.redirect('/login');
 
 const { data: profile } = await supabase
   .from('profiles').select('role, academia_id').eq('id', user.id).single();
-
 if (!profile) return Astro.redirect('/login');
 
 const isAluno = profile.role === 'aluno';
+const adminClient = createSupabaseAdminClient();
 
-// Exercício selecionado para ranking de performance
 const urlParams = new URL(Astro.request.url).searchParams;
-const exSelecionadoId = urlParams.get('ex') ?? '';
-const modalidadeSelecionada = urlParams.get('mod') ?? '';
-const tabAtiva = urlParams.get('tab') ?? (isAluno ? 'performance' : 'presenca');
+const tabAtiva  = urlParams.get('tab') ?? (isAluno ? 'wod' : 'presenca');
 
-// Mês atual em horário de Brasília
+// ── PRESENÇA ─────────────────────────────────────────────────────────────────
 const hojeISO_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const inicioMes  = hojeISO_BR.slice(0, 7) + '-01';
 const mesFmt = new Date(inicioMes + 'T12:00:00Z').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-
-// Período do ranking de presença: mês atual (dia 1 → hoje) ou semana atual (segunda → hoje)
 const periodoSelecionado = urlParams.get('periodo') === 'semana' ? 'semana' : 'mes';
+const modalidadeSelecionada = urlParams.get('mod') ?? '';
 
 const hojeDate = new Date(hojeISO_BR + 'T12:00:00Z');
-const diaSemanaAtual = hojeDate.getUTCDay(); // 0=Dom ... 6=Sáb
+const diaSemanaAtual = hojeDate.getUTCDay();
 const diasDesdeSegunda = diaSemanaAtual === 0 ? 6 : diaSemanaAtual - 1;
 const segundaDate = new Date(hojeDate);
 segundaDate.setUTCDate(hojeDate.getUTCDate() - diasDesdeSegunda);
@@ -37,100 +33,147 @@ const inicioSemana = segundaDate.toISOString().slice(0, 10);
 const dataInicioPeriodo = periodoSelecionado === 'semana' ? inicioSemana : inicioMes;
 const labelPeriodo      = periodoSelecionado === 'semana' ? 'Esta Semana' : 'Este Mês';
 
-// Monta a URL da aba Presença preservando os filtros ativos (modalidade/período)
 function hrefPresenca(over: { periodo?: string; mod?: string } = {}): string {
   const params = new URLSearchParams();
   params.set('tab', 'presenca');
-  const mod = over.mod !== undefined ? over.mod : modalidadeSelecionada;
+  const mod    = over.mod     !== undefined ? over.mod    : modalidadeSelecionada;
   const periodo = over.periodo !== undefined ? over.periodo : periodoSelecionado;
   if (mod) params.set('mod', mod);
   if (periodo === 'semana') params.set('periodo', 'semana');
   return `/dashboard/rankings?${params.toString()}`;
 }
 
-// Categorias de exercícios para o ranking de performance
-const categoriasConfig: { key: string; label: string }[] = [
-  { key: 'ginastico',         label: 'Ginástico – 1 Rep Máx' },
-  { key: 'ginastico_unbroken',label: 'Ginástico – Unbroken'  },
-  { key: 'condicionamento',   label: 'Condicionamento'        },
-  { key: 'peso',              label: 'Peso'                   },
-  { key: 'heroes_girls',      label: 'Heroes / Girls'         },
-];
-const categoriaSelecionada = urlParams.get('cat') ?? '';
+// ── WOD DO DIA ────────────────────────────────────────────────────────────────
+const wodDataFiltro = urlParams.get('data') ?? hojeISO_BR;
+const catWodFiltro  = urlParams.get('catwod') ?? '';
 
-// Todos os exercícios da academia (com categoria), ordenados por nome
-const { data: exerciciosTodos } = await supabase
-  .from('exercicios')
-  .select('id, nome, tipo_resultado, categoria')
-  .eq('academia_id', profile.academia_id!)
-  .order('nome');
+function hrefWod(over: { data?: string; catwod?: string } = {}): string {
+  const params = new URLSearchParams();
+  params.set('tab', 'wod');
+  const data = over.data   !== undefined ? over.data   : wodDataFiltro;
+  const cat  = over.catwod !== undefined ? over.catwod : catWodFiltro;
+  params.set('data', data);
+  if (cat) params.set('catwod', cat);
+  return `/dashboard/rankings?${params.toString()}`;
+}
 
-// Exercícios visíveis na categoria selecionada (para o seletor de exercício)
-const exerciciosDaCategoria = categoriaSelecionada
-  ? (exerciciosTodos ?? []).filter(e => e.categoria === categoriaSelecionada)
-  : [];
+const catLabels: Record<string, string> = {
+  rx: 'RX', intermediario: 'Intermediário', scaled: 'Scaled', iniciante: 'Iniciante',
+};
 
-// Compatibilidade com queries anteriores que esperam exerciciosComPRs
-const exerciciosComPRs = exerciciosTodos;
+const scoreTypeLabel: Record<string, string> = {
+  tempo: 'Para Tempo', reps: 'Max Reps', carga: 'Carga Máx',
+  rounds_reps: 'Rounds + Reps', pass_fail: 'Pass/Fail',
+};
 
-// Busca dados em paralelo
+// ── DATA FETCHING ─────────────────────────────────────────────────────────────
 const [
   { data: aulasDoPeriodo },
   { data: checkinsDoPeriodo },
-  { data: prsExercicio },
   { data: modalidadesAcademia },
+  { data: wodsDodia },
 ] = await Promise.all([
-  !isAluno ? supabase
-    .from('aulas_agenda')
-    .select('id, data_aula, horario_inicio, modalidade, capacidade_max, wods(nome)')
-    .eq('academia_id', profile.academia_id!)
-    .gte('data_aula', dataInicioPeriodo)
-    .lte('data_aula', hojeISO_BR)
-    .order('data_aula', { ascending: false })
+  !isAluno
+    ? supabase.from('aulas_agenda')
+        .select('id, data_aula, horario_inicio, modalidade, capacidade_max, wods(nome)')
+        .eq('academia_id', profile.academia_id!)
+        .gte('data_aula', dataInicioPeriodo)
+        .lte('data_aula', hojeISO_BR)
+        .order('data_aula', { ascending: false })
     : Promise.resolve({ data: [] }),
 
-  !isAluno ? supabase
-    .from('checkins')
-    .select('aula_id, aluno_id, profiles(nome_completo)')
-    .eq('academia_id', profile.academia_id!)
-    .gte('feito_em', `${dataInicioPeriodo}T00:00:00`)
+  !isAluno
+    ? supabase.from('checkins')
+        .select('aula_id, aluno_id, profiles(nome_completo)')
+        .eq('academia_id', profile.academia_id!)
+        .gte('feito_em', `${dataInicioPeriodo}T00:00:00`)
     : Promise.resolve({ data: [] }),
 
-  exSelecionadoId ? supabase
-    .from('prs')
-    .select('aluno_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, data_registro, profiles(nome_completo)')
-    .eq('academia_id', profile.academia_id!)
-    .eq('exercicio_id', exSelecionadoId)
+  !isAluno
+    ? supabase.from('modalidades')
+        .select('id, nome, cor')
+        .eq('academia_id', profile.academia_id!)
+        .eq('ativo', true)
+        .order('ordem')
     : Promise.resolve({ data: [] }),
 
-  !isAluno ? supabase
-    .from('modalidades')
-    .select('id, nome, cor')
+  adminClient.from('wods')
+    .select('id, nome, score_type, time_cap_min')
     .eq('academia_id', profile.academia_id!)
-    .eq('ativo', true)
-    .order('ordem')
-    : Promise.resolve({ data: [] }),
+    .eq('data_aplicacao', wodDataFiltro)
+    .eq('aberto_para_avaliacao', true)
+    .order('criado_em'),
 ]);
 
-// Exercício selecionado
-const exSelecionado = (exerciciosComPRs ?? []).find(e => e.id === exSelecionadoId) ?? null;
+// Busca resultados para os WODs do dia
+const wodIds = (wodsDodia ?? []).map((w: any) => w.id as string);
+const { data: resultadosRaw } = wodIds.length > 0
+  ? await adminClient.from('wod_resultados')
+      .select('id, wod_id, aluno_id, categoria, deu_cap, tempo_segundos, repeticoes, carga_kg, pse, profiles(nome_completo)')
+      .in('wod_id', wodIds)
+      .eq('academia_id', profile.academia_id!)
+  : { data: [] as any[] };
 
-// Mapa aula → modalidade, para filtrar check-ins por modalidade (checkins não
-// guarda a modalidade diretamente, só o vínculo com a aula)
+type WodResultadoRow = {
+  id: string; wod_id: string; aluno_id: string; categoria: string;
+  deu_cap: boolean; tempo_segundos: number | null; repeticoes: number | null;
+  carga_kg: number | null; pse: number | null;
+  profiles: { nome_completo: string } | null;
+};
+
+// Agrupa resultados por wod_id
+const resultadosPorWod = new Map<string, WodResultadoRow[]>();
+for (const r of (resultadosRaw ?? []) as WodResultadoRow[]) {
+  if (!resultadosPorWod.has(r.wod_id)) resultadosPorWod.set(r.wod_id, []);
+  resultadosPorWod.get(r.wod_id)!.push(r);
+}
+
+function sortarResultados(resultados: WodResultadoRow[], scoreType: string): WodResultadoRow[] {
+  return [...resultados].sort((a, b) => {
+    if (scoreType === 'tempo') {
+      if (!a.deu_cap && b.deu_cap) return -1;
+      if (a.deu_cap && !b.deu_cap) return 1;
+      if (!a.deu_cap && !b.deu_cap) return (a.tempo_segundos ?? 999999) - (b.tempo_segundos ?? 999999);
+      return (b.repeticoes ?? 0) - (a.repeticoes ?? 0);
+    }
+    if (scoreType === 'carga') return (Number(b.carga_kg) || 0) - (Number(a.carga_kg) || 0);
+    return (b.repeticoes ?? 0) - (a.repeticoes ?? 0);
+  });
+}
+
+function fmtWodScore(r: WodResultadoRow, scoreType: string): string {
+  if (scoreType === 'tempo') {
+    if (r.deu_cap) return `CAP+${r.repeticoes ?? 0}`;
+    if (r.tempo_segundos != null) {
+      const m = Math.floor(r.tempo_segundos / 60);
+      const s = r.tempo_segundos % 60;
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    return '—';
+  }
+  if (scoreType === 'carga') return r.carga_kg != null ? `${r.carga_kg} kg` : '—';
+  return r.repeticoes != null ? `${r.repeticoes} reps` : '—';
+}
+
+function fmtDataWod(iso: string): string {
+  if (iso === hojeISO_BR) return 'Hoje';
+  const d = new Date(iso + 'T12:00:00Z');
+  return d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+}
+
+// ── PROCESSAMENTO PRESENÇA ────────────────────────────────────────────────────
 const aulaIdParaModalidade: Record<string, string> = {};
-for (const a of aulasDoPeriodo ?? []) {
+for (const a of (aulasDoPeriodo ?? []) as any[]) {
   if (a.id) aulaIdParaModalidade[a.id] = a.modalidade ?? '';
 }
 
-// Filtra aulas/check-ins do período pela modalidade selecionada (se houver)
 const aulasFiltradas = modalidadeSelecionada
-  ? (aulasDoPeriodo ?? []).filter(a => a.modalidade === modalidadeSelecionada)
-  : (aulasDoPeriodo ?? []);
+  ? ((aulasDoPeriodo ?? []) as any[]).filter(a => a.modalidade === modalidadeSelecionada)
+  : (aulasDoPeriodo ?? []) as any[];
 const checkinsFiltrados = modalidadeSelecionada
-  ? (checkinsDoPeriodo ?? []).filter(c => aulaIdParaModalidade[c.aula_id ?? ''] === modalidadeSelecionada)
-  : (checkinsDoPeriodo ?? []);
+  ? ((checkinsDoPeriodo ?? []) as any[]).filter(c => aulaIdParaModalidade[c.aula_id ?? ''] === modalidadeSelecionada)
+  : (checkinsDoPeriodo ?? []) as any[];
 
-// Ranking presença
 const presencasPorAula: Record<string, number> = {};
 const rankingPresenca: Record<string, { nome: string; total: number }> = {};
 for (const c of checkinsFiltrados) {
@@ -149,59 +192,6 @@ const totalPresencas = checkinsFiltrados.length;
 const alunosUnicos   = Object.keys(rankingPresenca).length;
 const mediaPresenca  = totalAulas > 0 ? (totalPresencas / totalAulas).toFixed(1) : '—';
 
-// Ranking performance: melhor PR por aluno para o exercício selecionado
-type PRRow = {
-  aluno_id: string; tipo: string;
-  valor_peso: number|null; valor_tempo_seg: number|null;
-  valor_reps: number|null; valor_rounds: number|null; valor_reps_extra: number|null;
-  rx: boolean; data_registro: string;
-  profiles: { nome_completo: string } | null;
-};
-
-function scoreNumerico(pr: PRRow): number {
-  if (pr.tipo === 'peso')       return pr.valor_peso ?? 0;
-  if (pr.tipo === 'tempo')      return -(pr.valor_tempo_seg ?? 999999); // menor é melhor → negativo
-  if (pr.tipo === 'reps')       return pr.valor_reps ?? 0;
-  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
-  return 0;
-}
-
-function fmtValor(pr: PRRow): string {
-  if (pr.tipo === 'peso')   return `${pr.valor_peso} kg`;
-  if (pr.tipo === 'reps')   return `${pr.valor_reps} rep${(pr.valor_reps ?? 0) !== 1 ? 's' : ''}`;
-  if (pr.tipo === 'tempo' && pr.valor_tempo_seg != null) {
-    const h = Math.floor(pr.valor_tempo_seg / 3600);
-    const m = Math.floor((pr.valor_tempo_seg % 3600) / 60);
-    const s = pr.valor_tempo_seg % 60;
-    return h > 0
-      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  }
-  if (pr.tipo === 'rounds_reps') {
-    const r = pr.valor_rounds ?? 0;
-    const x = pr.valor_reps_extra;
-    return x ? `${r} + ${x}` : `${r} rounds`;
-  }
-  return '—';
-}
-
-// Agrupa por aluno e pega o melhor
-const melhorPorAluno = new Map<string, PRRow>();
-for (const pr of (prsExercicio ?? []) as PRRow[]) {
-  const atual = melhorPorAluno.get(pr.aluno_id);
-  if (!atual || scoreNumerico(pr) > scoreNumerico(atual)) {
-    melhorPorAluno.set(pr.aluno_id, pr);
-  }
-}
-
-const rankingPerformance = [...melhorPorAluno.values()]
-  .sort((a, b) => scoreNumerico(b) - scoreNumerico(a))
-  .slice(0, 20);
-
-const posicaoDoAluno = isAluno
-  ? rankingPerformance.findIndex(r => r.aluno_id === user.id)
-  : -1;
-
 const medalhas = ['🥇', '🥈', '🥉'];
 ---
 
@@ -215,40 +205,37 @@ const medalhas = ['🥇', '🥈', '🥉'];
   <div class="flex gap-1 mb-6 border-b border-border">
     {!isAluno && (
       <a href="/dashboard/rankings?tab=presenca"
-        class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px', tabAtiva === 'presenca' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
+        class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px',
+          tabAtiva === 'presenca' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
         Presença
       </a>
     )}
-    <a href="/dashboard/rankings?tab=performance"
-      class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px', tabAtiva === 'performance' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
-      Performance
+    <a href={hrefWod({ catwod: catWodFiltro })}
+      class:list={['px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px',
+        tabAtiva === 'wod' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']}>
+      WOD do Dia
     </a>
   </div>
 
   <!-- ── TAB PRESENÇA ─────────────────────────────────────────────────────── -->
   {tabAtiva === 'presenca' && !isAluno && (
     <div>
-      <!-- Filtros: período e modalidade -->
       <div class="mb-5 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div class="flex flex-wrap items-center gap-3">
           <label class="text-sm text-muted-foreground shrink-0">Período:</label>
           <div class="flex flex-wrap gap-2">
             <a href={hrefPresenca({ periodo: 'mes' })}
-              class:list={[
-                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+              class:list={['rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
                 periodoSelecionado === 'mes'
                   ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-              ]}>
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40']}>
               Mês
             </a>
             <a href={hrefPresenca({ periodo: 'semana' })}
-              class:list={[
-                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+              class:list={['rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
                 periodoSelecionado === 'semana'
                   ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-              ]}>
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40']}>
               Semana
             </a>
           </div>
@@ -259,22 +246,18 @@ const medalhas = ['🥇', '🥈', '🥉'];
             <label class="text-sm text-muted-foreground shrink-0">Modalidade:</label>
             <div class="flex flex-wrap gap-2">
               <a href={hrefPresenca({ mod: '' })}
-                class:list={[
-                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                class:list={['rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
                   !modalidadeSelecionada
                     ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-                ]}>
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40']}>
                 Todas
               </a>
-              {(modalidadesAcademia ?? []).map(m => (
+              {(modalidadesAcademia ?? []).map((m: any) => (
                 <a href={hrefPresenca({ mod: m.nome })}
-                  class:list={[
-                    'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  class:list={['rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
                     modalidadeSelecionada === m.nome
                       ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-                  ]}>
+                      : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40']}>
                   {m.nome}
                 </a>
               ))}
@@ -317,7 +300,8 @@ const medalhas = ['🥇', '🥈', '🥉'];
           ) : (
             <div class="space-y-1.5">
               {topPresenca.map((r, i) => (
-                <div class:list={['flex items-center gap-3 rounded-lg px-3 py-2.5', i === 0 ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30']}>
+                <div class:list={['flex items-center gap-3 rounded-lg px-3 py-2.5',
+                  i === 0 ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/30']}>
                   <span class="w-7 text-center">
                     {i < 3
                       ? <span class="text-lg">{medalhas[i]}</span>
@@ -367,7 +351,8 @@ const medalhas = ['🥇', '🥈', '🥉'];
                       <p class="text-xs text-muted-foreground">{a.horario_inicio?.slice(0, 5)}{cap > 0 ? ` · cap. ${cap}` : ''}</p>
                       {pct !== null && (
                         <div class="mt-1.5 h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
-                          <div class:list={['h-full rounded-full', pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-primary']} style={`width: ${pct}%`} />
+                          <div class:list={['h-full rounded-full', pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-primary']}
+                            style={`width: ${pct}%`} />
                         </div>
                       )}
                     </div>
@@ -385,146 +370,164 @@ const medalhas = ['🥇', '🥈', '🥉'];
     </div>
   )}
 
-  <!-- ── TAB PERFORMANCE ─────────────────────────────────────────────────── -->
-  {tabAtiva === 'performance' && (
+  <!-- ── TAB WOD DO DIA ──────────────────────────────────────────────────── -->
+  {tabAtiva === 'wod' && (
     <div>
-      <!-- 1. Seletor de categoria -->
-      <div class="mb-5 flex flex-wrap items-center gap-3">
-        <label class="text-sm text-muted-foreground shrink-0">Categoria:</label>
-        <div class="flex flex-wrap gap-2">
-          {categoriasConfig.map(cat => (
-            <a
-              href={`/dashboard/rankings?tab=performance&cat=${cat.key}`}
-              class:list={[
-                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                categoriaSelecionada === cat.key
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-              ]}>
-              {cat.label}
-            </a>
-          ))}
+      <!-- Filtros: data + categoria -->
+      <div class="mb-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <!-- Seletor de data -->
+        <div class="flex items-center gap-3">
+          <label class="text-sm text-muted-foreground shrink-0">Data:</label>
+          <div class="flex items-center gap-2">
+            <input
+              id="wod-data-input"
+              type="date"
+              value={wodDataFiltro}
+              max={hojeISO_BR}
+              class="rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+            />
+            <span class="text-sm text-muted-foreground capitalize hidden sm:inline">
+              {fmtDataWod(wodDataFiltro)}
+            </span>
+          </div>
+        </div>
+
+        <!-- Filtro por categoria -->
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="text-sm text-muted-foreground shrink-0">Categoria:</label>
+          <div class="flex flex-wrap gap-2">
+            {(['', 'rx', 'intermediario', 'scaled', 'iniciante'] as const).map(cat => (
+              <a href={hrefWod({ catwod: cat })}
+                class:list={['rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  catWodFiltro === cat
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40']}>
+                {cat === '' ? 'Geral' : catLabels[cat]}
+              </a>
+            ))}
+          </div>
         </div>
       </div>
 
-      <!-- 2. Seletor de exercício (visível só quando há categoria selecionada) -->
-      {categoriaSelecionada && (
-        <div class="mb-6 flex flex-wrap items-center gap-3">
-          <label class="text-sm text-muted-foreground shrink-0">Exercício:</label>
-          <div class="flex flex-wrap gap-2">
-            {exerciciosDaCategoria.length === 0 ? (
-              <p class="text-sm text-muted-foreground">Nenhum exercício nesta categoria.</p>
-            ) : (
-              exerciciosDaCategoria.map(e => (
-                <a
-                  href={`/dashboard/rankings?tab=performance&cat=${categoriaSelecionada}&ex=${e.id}`}
-                  class:list={[
-                    'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                    exSelecionadoId === e.id
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
-                  ]}>
-                  {e.nome}
-                </a>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {!categoriaSelecionada ? (
+      <!-- Leaderboard por WOD -->
+      {(wodsDodia ?? []).length === 0 ? (
         <div class="rounded-xl border border-border bg-card p-12 text-center">
           <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <svg class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <p class="text-sm font-medium text-foreground mb-1">Selecione uma categoria</p>
-          <p class="text-xs text-muted-foreground">Escolha a categoria acima para ver os exercícios</p>
-        </div>
-      ) : !exSelecionado ? (
-        <div class="rounded-xl border border-border bg-card p-12 text-center">
-          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-            <svg class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </div>
-          <p class="text-sm font-medium text-foreground mb-1">Selecione um exercício</p>
-          <p class="text-xs text-muted-foreground">Escolha um exercício acima para ver o ranking</p>
+          <p class="text-sm font-medium text-foreground mb-1">Nenhum WOD aberto nesta data</p>
+          <p class="text-xs text-muted-foreground">
+            {wodDataFiltro === hojeISO_BR
+              ? 'O professor ainda não abriu nenhum WOD para avaliação hoje.'
+              : 'Nenhum WOD com avaliação aberta encontrado para esta data.'}
+          </p>
         </div>
       ) : (
-        <div class="rounded-xl border border-border bg-card overflow-hidden">
-          <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
-            <div>
-              <h2 class="font-semibold text-foreground">{exSelecionado.nome}</h2>
-              <p class="text-xs text-muted-foreground capitalize mt-0.5">
-                {exSelecionado.tipo_resultado === 'rounds_reps' ? 'rounds + reps' : exSelecionado.tipo_resultado}
-                {exSelecionado.tipo_resultado === 'tempo' ? ' · menor é melhor' : ' · maior é melhor'}
-              </p>
-            </div>
-            <span class="text-xs text-muted-foreground">{rankingPerformance.length} atleta{rankingPerformance.length !== 1 ? 's' : ''}</span>
-          </div>
+        <div class="space-y-6">
+          {(wodsDodia ?? []).map((wod: any) => {
+            const todos = resultadosPorWod.get(wod.id) ?? [];
+            const filtrados: WodResultadoRow[] = catWodFiltro
+              ? todos.filter(r => r.categoria === catWodFiltro)
+              : todos;
+            const sorted = sortarResultados(filtrados, wod.score_type);
 
-          {rankingPerformance.length === 0 ? (
-            <div class="p-12 text-center">
-              <p class="text-sm text-muted-foreground">Nenhum resultado registrado para este exercício ainda.</p>
-            </div>
-          ) : (
-            <div class="divide-y divide-border/50">
-              {rankingPerformance.map((r, i) => {
-                const isMe = r.aluno_id === user.id;
-                return (
-                  <div class:list={[
-                    'flex items-center gap-4 px-5 py-3.5 transition-colors',
-                    i === 0 ? 'bg-primary/5' : isMe ? 'bg-blue-500/5' : 'hover:bg-muted/20',
-                  ]}>
-                    <!-- Posição -->
-                    <span class="w-8 text-center shrink-0">
-                      {i < 3
-                        ? <span class="text-xl">{medalhas[i]}</span>
-                        : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
-                    </span>
-
-                    <!-- Avatar -->
-                    <div class:list={[
-                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                      isMe ? 'bg-blue-500/20 text-blue-400' : 'bg-primary/15 text-primary',
-                    ]}>
-                      {(r.profiles?.nome_completo ?? '?').charAt(0).toUpperCase()}
-                    </div>
-
-                    <!-- Nome -->
-                    <div class="flex-1 min-w-0">
-                      <p class="text-sm font-medium text-foreground truncate">
-                        {r.profiles?.nome_completo ?? 'Atleta'}
-                        {isMe && <span class="ml-2 text-[10px] text-blue-400 font-semibold">VOCÊ</span>}
-                      </p>
-                      <p class="text-xs text-muted-foreground">
-                        {r.rx ? 'RX' : 'Scaled'} · {new Date(r.data_registro + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
-                      </p>
-                    </div>
-
-                    <!-- Score -->
-                    <div class="text-right shrink-0">
-                      <p class:list={['text-base font-bold', i === 0 ? 'text-primary' : isMe ? 'text-blue-400' : 'text-foreground']}>
-                        {fmtValor(r)}
-                      </p>
-                    </div>
+            return (
+              <div class="rounded-xl border border-border bg-card overflow-hidden">
+                <!-- Header do WOD -->
+                <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
+                  <div>
+                    <h2 class="font-semibold text-foreground">{wod.nome}</h2>
+                    <p class="text-xs text-muted-foreground mt-0.5">
+                      {scoreTypeLabel[wod.score_type] ?? wod.score_type}
+                      {wod.score_type === 'tempo' ? ' · menor é melhor' : ' · maior é melhor'}
+                      {' · '}{sorted.length} resultado{sorted.length !== 1 ? 's' : ''}
+                      {catWodFiltro && <span class="text-primary"> · {catLabels[catWodFiltro]}</span>}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  {wod.time_cap_min && (
+                    <span class="shrink-0 rounded px-2 py-1 text-xs font-semibold bg-orange-500/10 text-orange-400">
+                      Cap {wod.time_cap_min}min
+                    </span>
+                  )}
+                </div>
 
-          {isAluno && posicaoDoAluno >= 0 && (
-            <div class="px-5 py-3 border-t border-border bg-blue-500/5">
-              <p class="text-xs text-blue-400 text-center font-medium">
-                Sua posição: <strong>{posicaoDoAluno + 1}º</strong> de {rankingPerformance.length} atleta{rankingPerformance.length !== 1 ? 's' : ''}
-              </p>
-            </div>
-          )}
+                <!-- Leaderboard -->
+                {sorted.length === 0 ? (
+                  <p class="py-10 text-center text-sm text-muted-foreground">
+                    {catWodFiltro
+                      ? `Nenhum resultado ${catLabels[catWodFiltro]} registrado ainda.`
+                      : 'Nenhum resultado registrado ainda.'}
+                  </p>
+                ) : (
+                  <div class="divide-y divide-border/50">
+                    {sorted.map((r, i) => {
+                      const isMe = r.aluno_id === user.id;
+                      const nome = r.profiles?.nome_completo ?? 'Atleta';
+                      return (
+                        <div class:list={[
+                          'flex items-center gap-4 px-5 py-3.5 transition-colors',
+                          i === 0 ? 'bg-primary/5' : isMe ? 'bg-blue-500/5' : 'hover:bg-muted/20',
+                        ]}>
+                          <!-- Posição -->
+                          <span class="w-8 text-center shrink-0">
+                            {i < 3
+                              ? <span class="text-xl">{medalhas[i]}</span>
+                              : <span class="text-sm font-bold text-muted-foreground">{i + 1}</span>}
+                          </span>
+
+                          <!-- Avatar -->
+                          <div class:list={[
+                            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                            isMe ? 'bg-blue-500/20 text-blue-400' : 'bg-primary/15 text-primary',
+                          ]}>
+                            {nome.charAt(0).toUpperCase()}
+                          </div>
+
+                          <!-- Nome + categoria -->
+                          <div class="flex-1 min-w-0">
+                            <p class="text-sm font-medium text-foreground truncate">
+                              {nome}
+                              {isMe && <span class="ml-2 text-[10px] text-blue-400 font-semibold">VOCÊ</span>}
+                            </p>
+                            <p class="text-xs text-muted-foreground">
+                              {catLabels[r.categoria] ?? r.categoria}
+                              {r.pse ? ` · PSE ${r.pse}` : ''}
+                            </p>
+                          </div>
+
+                          <!-- Score -->
+                          <div class="text-right shrink-0">
+                            <p class:list={['text-base font-bold',
+                              i === 0 ? 'text-primary' : isMe ? 'text-blue-400' : 'text-foreground']}>
+                              {fmtWodScore(r, wod.score_type)}
+                            </p>
+                            {r.deu_cap && wod.score_type === 'tempo' && (
+                              <p class="text-[10px] text-orange-400 font-medium">CAP</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   )}
 </DashboardLayout>
+
+<script define:vars={{ catWodFiltro }}>
+  const input = document.getElementById('wod-data-input');
+  if (input) {
+    input.addEventListener('change', () => {
+      const params = new URLSearchParams({ tab: 'wod', data: (input as HTMLInputElement).value });
+      if (catWodFiltro) params.set('catwod', catWodFiltro);
+      window.location.href = '/dashboard/rankings?' + params.toString();
+    });
+  }
+</script>
