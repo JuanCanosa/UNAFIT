@@ -525,7 +525,7 @@ const medalhas = ['🥇', '🥈', '🥉'];
   const input = document.getElementById('wod-data-input');
   if (input) {
     input.addEventListener('change', () => {
-      const params = new URLSearchParams({ tab: 'wod', data: (input as HTMLInputElement).value });
+      const params = new URLSearchParams({ tab: 'wod', data: input.value });
       if (catWodFiltro) params.set('catwod', catWodFiltro);
       window.location.href = '/dashboard/rankings?' + params.toString();
     });
