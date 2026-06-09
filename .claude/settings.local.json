@@ -30,7 +30,9 @@
       "Bash(pkill -f \"node.*astro\")",
       "Skill(run)",
       "Skill(run:*)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(mkdir -p \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\coach-control\\\\wod\" \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\meus-treinos\\\\wod\")",
+      "Bash(del /f \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\coach-control\\\\aluno\\\\[id].astro\" \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\coach-control\\\\sessao\\\\[id].astro\")"
     ]
   }
 }
