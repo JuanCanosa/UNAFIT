@@ -1,0 +1,272 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || !['dono', 'colaborador'].includes(profile.role))
+  return Astro.redirect('/dashboard');
+
+const { id: alunoId } = Astro.params;
+const adminClient = createSupabaseAdminClient();
+
+// POST: criar sessão
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'create_session') {
+    const titulo        = (form.get('titulo') as string)?.trim();
+    const data_agendada = form.get('data_agendada') as string;
+    const tags          = form.getAll('tags') as string[];
+
+    if (titulo && data_agendada) {
+      await adminClient.from('coach_sessoes').insert({
+        academia_id:   profile.academia_id,
+        aluno_id:      alunoId,
+        coach_id:      user.id,
+        titulo,
+        data_agendada,
+        tags,
+        status:        'pendente',
+      });
+    }
+  }
+
+  return Astro.redirect(`/dashboard/coach-control/aluno/${alunoId}`);
+}
+
+const aba = new URL(Astro.request.url).searchParams.get('aba') || 'proximas';
+const hojeISO = new Date().toISOString().slice(0, 10);
+
+const [
+  { data: alunoProfile },
+  { data: sessoes },
+] = await Promise.all([
+  adminClient.from('profiles').select('nome_completo').eq('id', alunoId).single(),
+  adminClient.from('coach_sessoes')
+    .select('id, titulo, data_agendada, status, pse, tempo_segundos, tags, concluida_em')
+    .eq('academia_id', profile.academia_id)
+    .eq('aluno_id', alunoId)
+    .order('data_agendada', { ascending: aba === 'proximas' }),
+]);
+
+if (!alunoProfile) return Astro.redirect('/dashboard/coach-control');
+
+type Sessao = {
+  id: string; titulo: string; data_agendada: string; status: string;
+  pse: number | null; tempo_segundos: number | null; tags: string[]; concluida_em: string | null;
+};
+
+const todasSessoes = (sessoes ?? []) as Sessao[];
+const proximas = todasSessoes.filter(s => s.data_agendada >= hojeISO && s.status !== 'cancelada');
+const passadas  = todasSessoes.filter(s => s.data_agendada < hojeISO || s.status === 'concluida' || s.status === 'cancelada');
+const exibir    = aba === 'proximas' ? proximas : passadas;
+
+function formatDate(d: string) {
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}/${y}`;
+}
+function formatTempo(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h${m > 0 ? m + 'm' : ''}`;
+  return `${m}min`;
+}
+function pseColor(pse: number) {
+  if (pse <= 3) return 'text-green-500 bg-green-500/10';
+  if (pse <= 6) return 'text-yellow-500 bg-yellow-500/10';
+  return 'text-red-500 bg-red-500/10';
+}
+function statusBadge(s: string) {
+  if (s === 'concluida') return 'bg-green-500/15 text-green-400';
+  if (s === 'cancelada') return 'bg-muted text-muted-foreground';
+  return 'bg-blue-500/15 text-blue-400';
+}
+function statusLabel(s: string) {
+  if (s === 'concluida') return 'Concluída';
+  if (s === 'cancelada') return 'Cancelada';
+  return 'Pendente';
+}
+
+const hoje = new Date();
+const TAGS_OPCOES = ['Peito','Costas','Ombros','Bíceps','Tríceps','Abdômen','Glúteos','Quadríceps','Isquiotibiais','Panturrilha','Corpo Todo'];
+---
+<DashboardLayout title="Coach Control">
+  <div class="max-w-2xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-center gap-3">
+      <a href="/dashboard/coach-control"
+        class="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </a>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-xl font-bold text-foreground truncate">{alunoProfile.nome_completo}</h1>
+        <p class="text-xs text-muted-foreground">
+          {proximas.length} próximas · {passadas.filter(s => s.status === 'concluida').length} concluídas
+        </p>
+      </div>
+      <button
+        onclick="document.getElementById('modal-nova-sessao').classList.remove('hidden')"
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+      >
+        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Nova Sessão
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 rounded-lg bg-card border border-border p-1 w-fit">
+      {(['proximas','passadas'] as const).map(t => (
+        <a href={`?aba=${t}`}
+          class:list={[
+            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+            aba === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+          ]}>
+          {t === 'proximas' ? `Próximas (${proximas.length})` : `Passadas (${passadas.length})`}
+        </a>
+      ))}
+    </div>
+
+    <!-- Cards -->
+    {exibir.length === 0 && (
+      <div class="rounded-xl border border-border bg-card p-10 text-center">
+        <p class="text-muted-foreground text-sm">
+          {aba === 'proximas' ? 'Nenhuma sessão agendada.' : 'Nenhuma sessão registrada.'}
+        </p>
+      </div>
+    )}
+
+    <div class="space-y-3">
+      {exibir.map(s => {
+        const isFutura = s.data_agendada >= hojeISO && s.status === 'pendente';
+        return (
+          <a
+            href={`/dashboard/coach-control/sessao/${s.id}`}
+            class="group flex gap-4 rounded-xl border border-border bg-card hover:border-primary/40 hover:bg-primary/5 transition-all p-4"
+          >
+            <!-- Date bubble -->
+            <div class:list={[
+              'flex flex-col items-center justify-center rounded-lg h-14 w-14 shrink-0 text-center',
+              isFutura ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+            ]}>
+              <span class="text-xl font-bold leading-tight">{s.data_agendada.split('-')[2]}</span>
+              <span class="text-[10px] uppercase font-semibold">
+                {new Date(s.data_agendada + 'T12:00').toLocaleDateString('pt-BR',{month:'short'})}
+              </span>
+            </div>
+
+            <!-- Info -->
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <p class="font-semibold text-sm text-foreground truncate">{s.titulo}</p>
+                <span class:list={['px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide', statusBadge(s.status)]}>
+                  {statusLabel(s.status)}
+                </span>
+              </div>
+              {s.tags.length > 0 && (
+                <div class="mt-1 flex flex-wrap gap-1">
+                  {s.tags.slice(0, 4).map(t => (
+                    <span class="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-medium">{t}</span>
+                  ))}
+                </div>
+              )}
+              {s.status === 'concluida' && (s.pse || s.tempo_segundos) && (
+                <div class="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+                  {s.pse && (
+                    <span class:list={['px-1.5 py-0.5 rounded font-semibold text-[10px]', pseColor(s.pse)]}>
+                      PSE {s.pse}
+                    </span>
+                  )}
+                  {s.tempo_segundos && (
+                    <span>{formatTempo(s.tempo_segundos)}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0 self-center"
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </a>
+        );
+      })}
+    </div>
+
+  </div>
+
+  <!-- Modal: Nova Sessão -->
+  <div id="modal-nova-sessao" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      onclick="document.getElementById('modal-nova-sessao').classList.add('hidden')"></div>
+    <div class="relative z-10 w-full max-w-md rounded-xl border border-border bg-background shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <h2 class="font-semibold text-foreground">Nova Sessão</h2>
+        <button onclick="document.getElementById('modal-nova-sessao').classList.add('hidden')"
+          class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <form method="POST" class="p-5 space-y-4">
+        <input type="hidden" name="action" value="create_session" />
+
+        <div>
+          <label class="block text-xs font-medium text-muted-foreground mb-1">Título *</label>
+          <input
+            type="text" name="titulo" required placeholder="Ex: Treino A — Membros Superiores"
+            class="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-muted-foreground mb-1">Data *</label>
+          <input
+            type="date" name="data_agendada" required
+            value={hoje.toISOString().slice(0, 10)}
+            class="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-muted-foreground mb-2">Grupos musculares</label>
+          <div class="flex flex-wrap gap-2">
+            {TAGS_OPCOES.map(tag => (
+              <label class="flex items-center gap-1.5 cursor-pointer group">
+                <input type="checkbox" name="tags" value={tag} class="accent-primary" />
+                <span class="text-xs text-muted-foreground group-hover:text-foreground transition-colors">{tag}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button"
+            onclick="document.getElementById('modal-nova-sessao').classList.add('hidden')"
+            class="flex-1 rounded-lg border border-border py-2 text-sm font-medium text-foreground hover:bg-card transition-colors">
+            Cancelar
+          </button>
+          <button type="submit"
+            class="flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+            Criar Sessão
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</DashboardLayout>

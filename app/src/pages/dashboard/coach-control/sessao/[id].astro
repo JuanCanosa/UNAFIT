@@ -1,0 +1,439 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile) return Astro.redirect('/login');
+
+const { id: sessaoId } = Astro.params;
+const adminClient = createSupabaseAdminClient();
+const isStaff = ['dono', 'colaborador', 'saas_admin'].includes(profile.role);
+
+// ── POST ─────────────────────────────────────────────────────────────────────
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  // Staff: editar sessão
+  if (isStaff && action === 'update_session') {
+    const titulo        = (form.get('titulo') as string)?.trim();
+    const data_agendada = form.get('data_agendada') as string;
+    const tags          = form.getAll('tags') as string[];
+    if (titulo && data_agendada) {
+      await adminClient.from('coach_sessoes')
+        .update({ titulo, data_agendada, tags })
+        .eq('id', sessaoId)
+        .eq('academia_id', profile.academia_id);
+    }
+  }
+
+  // Staff: cancelar sessão
+  if (isStaff && action === 'cancel_session') {
+    await adminClient.from('coach_sessoes')
+      .update({ status: 'cancelada' })
+      .eq('id', sessaoId)
+      .eq('academia_id', profile.academia_id);
+  }
+
+  // Staff: adicionar exercício
+  if (isStaff && action === 'add_exercise') {
+    const nome      = (form.get('nome') as string)?.trim();
+    const serieReps = (form.get('serie_reps') as string)?.trim() || null;
+    const carga     = (form.get('carga') as string)?.trim() || null;
+    const obs       = (form.get('observacao') as string)?.trim() || null;
+
+    if (nome) {
+      const { data: count } = await adminClient
+        .from('coach_sessao_exercicios')
+        .select('ordem', { count: 'exact', head: false })
+        .eq('sessao_id', sessaoId);
+      const proxOrdem = ((count ?? []).length) + 1;
+
+      await adminClient.from('coach_sessao_exercicios').insert({
+        sessao_id:   sessaoId,
+        academia_id: profile.academia_id,
+        nome,
+        serie_reps:  serieReps,
+        carga,
+        observacao:  obs,
+        ordem:       proxOrdem,
+      });
+    }
+  }
+
+  // Staff: remover exercício
+  if (isStaff && action === 'delete_exercise') {
+    const exId = form.get('exercicio_id') as string;
+    await adminClient.from('coach_sessao_exercicios')
+      .delete()
+      .eq('id', exId)
+      .eq('academia_id', profile.academia_id);
+  }
+
+  // Aluno: concluir sessão (PSE + tempo obrigatórios)
+  if (!isStaff && action === 'complete_session') {
+    const pse         = parseInt(form.get('pse') as string);
+    const tempoMin    = parseInt(form.get('tempo_min') as string);
+    const comentario  = (form.get('comentario') as string)?.trim() || null;
+
+    if (pse >= 1 && pse <= 10 && tempoMin >= 1) {
+      await adminClient.from('coach_sessoes')
+        .update({
+          status:          'concluida',
+          pse,
+          tempo_segundos:  tempoMin * 60,
+          comentario,
+          concluida_em:    new Date().toISOString(),
+        })
+        .eq('id', sessaoId)
+        .eq('aluno_id', user.id);
+    }
+  }
+
+  return Astro.redirect(`/dashboard/coach-control/sessao/${sessaoId}`);
+}
+
+// ── GET ───────────────────────────────────────────────────────────────────────
+const [
+  { data: sessao },
+  { data: exsRaw },
+] = await Promise.all([
+  adminClient.from('coach_sessoes')
+    .select('id, titulo, data_agendada, status, pse, tempo_segundos, comentario, tags, aluno_id, coach_id, concluida_em')
+    .eq('id', sessaoId)
+    .single(),
+  adminClient.from('coach_sessao_exercicios')
+    .select('id, ordem, nome, serie_reps, carga, observacao')
+    .eq('sessao_id', sessaoId)
+    .order('ordem'),
+]);
+
+if (!sessao) return Astro.redirect(isStaff ? '/dashboard/coach-control' : '/dashboard/meus-treinos');
+
+// Verifica acesso: staff da mesma academia OU aluno desta sessão
+const pertenceAcademia = sessao.aluno_id || sessao.coach_id; // already fetched via adminClient
+if (!isStaff && sessao.aluno_id !== user.id) return Astro.redirect('/dashboard');
+
+const { data: alunoProfile } = await adminClient
+  .from('profiles')
+  .select('nome_completo')
+  .eq('id', sessao.aluno_id)
+  .single();
+
+type Ex = { id: string; ordem: number; nome: string; serie_reps: string | null; carga: string | null; observacao: string | null };
+const exercicios = (exsRaw ?? []) as Ex[];
+
+const hojeISO = new Date().toISOString().slice(0, 10);
+const canEdit   = isStaff && sessao.status === 'pendente';
+const canComplete = !isStaff && sessao.status === 'pendente';
+
+function formatDate(d: string) {
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}/${y}`;
+}
+function formatTempo(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h${m > 0 ? m + 'min' : ''}`;
+  return `${m}min`;
+}
+function pseColor(pse: number) {
+  if (pse <= 3) return 'text-green-500 bg-green-500/10';
+  if (pse <= 6) return 'text-yellow-500 bg-yellow-500/10';
+  return 'text-red-500 bg-red-500/10';
+}
+
+const backHref = isStaff
+  ? `/dashboard/coach-control/aluno/${sessao.aluno_id}`
+  : '/dashboard/meus-treinos';
+
+const TAGS_OPCOES = ['Peito','Costas','Ombros','Bíceps','Tríceps','Abdômen','Glúteos','Quadríceps','Isquiotibiais','Panturrilha','Corpo Todo'];
+---
+<DashboardLayout title={sessao.titulo}>
+  <div class="max-w-2xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-start gap-3">
+      <a href={backHref}
+        class="mt-0.5 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card transition-colors">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </a>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h1 class="text-xl font-bold text-foreground">{sessao.titulo}</h1>
+          {sessao.status === 'concluida' && (
+            <span class="px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 text-xs font-semibold uppercase tracking-wide">Concluída</span>
+          )}
+          {sessao.status === 'cancelada' && (
+            <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-xs font-semibold uppercase tracking-wide">Cancelada</span>
+          )}
+          {sessao.status === 'pendente' && (
+            <span class="px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 text-xs font-semibold uppercase tracking-wide">Pendente</span>
+          )}
+        </div>
+        <div class="flex items-center gap-3 mt-0.5 text-sm text-muted-foreground">
+          <span>{formatDate(sessao.data_agendada)}</span>
+          {isStaff && alunoProfile && <span>— {alunoProfile.nome_completo}</span>}
+        </div>
+      </div>
+    </div>
+
+    <!-- Tags -->
+    {(sessao.tags ?? []).length > 0 && (
+      <div class="flex flex-wrap gap-1.5">
+        {(sessao.tags as string[]).map(t => (
+          <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-xs font-medium">{t}</span>
+        ))}
+      </div>
+    )}
+
+    <!-- Resultado (se concluída) -->
+    {sessao.status === 'concluida' && (
+      <div class="rounded-xl border border-border bg-card p-4 flex items-center gap-5 flex-wrap">
+        {sessao.pse && (
+          <div class="text-center">
+            <p class="text-[10px] uppercase font-semibold tracking-wide text-muted-foreground mb-1">PSE</p>
+            <span class:list={['px-3 py-1 rounded-lg text-lg font-bold', pseColor(sessao.pse)]}>
+              {sessao.pse}
+            </span>
+          </div>
+        )}
+        {sessao.tempo_segundos && (
+          <div class="text-center">
+            <p class="text-[10px] uppercase font-semibold tracking-wide text-muted-foreground mb-1">Tempo</p>
+            <p class="text-lg font-bold text-foreground">{formatTempo(sessao.tempo_segundos)}</p>
+          </div>
+        )}
+        {sessao.comentario && (
+          <div class="flex-1 min-w-[140px]">
+            <p class="text-[10px] uppercase font-semibold tracking-wide text-muted-foreground mb-1">Comentário</p>
+            <p class="text-sm text-foreground">{sessao.comentario}</p>
+          </div>
+        )}
+      </div>
+    )}
+
+    <!-- Lista de exercícios -->
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+        <h2 class="font-semibold text-sm text-foreground">Exercícios</h2>
+        <span class="text-xs text-muted-foreground">{exercicios.length} {exercicios.length === 1 ? 'exercício' : 'exercícios'}</span>
+      </div>
+
+      {exercicios.length === 0 && (
+        <div class="px-4 py-8 text-center text-muted-foreground text-sm">
+          Nenhum exercício adicionado ainda.
+        </div>
+      )}
+
+      <ul class="divide-y divide-border">
+        {exercicios.map(ex => (
+          <li class="flex items-start gap-3 px-4 py-3">
+            <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded bg-muted text-[11px] font-bold text-muted-foreground">
+              {ex.ordem}
+            </span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-foreground">{ex.nome}</p>
+              <div class="flex flex-wrap gap-2 mt-0.5 text-xs text-muted-foreground">
+                {ex.serie_reps && <span class="bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">{ex.serie_reps}</span>}
+                {ex.carga      && <span>{ex.carga}</span>}
+                {ex.observacao && <span class="italic">{ex.observacao}</span>}
+              </div>
+            </div>
+            {canEdit && (
+              <form method="POST">
+                <input type="hidden" name="action" value="delete_exercise" />
+                <input type="hidden" name="exercicio_id" value={ex.id} />
+                <button type="submit"
+                  class="text-muted-foreground hover:text-red-500 transition-colors"
+                  title="Remover exercício">
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </form>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <!-- Formulário adicionar exercício (staff, sessão pendente) -->
+      {canEdit && (
+        <div class="border-t border-border p-4">
+          <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Adicionar exercício</p>
+          <form method="POST" class="space-y-3">
+            <input type="hidden" name="action" value="add_exercise" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="sm:col-span-2">
+                <input type="text" name="nome" required placeholder="Nome do exercício *"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+              </div>
+              <input type="text" name="serie_reps" placeholder="Séries x Reps (ex: 3x8-12)"
+                class="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+              <input type="text" name="carga" placeholder="Carga (ex: 80kg, Peso corporal)"
+                class="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+              <div class="sm:col-span-2">
+                <input type="text" name="observacao" placeholder="Observação (opcional)"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+              </div>
+            </div>
+            <button type="submit"
+              class="rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20 transition-colors">
+              + Adicionar
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+
+    <!-- Staff: editar informações da sessão -->
+    {canEdit && (
+      <div class="rounded-xl border border-border bg-card overflow-hidden">
+        <button
+          onclick="document.getElementById('form-editar').classList.toggle('hidden')"
+          class="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors">
+          <span>Editar sessão</span>
+          <svg class="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <div id="form-editar" class="hidden border-t border-border p-4">
+          <form method="POST" class="space-y-4">
+            <input type="hidden" name="action" value="update_session" />
+            <div>
+              <label class="block text-xs font-medium text-muted-foreground mb-1">Título</label>
+              <input type="text" name="titulo" required value={sessao.titulo}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-muted-foreground mb-1">Data</label>
+              <input type="date" name="data_agendada" required value={sessao.data_agendada}
+                class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-muted-foreground mb-2">Grupos musculares</label>
+              <div class="flex flex-wrap gap-2">
+                {TAGS_OPCOES.map(tag => (
+                  <label class="flex items-center gap-1.5 cursor-pointer group">
+                    <input type="checkbox" name="tags" value={tag}
+                      checked={(sessao.tags as string[]).includes(tag)}
+                      class="accent-primary" />
+                    <span class="text-xs text-muted-foreground group-hover:text-foreground transition-colors">{tag}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <button type="submit"
+              class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
+              Salvar alterações
+            </button>
+          </form>
+        </div>
+      </div>
+    )}
+
+    <!-- Staff: cancelar sessão -->
+    {canEdit && (
+      <form method="POST"
+        onsubmit="return confirm('Cancelar esta sessão? Esta ação não pode ser desfeita.')">
+        <input type="hidden" name="action" value="cancel_session" />
+        <button type="submit"
+          class="w-full rounded-lg border border-red-500/30 py-2.5 text-sm font-medium text-red-500 hover:bg-red-500/10 transition-colors">
+          Cancelar sessão
+        </button>
+      </form>
+    )}
+
+    <!-- Aluno: concluir sessão -->
+    {canComplete && (
+      <div class="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
+        <div class="px-4 py-3 border-b border-primary/20">
+          <h2 class="font-semibold text-sm text-foreground">Concluir Treino</h2>
+          <p class="text-xs text-muted-foreground mt-0.5">Preencha o PSE e o tempo para registrar a conclusão.</p>
+        </div>
+        <form method="POST" id="form-concluir" class="p-4 space-y-5">
+          <input type="hidden" name="action" value="complete_session" />
+
+          <!-- PSE -->
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              PSE — Percepção de Esforço *
+            </label>
+            <div class="flex gap-2 flex-wrap">
+              {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                <button
+                  type="button"
+                  data-pse={n}
+                  onclick={`selectPse(${n})`}
+                  class:list={[
+                    'h-10 w-10 rounded-lg border-2 font-bold text-sm transition-all pse-btn',
+                    n <= 3 ? 'border-green-500/30 text-green-600 hover:bg-green-500/20' :
+                    n <= 6 ? 'border-yellow-500/30 text-yellow-600 hover:bg-yellow-500/20' :
+                             'border-red-500/30 text-red-600 hover:bg-red-500/20'
+                  ]}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            <input type="hidden" name="pse" id="pse-hidden" required />
+            <div class="mt-2 text-xs text-muted-foreground">
+              <span class="text-green-500">1-3 Fácil</span> · <span class="text-yellow-500">4-6 Moderado</span> · <span class="text-red-500">7-9 Intenso</span> · <span class="text-red-600 font-bold">10 Máximo</span>
+            </div>
+          </div>
+
+          <!-- Tempo -->
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Tempo da Sessão (minutos) *
+            </label>
+            <input type="number" name="tempo_min" min="1" max="300" required placeholder="Ex: 60"
+              class="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+          </div>
+
+          <!-- Comentário -->
+          <div>
+            <label class="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+              Comentário (opcional)
+            </label>
+            <textarea name="comentario" rows="3" placeholder="Como foi o treino? Alguma observação?"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"></textarea>
+          </div>
+
+          <button type="submit" id="btn-concluir"
+            class="w-full rounded-lg bg-primary py-3 text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+            Concluir Treino
+          </button>
+        </form>
+      </div>
+    )}
+
+  </div>
+
+  <script is:inline>
+    function selectPse(n) {
+      document.getElementById('pse-hidden').value = n;
+      document.querySelectorAll('.pse-btn').forEach(btn => {
+        const v = parseInt(btn.getAttribute('data-pse'));
+        btn.classList.toggle('ring-2', v === n);
+        btn.classList.toggle('ring-offset-1', v === n);
+        btn.classList.toggle('ring-offset-background', v === n);
+        if (v === n) {
+          btn.classList.add(v <= 3 ? 'bg-green-500/20' : v <= 6 ? 'bg-yellow-500/20' : 'bg-red-500/20');
+        } else {
+          btn.classList.remove('bg-green-500/20','bg-yellow-500/20','bg-red-500/20');
+        }
+      });
+    }
+  </script>
+</DashboardLayout>

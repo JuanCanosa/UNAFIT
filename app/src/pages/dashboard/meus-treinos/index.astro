@@ -1,0 +1,184 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+const adminClient = createSupabaseAdminClient();
+const aba = new URL(Astro.request.url).searchParams.get('aba') || 'proximas';
+const hojeISO = new Date().toISOString().slice(0, 10);
+
+const { data: sessoesRaw } = await adminClient
+  .from('coach_sessoes')
+  .select('id, titulo, data_agendada, status, pse, tempo_segundos, tags, concluida_em')
+  .eq('academia_id', profile.academia_id)
+  .eq('aluno_id', user.id)
+  .order('data_agendada', { ascending: aba === 'proximas' });
+
+type Sessao = {
+  id: string; titulo: string; data_agendada: string; status: string;
+  pse: number | null; tempo_segundos: number | null; tags: string[]; concluida_em: string | null;
+};
+
+const todas   = (sessoesRaw ?? []) as Sessao[];
+const proximas = todas.filter(s => s.data_agendada >= hojeISO && s.status !== 'cancelada');
+const passadas  = todas.filter(s => s.data_agendada < hojeISO || s.status === 'concluida' || s.status === 'cancelada');
+const exibir    = aba === 'proximas' ? proximas : passadas;
+const pendentes = proximas.filter(s => s.status === 'pendente').length;
+
+function formatTempo(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h${m > 0 ? m + 'min' : ''}`;
+  return `${m}min`;
+}
+function pseColor(pse: number) {
+  if (pse <= 3) return 'text-green-500 bg-green-500/10';
+  if (pse <= 6) return 'text-yellow-500 bg-yellow-500/10';
+  return 'text-red-500 bg-red-500/10';
+}
+function statusBadge(s: string) {
+  if (s === 'concluida') return 'bg-green-500/15 text-green-400';
+  if (s === 'cancelada') return 'bg-muted text-muted-foreground';
+  return 'bg-blue-500/15 text-blue-400';
+}
+function statusLabel(s: string) {
+  if (s === 'concluida') return 'Concluída';
+  if (s === 'cancelada') return 'Cancelada';
+  return 'Pendente';
+}
+---
+<DashboardLayout title="Meus Treinos">
+  <div class="max-w-2xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div>
+      <h1 class="text-2xl font-bold text-foreground">Meus Treinos</h1>
+      <p class="text-sm text-muted-foreground mt-0.5">
+        {pendentes > 0
+          ? `${pendentes} treino${pendentes > 1 ? 's' : ''} pendente${pendentes > 1 ? 's' : ''} para você completar`
+          : 'Seus treinos atribuídos pelo coach'}
+      </p>
+    </div>
+
+    <!-- Stats rápidos -->
+    <div class="grid grid-cols-3 gap-3">
+      <div class="rounded-xl border border-border bg-card p-3 text-center">
+        <p class="text-2xl font-bold text-foreground">{proximas.length}</p>
+        <p class="text-xs text-muted-foreground mt-0.5">Próximos</p>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-3 text-center">
+        <p class="text-2xl font-bold text-green-500">{passadas.filter(s => s.status === 'concluida').length}</p>
+        <p class="text-xs text-muted-foreground mt-0.5">Concluídos</p>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-3 text-center">
+        {(() => {
+          const c = passadas.filter(s => s.status === 'concluida').length;
+          const t = passadas.filter(s => s.status !== 'cancelada').length;
+          const pct = t > 0 ? Math.round((c / t) * 100) : 0;
+          return (
+            <>
+              <p class:list={['text-2xl font-bold', pct >= 70 ? 'text-green-500' : pct >= 40 ? 'text-yellow-500' : 'text-muted-foreground']}>{pct}%</p>
+              <p class="text-xs text-muted-foreground mt-0.5">Adesão</p>
+            </>
+          );
+        })()}
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 rounded-lg bg-card border border-border p-1 w-fit">
+      {(['proximas','passadas'] as const).map(t => (
+        <a href={`?aba=${t}`}
+          class:list={[
+            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+            aba === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+          ]}>
+          {t === 'proximas' ? `Próximos (${proximas.length})` : `Passados (${passadas.length})`}
+        </a>
+      ))}
+    </div>
+
+    <!-- Cards -->
+    {exibir.length === 0 && (
+      <div class="rounded-xl border border-border bg-card p-10 text-center">
+        <svg class="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <p class="text-muted-foreground text-sm">
+          {aba === 'proximas' ? 'Nenhum treino agendado.' : 'Nenhum treino registrado ainda.'}
+        </p>
+      </div>
+    )}
+
+    <div class="space-y-3">
+      {exibir.map(s => {
+        const isFutura = s.data_agendada >= hojeISO && s.status === 'pendente';
+        return (
+          <a
+            href={`/dashboard/coach-control/sessao/${s.id}`}
+            class="group flex gap-4 rounded-xl border border-border bg-card hover:border-primary/40 hover:bg-primary/5 transition-all p-4"
+          >
+            <!-- Date bubble -->
+            <div class:list={[
+              'flex flex-col items-center justify-center rounded-lg h-14 w-14 shrink-0 text-center',
+              isFutura ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+            ]}>
+              <span class="text-xl font-bold leading-tight">{s.data_agendada.split('-')[2]}</span>
+              <span class="text-[10px] uppercase font-semibold">
+                {new Date(s.data_agendada + 'T12:00').toLocaleDateString('pt-BR', { month: 'short' })}
+              </span>
+            </div>
+
+            <!-- Info -->
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <p class="font-semibold text-sm text-foreground truncate">{s.titulo}</p>
+                <span class:list={['px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide', statusBadge(s.status)]}>
+                  {statusLabel(s.status)}
+                </span>
+              </div>
+              {s.tags.length > 0 && (
+                <div class="mt-1 flex flex-wrap gap-1">
+                  {s.tags.slice(0, 4).map((t: string) => (
+                    <span class="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-medium">{t}</span>
+                  ))}
+                </div>
+              )}
+              {s.status === 'concluida' && (s.pse || s.tempo_segundos) && (
+                <div class="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+                  {s.pse && (
+                    <span class:list={['px-1.5 py-0.5 rounded font-semibold text-[10px]', pseColor(s.pse)]}>
+                      PSE {s.pse}
+                    </span>
+                  )}
+                  {s.tempo_segundos && <span>{formatTempo(s.tempo_segundos)}</span>}
+                </div>
+              )}
+              {isFutura && (
+                <p class="mt-1.5 text-xs text-primary font-medium">Toque para ver detalhes e concluir</p>
+              )}
+            </div>
+
+            <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0 self-center"
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </a>
+        );
+      })}
+    </div>
+
+  </div>
+</DashboardLayout>

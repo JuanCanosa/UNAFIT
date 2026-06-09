@@ -1,0 +1,170 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const supabase   = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('role, academia_id')
+  .eq('id', user.id)
+  .single();
+
+if (!profile || !['dono', 'colaborador'].includes(profile.role))
+  return Astro.redirect('/dashboard');
+
+const adminClient = createSupabaseAdminClient();
+const hojeISO = new Date().toISOString().slice(0, 10);
+const h7d  = new Date(Date.now() - 7  * 86400000).toISOString().slice(0, 10);
+const h30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
+const [
+  { data: alunosRaw },
+  { data: sessoesRecentes },
+  { data: proximasRaw },
+] = await Promise.all([
+  adminClient.from('profiles')
+    .select('id, nome_completo')
+    .eq('academia_id', profile.academia_id)
+    .eq('role', 'aluno')
+    .eq('ativo', true)
+    .order('nome_completo'),
+  adminClient.from('coach_sessoes')
+    .select('aluno_id, status, data_agendada')
+    .eq('academia_id', profile.academia_id)
+    .gte('data_agendada', h30d)
+    .lte('data_agendada', hojeISO),
+  adminClient.from('coach_sessoes')
+    .select('aluno_id, data_agendada, titulo')
+    .eq('academia_id', profile.academia_id)
+    .eq('status', 'pendente')
+    .gte('data_agendada', hojeISO)
+    .order('data_agendada'),
+]);
+
+type Aluno   = { id: string; nome_completo: string };
+type Sessao  = { aluno_id: string; status: string; data_agendada: string };
+type Proxima = { aluno_id: string; data_agendada: string; titulo: string };
+
+const alunos  = (alunosRaw  ?? []) as Aluno[];
+const sessoes = (sessoesRecentes ?? []) as Sessao[];
+const proximas = new Map<string, Proxima>();
+for (const p of (proximasRaw ?? []) as Proxima[]) {
+  if (!proximas.has(p.aluno_id)) proximas.set(p.aluno_id, p);
+}
+
+function adh(alunoId: string, desde: string) {
+  const s = sessoes.filter(s => s.aluno_id === alunoId && s.data_agendada >= desde);
+  if (!s.length) return null;
+  const c = s.filter(s => s.status === 'concluida').length;
+  return { pct: Math.round((c / s.length) * 100), c, t: s.length };
+}
+
+const busca = new URL(Astro.request.url).searchParams.get('q') || '';
+const lista = busca
+  ? alunos.filter(a => a.nome_completo.toLowerCase().includes(busca.toLowerCase()))
+  : alunos;
+
+function formatDate(d: string) {
+  const [y, m, dia] = d.split('-');
+  return `${dia}/${m}`;
+}
+---
+<DashboardLayout title="Coach Control">
+  <div class="max-w-4xl mx-auto space-y-6">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <h1 class="text-2xl font-bold text-foreground">Coach Control</h1>
+        <p class="text-sm text-muted-foreground mt-0.5">{alunos.length} alunos ativos</p>
+      </div>
+    </div>
+
+    <!-- Busca -->
+    <form method="GET" class="relative">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"
+        fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+      </svg>
+      <input
+        type="search" name="q" value={busca} placeholder="Buscar aluno..."
+        class="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+    </form>
+
+    {lista.length === 0 && (
+      <div class="rounded-xl border border-border bg-card p-10 text-center">
+        <p class="text-muted-foreground text-sm">
+          {busca ? 'Nenhum aluno encontrado para a busca.' : 'Nenhum aluno ativo cadastrado.'}
+        </p>
+      </div>
+    )}
+
+    <!-- Lista de alunos -->
+    <div class="grid gap-3">
+      {lista.map(aluno => {
+        const a7  = adh(aluno.id, h7d);
+        const a30 = adh(aluno.id, h30d);
+        const prox = proximas.get(aluno.id);
+        return (
+          <a
+            href={`/dashboard/coach-control/aluno/${aluno.id}`}
+            class="group block rounded-xl border border-border bg-card hover:border-primary/40 hover:bg-primary/5 transition-all p-4"
+          >
+            <div class="flex items-start gap-4">
+              <!-- Avatar -->
+              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary font-bold text-sm">
+                {aluno.nome_completo.charAt(0).toUpperCase()}
+              </div>
+
+              <!-- Info -->
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <p class="font-semibold text-foreground text-sm truncate">{aluno.nome_completo}</p>
+                </div>
+
+                <!-- Métricas de adesão -->
+                <div class="mt-2 flex items-center gap-4 flex-wrap">
+                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span class="font-medium">7d:</span>
+                    {a7
+                      ? <span class:list={['font-semibold', a7.pct >= 70 ? 'text-green-500' : a7.pct >= 40 ? 'text-yellow-500' : 'text-red-500']}>{a7.pct}%</span>
+                      : <span class="text-muted-foreground/50">—</span>
+                    }
+                    {a7 && <span class="text-muted-foreground/60">({a7.c}/{a7.t})</span>}
+                  </div>
+                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span class="font-medium">30d:</span>
+                    {a30
+                      ? <span class:list={['font-semibold', a30.pct >= 70 ? 'text-green-500' : a30.pct >= 40 ? 'text-yellow-500' : 'text-red-500']}>{a30.pct}%</span>
+                      : <span class="text-muted-foreground/50">—</span>
+                    }
+                    {a30 && <span class="text-muted-foreground/60">({a30.c}/{a30.t})</span>}
+                  </div>
+                  {prox && (
+                    <div class="flex items-center gap-1 text-xs">
+                      <span class="text-muted-foreground">Próximo:</span>
+                      <span class="text-primary font-medium">{formatDate(prox.data_agendada)}</span>
+                      <span class="text-muted-foreground truncate max-w-[140px]">— {prox.titulo}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <!-- Arrow -->
+              <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0 mt-1"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </a>
+        );
+      })}
+    </div>
+
+  </div>
+</DashboardLayout>
