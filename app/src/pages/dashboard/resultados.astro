@@ -7,86 +7,67 @@ const { data: { user } } = await supabase.auth.getUser();
 if (!user) return Astro.redirect('/login');
 
 const { data: profile } = await supabase
-  .from('profiles').select('role, academia_id, nome_completo').eq('id', user.id).single();
-
+  .from('profiles').select('role, academia_id').eq('id', user.id).single();
 if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
 
+const academia_id = profile.academia_id!;
+
+// Todos exercícios para autocomplete
 const { data: exercicios } = await supabase
   .from('exercicios')
-  .select('id, nome, tipo_resultado, categoria')
-  .eq('academia_id', profile.academia_id!)
+  .select('id, nome, tipo_resultado')
+  .eq('academia_id', academia_id)
   .order('nome');
 
-const { data: prs } = await supabase
-  .from('prs')
-  .select('id, exercicio_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, rx, data_registro, observacao')
-  .eq('aluno_id', user.id)
-  .order('data_registro', { ascending: false });
-
+// Checkins para estatísticas
 const { data: checkins } = await supabase
   .from('checkins').select('id, feito_em').eq('aluno_id', user.id);
-
 const totalCheckins = checkins?.length ?? 0;
 const trintaDias = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const checkinsRecentes = checkins?.filter(c => new Date((c as any).feito_em) >= trintaDias).length ?? 0;
 
-type PR = {
-  id: string; exercicio_id: string; tipo: string;
+// Exercício selecionado via URL
+const exId   = Astro.url.searchParams.get('ex');
+const saved  = Astro.url.searchParams.get('saved') === '1';
+
+type ExRow = { id: string; nome: string; tipo_resultado: string };
+const exSelecionado = exId
+  ? (exercicios ?? [] as ExRow[]).find((e: any) => e.id === exId) as ExRow | undefined
+  : undefined;
+
+// Histórico de PRs do exercício selecionado
+type PRRow = {
+  id: string; tipo: string; categoria: string | null; rx: boolean;
   valor_peso: number|null; valor_tempo_seg: number|null;
   valor_reps: number|null; valor_rounds: number|null; valor_reps_extra: number|null;
-  rx: boolean; data_registro: string; observacao: string|null;
+  data_registro: string; observacao: string|null;
 };
+let historico: PRRow[] = [];
 
-const prsPorExercicio = new Map<string, PR[]>();
-for (const pr of (prs ?? []) as PR[]) {
-  if (!prsPorExercicio.has(pr.exercicio_id)) prsPorExercicio.set(pr.exercicio_id, []);
-  prsPorExercicio.get(pr.exercicio_id)!.push(pr);
+if (exSelecionado) {
+  const { data: hist } = await supabase
+    .from('prs')
+    .select('id, tipo, categoria, rx, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, data_registro, observacao')
+    .eq('aluno_id', user.id)
+    .eq('exercicio_id', exId!)
+    .order('data_registro', { ascending: false })
+    .limit(20);
+  historico = (hist ?? []) as PRRow[];
 }
 
-const categoriasLabel: Record<string, string> = {
-  ginastico:          'Ginástico – 1 Rep Máx',
-  ginastico_unbroken: 'Ginástico – Unbroken',
-  condicionamento:    'Condicionamento',
-  peso:               'Peso',
-  heroes_girls:       'Heroes / Girls',
-};
-const ordemCategorias = ['ginastico', 'ginastico_unbroken', 'condicionamento', 'peso', 'heroes_girls'];
+// Total exercícios com PR (para stat)
+const { data: prsAll } = await supabase
+  .from('prs').select('exercicio_id').eq('aluno_id', user.id);
+const totalExerciciosComPR = new Set((prsAll ?? []).map((p: any) => p.exercicio_id)).size;
 
-type ExRow = { id: string; nome: string; tipo_resultado: string; categoria: string | null };
-const exerciciosComPR = (exercicios ?? [] as ExRow[]).filter(e => prsPorExercicio.has(e.id));
-const exerciciosPorCategoria = new Map<string, ExRow[]>();
-for (const e of exerciciosComPR) {
-  const cat = (e as ExRow).categoria ?? 'outros';
-  if (!exerciciosPorCategoria.has(cat)) exerciciosPorCategoria.set(cat, []);
-  exerciciosPorCategoria.get(cat)!.push(e);
-}
-
-function valorNum(pr: PR): number {
-  if (pr.tipo === 'peso')       return pr.valor_peso ?? 0;
-  if (pr.tipo === 'tempo')      return pr.valor_tempo_seg ?? 0;
-  if (pr.tipo === 'reps')       return pr.valor_reps ?? 0;
-  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
-  return 0;
-}
-
-function melhorPR(lista: PR[]): PR {
-  return lista.reduce((best, cur) => {
-    const bv = best.tipo === 'tempo' ? -valorNum(best) : valorNum(best);
-    const cv = cur.tipo  === 'tempo' ? -valorNum(cur)  : valorNum(cur);
-    return cv > bv ? cur : best;
-  });
-}
-
-function fmtValor(pr: PR): string {
-  if (pr.tipo === 'peso')   return `${pr.valor_peso} kg`;
-  if (pr.tipo === 'reps')   return `${pr.valor_reps} rep${(pr.valor_reps ?? 0) !== 1 ? 's' : ''}`;
+// Helpers
+function fmtValor(pr: PRRow): string {
+  if (pr.tipo === 'peso' && pr.valor_peso != null)        return `${pr.valor_peso} kg`;
+  if (pr.tipo === 'reps' && pr.valor_reps != null)        return `${pr.valor_reps} rep${pr.valor_reps !== 1 ? 's' : ''}`;
   if (pr.tipo === 'tempo' && pr.valor_tempo_seg != null) {
-    const h = Math.floor(pr.valor_tempo_seg / 3600);
-    const m = Math.floor((pr.valor_tempo_seg % 3600) / 60);
+    const m = Math.floor(pr.valor_tempo_seg / 60);
     const s = pr.valor_tempo_seg % 60;
-    return h > 0
-      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
   if (pr.tipo === 'rounds_reps') {
     const r = pr.valor_rounds ?? 0;
@@ -96,404 +77,421 @@ function fmtValor(pr: PR): string {
   return '—';
 }
 
-function fmtData(iso: string, short = false) {
-  const opts: Intl.DateTimeFormatOptions = short
-    ? { day: '2-digit', month: 'short' }
-    : { day: '2-digit', month: 'short', year: 'numeric' };
-  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', opts);
+function fmtData(iso: string) {
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// Gráfico sparkline — retorna: { points: string, areaPoints: string, trend: 'up'|'down'|'stable' }
-function sparkline(lista: PR[], tipo: string, W = 200, H = 48) {
-  const sorted = [...lista].sort((a, b) =>
-    new Date(a.data_registro).getTime() - new Date(b.data_registro).getTime()
-  );
-  if (sorted.length < 2) return null;
-
-  // Valor para o eixo Y — tempo invertido (menor = melhor)
-  const vals = sorted.map(h => tipo === 'tempo' ? -(valorNum(h)) : valorNum(h));
-  const min  = Math.min(...vals);
-  const max  = Math.max(...vals);
-  const range = max - min || 1;
-
-  const pts = sorted.map((_, i) => {
-    const x = (i / (sorted.length - 1)) * (W - 8) + 4;
-    const y = H - 6 - ((vals[i]! - min) / range) * (H - 16);
-    return { x: parseFloat(x.toFixed(1)), y: parseFloat(y.toFixed(1)) };
-  });
-
-  const linePoints  = pts.map(p => `${p.x},${p.y}`).join(' ');
-  const areaPoints  = [
-    ...pts.map(p => `${p.x},${p.y}`),
-    `${pts[pts.length-1]!.x},${H}`,
-    `${pts[0]!.x},${H}`,
-  ].join(' ');
-
-  const firstVal = vals[0]!;
-  const lastVal  = vals[vals.length - 1]!;
-  const diff = lastVal - firstVal;
-  const trend: 'up'|'down'|'stable' = diff > 0 ? 'up' : diff < 0 ? 'down' : 'stable';
-
-  // Para tempo, "up" (melhorou nos valores invertidos) significa tempos menores = melhor
-  return { linePoints, areaPoints, trend, pts, sorted };
+function catLabel(pr: PRRow): string {
+  const c = pr.categoria ?? (pr.rx ? 'rx' : 'scaled');
+  return { rx: 'RX', intermediario: 'INT', scaled: 'SCL', iniciante: 'INI' }[c] ?? c.toUpperCase();
 }
 
+function catColor(pr: PRRow): string {
+  const c = pr.categoria ?? (pr.rx ? 'rx' : 'scaled');
+  return {
+    rx:           'text-primary bg-primary/10 border-primary/20',
+    intermediario:'text-blue-400 bg-blue-400/10 border-blue-400/20',
+    scaled:       'text-orange-400 bg-orange-400/10 border-orange-400/20',
+    iniciante:    'text-zinc-400 bg-zinc-400/10 border-zinc-400/20',
+  }[c] ?? 'text-zinc-400 bg-zinc-400/10 border-zinc-400/20';
+}
+
+function isPR(pr: PRRow, lista: PRRow[]): boolean {
+  if (lista.length < 2) return true;
+  if (pr.tipo === 'peso') {
+    const best = Math.max(...lista.map(p => p.valor_peso ?? 0));
+    return pr.valor_peso === best;
+  }
+  if (pr.tipo === 'reps') {
+    const best = Math.max(...lista.map(p => p.valor_reps ?? 0));
+    return pr.valor_reps === best;
+  }
+  if (pr.tipo === 'tempo') {
+    const vals = lista.filter(p => (p.valor_tempo_seg ?? 0) > 0).map(p => p.valor_tempo_seg!);
+    return pr.valor_tempo_seg === Math.min(...vals);
+  }
+  if (pr.tipo === 'rounds_reps') {
+    const best = Math.max(...lista.map(p => (p.valor_rounds ?? 0) * 10000 + (p.valor_reps_extra ?? 0)));
+    return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0) === best;
+  }
+  return false;
+}
+
+const tipoLabel: Record<string, string> = {
+  peso: 'Carga (kg)', tempo: 'Tempo', reps: 'Repetições', rounds_reps: 'Rounds + Reps',
+};
+const hoje = new Date().toLocaleDateString('en-CA');
 ---
 
-<DashboardLayout title="Meus Resultados">
-  <div class="mb-6 flex items-start justify-between gap-4">
-    <div>
-      <h1 class="text-2xl font-bold text-foreground">Meus Resultados</h1>
-      <p class="mt-1 text-sm text-muted-foreground">Seus Personal Records e evolução nos treinos</p>
-    </div>
-    <button id="btn-novo-pr" type="button"
-      class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors shrink-0">
-      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-      </svg>
-      Registrar Resultado
-    </button>
+<DashboardLayout title="Recordes Pessoais">
+
+  <!-- Header -->
+  <div class="mb-5">
+    <h1 class="text-2xl font-bold text-foreground">Recordes Pessoais</h1>
+    <p class="mt-1 text-sm text-muted-foreground">Registre e acompanhe sua evolução nos exercícios</p>
   </div>
 
   <!-- Stats -->
   <div class="grid grid-cols-3 gap-3 mb-6">
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Total treinos</p>
-      <p class="mt-1 text-3xl font-bold text-primary">{totalCheckins}</p>
+    <div class="rounded-xl border border-border bg-card p-3 text-center">
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider leading-tight">Treinos</p>
+      <p class="mt-1 text-2xl font-bold text-primary">{totalCheckins}</p>
     </div>
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Últimos 30 dias</p>
-      <p class="mt-1 text-3xl font-bold text-foreground">{checkinsRecentes}</p>
+    <div class="rounded-xl border border-border bg-card p-3 text-center">
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider leading-tight">30 dias</p>
+      <p class="mt-1 text-2xl font-bold text-foreground">{checkinsRecentes}</p>
     </div>
-    <div class="rounded-xl border border-border bg-card p-4">
-      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Movimentos</p>
-      <p class="mt-1 text-3xl font-bold text-foreground">{prsPorExercicio.size}</p>
+    <div class="rounded-xl border border-border bg-card p-3 text-center">
+      <p class="text-[10px] font-medium text-muted-foreground uppercase tracking-wider leading-tight">PRs</p>
+      <p class="mt-1 text-2xl font-bold text-foreground">{totalExerciciosComPR}</p>
     </div>
   </div>
 
-  {exerciciosComPR.length === 0 ? (
-    <div class="rounded-xl border border-border bg-card p-12 text-center">
-      <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-        <svg class="h-7 w-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M16 8v8m-4-5v5m-4-2v2M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-      </div>
-      <p class="text-sm font-semibold text-foreground mb-1">Nenhum resultado ainda</p>
-      <p class="text-xs text-muted-foreground mb-4">Registre seu primeiro PR para acompanhar sua evolução</p>
-      <button id="btn-novo-pr-empty" type="button"
-        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 transition-colors">
-        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-        </svg>
-        Registrar meu primeiro PR
-      </button>
-    </div>
-  ) : (
-    <div class="space-y-8">
-      {[...ordemCategorias, 'outros'].filter(cat => exerciciosPorCategoria.has(cat)).map(cat => (
-        <div>
-          <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground border-b border-border pb-2">
-            {categoriasLabel[cat] ?? cat}
-          </h2>
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {(exerciciosPorCategoria.get(cat) ?? []).map(ex => {
-        const lista   = prsPorExercicio.get(ex.id)!;
-        const pr      = melhorPR(lista);
-        const historico = [...lista].sort((a, b) =>
-          new Date(b.data_registro).getTime() - new Date(a.data_registro).getTime()
-        );
-        const spark   = sparkline(lista, ex.tipo_resultado);
-        const trendColor = spark?.trend === 'up' ? 'text-green-400' : spark?.trend === 'down' ? 'text-red-400' : 'text-zinc-500';
-        const trendBg    = spark?.trend === 'up' ? 'stroke-green-400' : spark?.trend === 'down' ? 'stroke-red-400' : 'stroke-zinc-500';
-        const trendFill  = spark?.trend === 'up' ? 'fill-green-400' : spark?.trend === 'down' ? 'fill-red-400' : 'fill-zinc-500';
-
-        return (
-          <div class="rounded-xl border border-border bg-card overflow-hidden flex flex-col">
-            <!-- Header -->
-            <div class="px-4 pt-4 pb-3">
-              <div class="flex items-center justify-between gap-2 mb-3">
-                <h3 class="font-semibold text-foreground text-sm truncate">{ex.nome}</h3>
-                <div class="flex items-center gap-2 shrink-0">
-                  {spark && (
-                    <span class:list={['text-xs font-bold flex items-center gap-0.5', trendColor]}>
-                      {spark.trend === 'up' && '↑'}
-                      {spark.trend === 'down' && '↓'}
-                      {spark.trend === 'stable' && '—'}
-                    </span>
-                  )}
-                  <span class="text-[10px] font-medium text-muted-foreground bg-muted/40 px-2 py-0.5 rounded-full capitalize">
-                    {ex.tipo_resultado === 'rounds_reps' ? 'rounds' : ex.tipo_resultado}
-                  </span>
-                </div>
-              </div>
-
-              <!-- PR Principal -->
-              <div class="flex items-end justify-between gap-2 mb-3">
-                <div>
-                  <p class="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Personal Record</p>
-                  <p class="text-2xl font-bold text-primary">{fmtValor(pr)}</p>
-                  <p class="text-xs text-muted-foreground mt-0.5">{fmtData(pr.data_registro)}</p>
-                </div>
-                <div class="flex flex-col items-end gap-1">
-                  {pr.rx && <span class="text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded">RX</span>}
-                  <span class="text-[10px] text-muted-foreground">{lista.length} registro{lista.length !== 1 ? 's' : ''}</span>
-                </div>
-              </div>
-
-              <!-- Sparkline -->
-              {spark ? (
-                <div class="rounded-lg bg-zinc-950/50 border border-zinc-800/50 p-2 mb-1">
-                  <svg viewBox={`0 0 200 48`} class="w-full h-10" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id={`grad-${ex.id}`} x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" class={trendColor} stop-opacity="0.25"/>
-                        <stop offset="100%" class={trendColor} stop-opacity="0"/>
-                      </linearGradient>
-                    </defs>
-                    <polygon
-                      points={spark.areaPoints}
-                      class={trendFill}
-                      fill-opacity="0.12"
-                    />
-                    <polyline
-                      points={spark.linePoints}
-                      fill="none"
-                      class={trendBg}
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                    {spark.pts.map(p => (
-                      <circle cx={p.x} cy={p.y} r="2.5" class={trendFill} fill-opacity="0.9"/>
-                    ))}
-                  </svg>
-                </div>
-              ) : (
-                <div class="rounded-lg bg-zinc-950/30 border border-zinc-800/30 px-3 py-2 mb-1 flex items-center justify-center">
-                  <p class="text-[10px] text-zinc-600">Registre mais resultados para ver o gráfico</p>
-                </div>
-              )}
-            </div>
-
-            <!-- Histórico -->
-            <div class="px-4 pb-3 space-y-1.5 border-t border-border/40 pt-3">
-              <p class="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Histórico</p>
-              {historico.slice(0, 4).map((h, i) => (
-                <div class="flex items-center justify-between gap-2">
-                  <span class="text-xs text-muted-foreground">{fmtData(h.data_registro, true)}</span>
-                  <div class="flex items-center gap-2">
-                    {h.rx && <span class="text-[9px] font-bold text-primary">RX</span>}
-                    <span class:list={['text-xs font-semibold', i === 0 ? 'text-primary' : 'text-foreground']}>
-                      {fmtValor(h)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <!-- Ação -->
-            <div class="px-4 pb-4 mt-auto">
-              <button
-                type="button"
-                data-action="novo-pr-exercicio"
-                data-id={ex.id}
-                data-nome={ex.nome}
-                data-tipo={ex.tipo_resultado}
-                class="w-full rounded-lg border border-border/60 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-primary/5 transition-colors">
-                + Registrar novo
-              </button>
-            </div>
-          </div>
-        );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  )}
-
-  <!-- ── Modal: Registrar PR ─────────────────────────────────────────────── -->
-  <div id="modal-novo-pr" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm">
-    <div class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-        <h2 class="text-sm font-bold text-foreground">Registrar Resultado</h2>
-        <button id="btn-fechar-pr" type="button"
-          class="text-zinc-500 hover:text-zinc-300 transition-colors p-1 rounded-lg hover:bg-zinc-800">
+  <!-- Busca de exercício -->
+  <div class="relative mb-6" id="search-wrap">
+    <div class="relative">
+      <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"
+        fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/>
+      </svg>
+      <input
+        id="ex-search"
+        type="text"
+        placeholder="Buscar exercício..."
+        autocomplete="off"
+        value={exSelecionado?.nome ?? ''}
+        class="w-full rounded-xl border border-border bg-card pl-10 pr-10 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"
+      />
+      {exSelecionado && (
+        <a href="/dashboard/resultados"
+          class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1">
           <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
           </svg>
-        </button>
+        </a>
+      )}
+    </div>
+    <!-- Dropdown gerenciado por JS -->
+    <div id="ex-dropdown"
+      class="hidden absolute top-full left-0 right-0 mt-1 rounded-xl border border-border bg-card shadow-2xl z-30 overflow-hidden max-h-60 overflow-y-auto">
+    </div>
+  </div>
+
+  {exSelecionado ? (
+    <div>
+      <!-- Tipo badge -->
+      <div class="flex items-center gap-2 mb-5">
+        <span class="inline-flex items-center text-xs font-semibold text-primary bg-primary/10 border border-primary/20 rounded-full px-3 py-1">
+          {tipoLabel[exSelecionado.tipo_resultado] ?? exSelecionado.tipo_resultado}
+        </span>
+        {historico.length > 0 && (
+          <span class="text-xs text-muted-foreground">
+            {historico.length} registro{historico.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
-      <div class="px-5 py-5 space-y-4">
-        <div>
-          <label class="block text-xs text-muted-foreground mb-1">Exercício</label>
-          <select id="pr-exercicio" class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
-            <option value="">— Selecione o exercício —</option>
-            {(exercicios ?? []).map(e => (
-              <option value={e.id} data-tipo={e.tipo_resultado}>{e.nome}</option>
-            ))}
-          </select>
+      <!-- Sucesso -->
+      {saved && (
+        <div class="mb-5 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 flex items-center gap-2">
+          <svg class="h-4 w-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          <span class="text-sm font-semibold text-primary">Resultado salvo com sucesso!</span>
         </div>
+      )}
 
-        <div id="campo-peso" class="hidden">
-          <label class="block text-xs text-muted-foreground mb-1">Carga (kg)</label>
-          <input id="pr-peso" type="number" step="0.5" min="0" placeholder="ex: 102.5"
-            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        </div>
-        <div id="campo-tempo" class="hidden">
-          <label class="block text-xs text-muted-foreground mb-1">Tempo (mm:ss)</label>
-          <input id="pr-tempo" type="text" placeholder="ex: 03:45" maxlength="5"
-            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/50" />
-          <p class="text-xs text-zinc-600 mt-1">Minutos:Segundos — ex: 12:34 ou 03:45</p>
-        </div>
-        <div id="campo-reps" class="hidden">
-          <label class="block text-xs text-muted-foreground mb-1">Repetições</label>
-          <input id="pr-reps" type="number" min="0" placeholder="ex: 150"
-            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        </div>
-        <div id="campo-rounds" class="hidden">
-          <div class="grid grid-cols-2 gap-3">
+      <!-- Formulário -->
+      <div class="rounded-xl border border-border bg-card p-5 mb-5">
+        <h2 class="text-sm font-semibold text-foreground mb-4">Novo Registro</h2>
+
+        <!-- Campo de score baseado no tipo do exercício -->
+        {exSelecionado.tipo_resultado === 'peso' && (
+          <div class="mb-4">
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Carga *</label>
+            <div class="relative">
+              <input id="form-peso" type="number" step="0.5" min="0"
+                placeholder="ex: 102.5" inputmode="decimal"
+                class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground pr-10 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+              <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground pointer-events-none">kg</span>
+            </div>
+          </div>
+        )}
+
+        {exSelecionado.tipo_resultado === 'reps' && (
+          <div class="mb-4">
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Repetições *</label>
+            <div class="relative">
+              <input id="form-reps" type="number" min="1"
+                placeholder="ex: 50" inputmode="numeric"
+                class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground pr-14 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+              <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground pointer-events-none">reps</span>
+            </div>
+          </div>
+        )}
+
+        {exSelecionado.tipo_resultado === 'tempo' && (
+          <div class="mb-4">
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Tempo * <span class="text-zinc-600 font-normal">(mm:ss)</span></label>
+            <input id="form-tempo" type="text" placeholder="ex: 12:34" maxlength="5" inputmode="numeric"
+              class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+          </div>
+        )}
+
+        {exSelecionado.tipo_resultado === 'rounds_reps' && (
+          <div class="grid grid-cols-2 gap-3 mb-4">
             <div>
-              <label class="block text-xs text-muted-foreground mb-1">Rounds</label>
-              <input id="pr-rounds" type="number" min="0" placeholder="ex: 5"
-                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              <label class="block text-xs font-medium text-muted-foreground mb-1.5">Rounds *</label>
+              <input id="form-rounds" type="number" min="0" placeholder="ex: 5" inputmode="numeric"
+                class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
             </div>
             <div>
-              <label class="block text-xs text-muted-foreground mb-1">+ Reps extras</label>
-              <input id="pr-reps-extra" type="number" min="0" placeholder="ex: 12"
-                class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              <label class="block text-xs font-medium text-muted-foreground mb-1.5">+ Reps extras</label>
+              <input id="form-reps-extra" type="number" min="0" placeholder="ex: 12" inputmode="numeric"
+                class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
             </div>
           </div>
+        )}
+
+        <!-- Categoria -->
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-muted-foreground mb-2">Categoria</label>
+          <div class="grid grid-cols-4 gap-2">
+            <label class="cursor-pointer">
+              <input type="radio" name="form-cat" value="rx" class="sr-only peer" checked />
+              <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-primary peer-checked:border-primary/50 peer-checked:bg-primary/10">
+                RX
+              </span>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="form-cat" value="intermediario" class="sr-only peer" />
+              <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-blue-400 peer-checked:border-blue-400/50 peer-checked:bg-blue-400/10">
+                Inter
+              </span>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="form-cat" value="scaled" class="sr-only peer" />
+              <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-orange-400 peer-checked:border-orange-400/50 peer-checked:bg-orange-400/10">
+                Scaled
+              </span>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="form-cat" value="iniciante" class="sr-only peer" />
+              <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-zinc-300 peer-checked:border-zinc-400/50 peer-checked:bg-zinc-400/10">
+                Inic
+              </span>
+            </label>
+          </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <!-- Data + Observação -->
+        <div class="grid grid-cols-2 gap-3 mb-4">
           <div>
-            <label class="block text-xs text-muted-foreground mb-1">Modalidade</label>
-            <div class="flex rounded-lg border border-border overflow-hidden">
-              <label class="flex-1 text-center cursor-pointer">
-                <input type="radio" name="pr-rx" value="rx" class="sr-only peer" checked />
-                <span class="block py-2 text-xs font-semibold text-muted-foreground peer-checked:text-primary peer-checked:bg-primary/10 transition-colors">RX</span>
-              </label>
-              <label class="flex-1 text-center cursor-pointer border-l border-border">
-                <input type="radio" name="pr-rx" value="scaled" class="sr-only peer" />
-                <span class="block py-2 text-xs font-semibold text-muted-foreground peer-checked:text-orange-400 peer-checked:bg-orange-400/10 transition-colors">Scaled</span>
-              </label>
-            </div>
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Data</label>
+            <input id="form-data" type="date" value={hoje}
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
           </div>
           <div>
-            <label class="block text-xs text-muted-foreground mb-1">Data</label>
-            <input id="pr-data" type="date"
-              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Observação <span class="text-zinc-600 font-normal">(opcional)</span></label>
+            <input id="form-obs" type="text" placeholder="ex: novo PR!"
+              class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all" />
           </div>
         </div>
 
-        <div>
-          <label class="block text-xs text-muted-foreground mb-1">Observação <span class="text-zinc-600">(opcional)</span></label>
-          <input id="pr-obs" type="text" placeholder="ex: novo PR pessoal, joelho inflamado..."
-            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        </div>
+        <!-- Erro -->
+        <div id="form-erro" class="hidden mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"></div>
 
-        <div id="pr-erro" class="hidden rounded-lg border border-red-600/30 bg-red-900/20 px-3 py-2 text-xs text-red-400"></div>
-
-        <button id="btn-salvar-pr" type="button"
-          class="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors disabled:opacity-50">
+        <!-- Botão salvar -->
+        <button id="btn-salvar" type="button"
+          class="w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all glow-primary">
           Salvar Resultado
         </button>
       </div>
+
+      <!-- Histórico -->
+      {historico.length > 0 ? (
+        <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <div class="px-4 py-3 border-b border-border/60 flex items-center justify-between">
+            <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Histórico</h3>
+            <span class="text-[10px] text-muted-foreground">{historico.length} registro{historico.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="divide-y divide-border/40">
+            {historico.map(pr => {
+              const best = isPR(pr, historico);
+              return (
+                <div class:list={["flex items-center justify-between px-4 py-3 gap-3", best ? "bg-primary/5" : ""]}>
+                  <div class="flex items-center gap-2 min-w-0">
+                    {best && (
+                      <span class="shrink-0 text-[9px] font-bold text-primary bg-primary/15 border border-primary/20 rounded px-1.5 py-0.5 tracking-wider">
+                        PR
+                      </span>
+                    )}
+                    <span class="text-xs text-muted-foreground truncate">{fmtData(pr.data_registro)}</span>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span class:list={["text-[9px] font-bold rounded px-1.5 py-0.5 border", catColor(pr)]}>
+                      {catLabel(pr)}
+                    </span>
+                    <span class:list={["text-sm font-bold tabular-nums", best ? "text-primary" : "text-foreground"]}>
+                      {fmtValor(pr)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div class="rounded-xl border border-dashed border-border/60 p-8 text-center">
+          <p class="text-sm text-muted-foreground">Nenhum registro ainda.</p>
+          <p class="text-xs text-zinc-600 mt-1">Preencha o formulário acima e salve seu primeiro resultado!</p>
+        </div>
+      )}
     </div>
-  </div>
+  ) : (
+    <!-- Nenhum exercício selecionado -->
+    <div class="rounded-xl border border-dashed border-border/60 p-10 text-center">
+      <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+        <svg class="h-7 w-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/>
+        </svg>
+      </div>
+      <p class="text-sm font-semibold text-foreground mb-1">Busque um exercício</p>
+      <p class="text-xs text-muted-foreground">Digite o nome acima — ex: "Clean", "Deadlift", "Fran"</p>
+    </div>
+  )}
+
+  <!-- Dados para o autocomplete JS -->
+  <script id="ex-data" type="application/json" set:html={JSON.stringify(
+    (exercicios ?? []).map((e: any) => ({ id: e.id, nome: e.nome, tipo: e.tipo_resultado }))
+  )}></script>
 
   <script>
-    const modal   = document.getElementById('modal-novo-pr')!;
-    const selEx   = document.getElementById('pr-exercicio') as HTMLSelectElement;
-    const campos  = { peso: document.getElementById('campo-peso')!, tempo: document.getElementById('campo-tempo')!,
-                      reps: document.getElementById('campo-reps')!, rounds_reps: document.getElementById('campo-rounds')! };
-    const erroDiv = document.getElementById('pr-erro')!;
+    // ── Autocomplete de exercício ──────────────────────────────────────────────
+    const input     = document.getElementById('ex-search') as HTMLInputElement;
+    const dropdown  = document.getElementById('ex-dropdown') as HTMLDivElement;
+    const exData    = JSON.parse(
+      (document.getElementById('ex-data') as HTMLScriptElement).textContent ?? '[]'
+    ) as { id: string; nome: string; tipo: string }[];
 
-    function abrirModal(exercicioId?: string, tipo?: string) {
-      if (exercicioId) selEx.value = exercicioId;
-      atualizarCampos(tipo ?? selEx.selectedOptions[0]?.dataset.tipo ?? '');
-      (document.getElementById('pr-data') as HTMLInputElement).value = new Date().toLocaleDateString('en-CA');
-      modal.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
-    }
-    function fecharModal() {
-      modal.classList.add('hidden');
-      document.body.style.overflow = '';
-      erroDiv.classList.add('hidden');
-    }
-    function atualizarCampos(tipo: string) {
-      Object.entries(campos).forEach(([k, el]) => el.classList.toggle('hidden', k !== tipo));
+    const TIPO_LABEL: Record<string, string> = {
+      peso: 'carga', tempo: 'tempo', reps: 'reps', rounds_reps: 'rounds',
+    };
+
+    function renderDropdown(q: string) {
+      const matches = q.length < 1
+        ? []
+        : exData.filter(e => e.nome.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
+
+      if (matches.length === 0) { dropdown.classList.add('hidden'); return; }
+
+      dropdown.innerHTML = matches.map(e => `
+        <button type="button" data-id="${e.id}"
+          class="w-full text-left px-4 py-2.5 text-sm hover:bg-primary/10 hover:text-primary transition-colors flex items-center justify-between gap-2">
+          <span class="text-foreground">${e.nome}</span>
+          <span class="text-[10px] text-muted-foreground shrink-0">${TIPO_LABEL[e.tipo] ?? e.tipo}</span>
+        </button>
+      `).join('');
+      dropdown.classList.remove('hidden');
     }
 
-    selEx.addEventListener('change', () => atualizarCampos(selEx.selectedOptions[0]?.dataset.tipo ?? ''));
-    document.getElementById('btn-novo-pr')?.addEventListener('click', () => abrirModal());
-    document.getElementById('btn-novo-pr-empty')?.addEventListener('click', () => abrirModal());
-    document.getElementById('btn-fechar-pr')?.addEventListener('click', fecharModal);
-    modal.addEventListener('click', e => { if (e.target === modal) fecharModal(); });
+    input.addEventListener('input', () => renderDropdown(input.value));
+    input.addEventListener('focus',  () => { if (input.value.length >= 1) renderDropdown(input.value); });
 
-    document.querySelectorAll<HTMLElement>('[data-action="novo-pr-exercicio"]').forEach(btn => {
-      btn.addEventListener('click', () => abrirModal(btn.dataset.id, btn.dataset.tipo));
+    dropdown.addEventListener('click', e => {
+      const btn = (e.target as HTMLElement).closest('[data-id]') as HTMLElement | null;
+      if (btn?.dataset.id) {
+        window.location.href = `/dashboard/resultados?ex=${btn.dataset.id}`;
+      }
     });
 
-    const inputTempo = document.getElementById('pr-tempo') as HTMLInputElement;
-    inputTempo.addEventListener('input', () => {
-      let v = inputTempo.value.replace(/\D/g, '');
+    document.addEventListener('click', e => {
+      if (!document.getElementById('search-wrap')!.contains(e.target as Node)) {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    // Formata input de tempo (mm:ss) enquanto digita
+    const tempoInput = document.getElementById('form-tempo') as HTMLInputElement | null;
+    tempoInput?.addEventListener('input', () => {
+      let v = tempoInput.value.replace(/\D/g, '');
       if (v.length > 4) v = v.slice(0, 4);
       if (v.length > 2) v = v.slice(0, 2) + ':' + v.slice(2);
-      inputTempo.value = v;
+      tempoInput.value = v;
     });
 
-    document.getElementById('btn-salvar-pr')?.addEventListener('click', async () => {
-      const exercicioId = selEx.value;
-      const tipo        = selEx.selectedOptions[0]?.dataset.tipo ?? '';
-      if (!exercicioId || !tipo) { mostrarErro('Selecione um exercício.'); return; }
+    // ── Salvar PR ──────────────────────────────────────────────────────────────
+    const exId = new URLSearchParams(window.location.search).get('ex');
+
+    document.getElementById('btn-salvar')?.addEventListener('click', async () => {
+      const categoria    = (document.querySelector<HTMLInputElement>('input[name="form-cat"]:checked')?.value) ?? 'rx';
+      const observacao   = (document.getElementById('form-obs') as HTMLInputElement | null)?.value || undefined;
+      const dataReg      = (document.getElementById('form-data') as HTMLInputElement | null)?.value;
 
       const payload: Record<string, unknown> = {
-        exercicio_id: exercicioId, tipo,
-        rx: document.querySelector<HTMLInputElement>('input[name="pr-rx"]:checked')?.value !== 'scaled',
-        data_registro: (document.getElementById('pr-data') as HTMLInputElement).value || undefined,
-        observacao:    (document.getElementById('pr-obs') as HTMLInputElement).value || undefined,
+        exercicio_id: exId,
+        categoria,
+        observacao,
+        data_registro: dataReg,
       };
 
-      if (tipo === 'peso') {
-        const v = parseFloat((document.getElementById('pr-peso') as HTMLInputElement).value);
-        if (isNaN(v) || v <= 0) { mostrarErro('Informe a carga em kg.'); return; }
+      // Campos de valor
+      const pesoEl      = document.getElementById('form-peso')      as HTMLInputElement | null;
+      const repsEl      = document.getElementById('form-reps')      as HTMLInputElement | null;
+      const roundsEl    = document.getElementById('form-rounds')    as HTMLInputElement | null;
+      const repsExtraEl = document.getElementById('form-reps-extra') as HTMLInputElement | null;
+      const tempoEl     = document.getElementById('form-tempo')     as HTMLInputElement | null;
+
+      if (pesoEl) {
+        const v = parseFloat(pesoEl.value);
+        if (!v || v <= 0) { showErro('Informe a carga em kg.'); return; }
         payload.valor_peso = v;
-      } else if (tipo === 'tempo') {
-        const raw = (document.getElementById('pr-tempo') as HTMLInputElement).value;
-        const partes = raw.split(':');
-        if (partes.length !== 2) { mostrarErro('Use o formato mm:ss.'); return; }
-        const seg = parseInt(partes[0]!) * 60 + parseInt(partes[1]!);
-        if (isNaN(seg) || seg <= 0) { mostrarErro('Tempo inválido.'); return; }
-        payload.valor_tempo_seg = seg;
-      } else if (tipo === 'reps') {
-        const v = parseInt((document.getElementById('pr-reps') as HTMLInputElement).value);
-        if (isNaN(v) || v <= 0) { mostrarErro('Informe as repetições.'); return; }
+      } else if (repsEl) {
+        const v = parseInt(repsEl.value);
+        if (!v || v <= 0) { showErro('Informe as repetições.'); return; }
         payload.valor_reps = v;
-      } else if (tipo === 'rounds_reps') {
-        const r = parseInt((document.getElementById('pr-rounds') as HTMLInputElement).value);
-        if (isNaN(r) || r < 0) { mostrarErro('Informe os rounds.'); return; }
+      } else if (tempoEl) {
+        const parts = tempoEl.value.split(':');
+        if (parts.length !== 2) { showErro('Use o formato mm:ss.'); return; }
+        const seg = parseInt(parts[0]!) * 60 + parseInt(parts[1]!);
+        if (!seg || seg <= 0) { showErro('Tempo inválido.'); return; }
+        payload.valor_tempo_seg = seg;
+      } else if (roundsEl) {
+        const r = parseInt(roundsEl.value);
+        if (isNaN(r) || r < 0) { showErro('Informe os rounds.'); return; }
         payload.valor_rounds     = r;
-        payload.valor_reps_extra = parseInt((document.getElementById('pr-reps-extra') as HTMLInputElement).value) || 0;
+        payload.valor_reps_extra = parseInt(repsExtraEl?.value ?? '0') || 0;
       }
 
-      const btn = document.getElementById('btn-salvar-pr') as HTMLButtonElement;
-      btn.disabled = true; btn.textContent = 'Salvando...';
+      const btn = document.getElementById('btn-salvar') as HTMLButtonElement;
+      btn.disabled    = true;
+      btn.textContent = 'Salvando...';
+
       try {
-        const res = await fetch('/api/prs/registrar', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        const res = await fetch('/api/prs/salvar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
-        if (!res.ok) { const err = await res.json(); mostrarErro(err.error ?? 'Erro ao salvar.'); }
-        else window.location.reload();
-      } catch { mostrarErro('Erro de conexão. Tente novamente.'); }
-      finally { btn.disabled = false; btn.textContent = 'Salvar Resultado'; }
+        if (!res.ok) {
+          const err = await res.json();
+          showErro(err.error ?? 'Erro ao salvar.');
+        } else {
+          window.location.href = `/dashboard/resultados?ex=${exId}&saved=1`;
+        }
+      } catch {
+        showErro('Erro de conexão. Tente novamente.');
+      } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Salvar Resultado';
+      }
     });
 
-    function mostrarErro(msg: string) {
-      erroDiv.textContent = msg;
-      erroDiv.classList.remove('hidden');
+    function showErro(msg: string) {
+      const el = document.getElementById('form-erro');
+      if (el) { el.textContent = msg; el.classList.remove('hidden'); }
     }
   </script>
+
 </DashboardLayout>
