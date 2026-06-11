@@ -55,10 +55,49 @@ if (exSelecionado) {
   historico = (hist ?? []) as PRRow[];
 }
 
-// Total exercícios com PR (para stat)
-const { data: prsAll } = await supabase
-  .from('prs').select('exercicio_id').eq('aluno_id', user.id);
-const totalExerciciosComPR = new Set((prsAll ?? []).map((p: any) => p.exercicio_id)).size;
+// Todos PRs do aluno com nome do exercício (para lista e stat)
+const { data: todosPrs } = await supabase
+  .from('prs')
+  .select('exercicio_id, tipo, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, data_registro, exercicios(nome)')
+  .eq('aluno_id', user.id)
+  .order('data_registro', { ascending: false });
+
+const totalExerciciosComPR = new Set((todosPrs ?? []).map((p: any) => p.exercicio_id)).size;
+
+// Resumo por exercício para a lista inicial
+type ExSummary = { exercicio_id: string; nome: string; tipo: string; melhorValor: string; ultimaData: string; totalRegistros: number; };
+let exerciciosSummary: ExSummary[] = [];
+if (!exSelecionado && todosPrs && todosPrs.length > 0) {
+  const byEx = new Map<string, any[]>();
+  for (const pr of todosPrs) {
+    if (!byEx.has(pr.exercicio_id)) byEx.set(pr.exercicio_id, []);
+    byEx.get(pr.exercicio_id)!.push(pr);
+  }
+  for (const [eid, prs] of byEx) {
+    const tipo = prs[0].tipo as string;
+    const nome = (prs[0].exercicios as any)?.nome ?? 'Exercício';
+    let melhorValor = '—';
+    if (tipo === 'peso') {
+      const best = Math.max(...prs.map((p: any) => p.valor_peso ?? 0));
+      melhorValor = `${best} kg`;
+    } else if (tipo === 'reps') {
+      const best = Math.max(...prs.map((p: any) => p.valor_reps ?? 0));
+      melhorValor = `${best} reps`;
+    } else if (tipo === 'tempo') {
+      const vals = prs.filter((p: any) => (p.valor_tempo_seg ?? 0) > 0).map((p: any) => p.valor_tempo_seg as number);
+      if (vals.length > 0) {
+        const best = Math.min(...vals);
+        melhorValor = `${String(Math.floor(best/60)).padStart(2,'0')}:${String(best%60).padStart(2,'0')}`;
+      }
+    } else if (tipo === 'rounds_reps') {
+      const best = prs.reduce((a: any, b: any) =>
+        (a.valor_rounds ?? 0) * 10000 + (a.valor_reps_extra ?? 0) >= (b.valor_rounds ?? 0) * 10000 + (b.valor_reps_extra ?? 0) ? a : b
+      );
+      melhorValor = best.valor_reps_extra ? `${best.valor_rounds ?? 0} + ${best.valor_reps_extra}` : `${best.valor_rounds ?? 0} rounds`;
+    }
+    exerciciosSummary.push({ exercicio_id: eid, nome, tipo, melhorValor, ultimaData: prs[0].data_registro, totalRegistros: prs.length });
+  }
+}
 
 // Helpers
 function fmtValor(pr: PRRow): string {
@@ -349,17 +388,48 @@ const hoje = new Date().toLocaleDateString('en-CA');
       )}
     </div>
   ) : (
-    <!-- Nenhum exercício selecionado -->
-    <div class="rounded-xl border border-dashed border-border/60 p-10 text-center">
-      <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-        <svg class="h-7 w-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/>
-        </svg>
+    <!-- Nenhum exercício selecionado: lista de exercícios com PRs -->
+    exerciciosSummary.length > 0 ? (
+      <div>
+        <p class="text-xs text-muted-foreground mb-3">
+          {exerciciosSummary.length} exercício{exerciciosSummary.length !== 1 ? 's' : ''} registrado{exerciciosSummary.length !== 1 ? 's' : ''}
+        </p>
+        <div class="divide-y divide-border/40 rounded-xl border border-border bg-card overflow-hidden">
+          {exerciciosSummary.map(ex => (
+            <a href={`/dashboard/resultados?ex=${ex.exercicio_id}`}
+              class="flex items-center justify-between px-4 py-3.5 hover:bg-primary/5 transition-colors group">
+              <div class="min-w-0">
+                <p class="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">{ex.nome}</p>
+                <p class="text-xs text-muted-foreground mt-0.5">
+                  {ex.totalRegistros} registro{ex.totalRegistros !== 1 ? 's' : ''} · {fmtData(ex.ultimaData)}
+                </p>
+              </div>
+              <div class="flex items-center gap-3 shrink-0 ml-3">
+                <div class="text-right">
+                  <p class="text-sm font-bold text-primary tabular-nums">{ex.melhorValor}</p>
+                  <p class="text-[10px] text-muted-foreground uppercase tracking-wider">{tipoLabel[ex.tipo] ?? ex.tipo}</p>
+                </div>
+                <svg class="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0"
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                </svg>
+              </div>
+            </a>
+          ))}
+        </div>
       </div>
-      <p class="text-sm font-semibold text-foreground mb-1">Busque um exercício</p>
-      <p class="text-xs text-muted-foreground">Digite o nome acima — ex: "Clean", "Deadlift", "Fran"</p>
-    </div>
+    ) : (
+      <div class="rounded-xl border border-dashed border-border/60 p-10 text-center">
+        <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+          <svg class="h-7 w-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/>
+          </svg>
+        </div>
+        <p class="text-sm font-semibold text-foreground mb-1">Nenhum resultado ainda</p>
+        <p class="text-xs text-muted-foreground">Busque um exercício acima para registrar seu primeiro PR!</p>
+      </div>
+    )
   )}
 
   <!-- Dados para o autocomplete JS -->
