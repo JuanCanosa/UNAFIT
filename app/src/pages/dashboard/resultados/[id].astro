@@ -1,0 +1,473 @@
+---
+import DashboardLayout from '@/layouts/DashboardLayout.astro';
+import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase';
+
+const { id } = Astro.params;
+
+const supabase = createSupabaseServerClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return Astro.redirect('/login');
+
+const { data: profile } = await supabase
+  .from('profiles').select('role, academia_id').eq('id', user.id).single();
+if (!profile || profile.role !== 'aluno') return Astro.redirect('/dashboard');
+
+const academia_id = profile.academia_id!;
+const admin = createSupabaseAdminClient();
+
+const { data: exercicio } = await admin
+  .from('exercicios')
+  .select('id, nome, tipo_resultado')
+  .eq('id', id!)
+  .eq('academia_id', academia_id)
+  .maybeSingle();
+
+if (!exercicio) return Astro.redirect('/dashboard/resultados');
+
+const { data: prsRaw } = await admin
+  .from('prs')
+  .select('id, tipo, categoria, rx, valor_peso, valor_tempo_seg, valor_reps, valor_rounds, valor_reps_extra, data_registro, observacao, criado_em')
+  .eq('aluno_id', user.id)
+  .eq('exercicio_id', id!)
+  .order('data_registro', { ascending: true })
+  .order('criado_em', { ascending: true });
+
+type PRRow = {
+  id: string; tipo: string; categoria: string | null; rx: boolean;
+  valor_peso: number|null; valor_tempo_seg: number|null;
+  valor_reps: number|null; valor_rounds: number|null; valor_reps_extra: number|null;
+  data_registro: string; observacao: string|null; criado_em: string;
+};
+
+const prsAsc = (prsRaw ?? []) as PRRow[];
+const prsDesc = [...prsAsc].reverse();
+const saved   = Astro.url.searchParams.get('saved') === '1';
+const hoje    = new Date().toLocaleDateString('en-CA');
+
+function getValor(pr: PRRow): number {
+  if (pr.tipo === 'peso')        return pr.valor_peso ?? 0;
+  if (pr.tipo === 'reps')        return pr.valor_reps ?? 0;
+  if (pr.tipo === 'tempo')       return pr.valor_tempo_seg ?? 0;
+  if (pr.tipo === 'rounds_reps') return (pr.valor_rounds ?? 0) * 10000 + (pr.valor_reps_extra ?? 0);
+  return 0;
+}
+
+function fmtValor(pr: PRRow): string {
+  if (pr.tipo === 'peso'  && pr.valor_peso != null)       return `${pr.valor_peso} kg`;
+  if (pr.tipo === 'reps'  && pr.valor_reps != null)       return `${pr.valor_reps} rep${pr.valor_reps !== 1 ? 's' : ''}`;
+  if (pr.tipo === 'tempo' && pr.valor_tempo_seg != null) {
+    const m = Math.floor(pr.valor_tempo_seg / 60), s = pr.valor_tempo_seg % 60;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+  if (pr.tipo === 'rounds_reps') {
+    const r = pr.valor_rounds ?? 0, x = pr.valor_reps_extra;
+    return x ? `${r} + ${x}` : `${r} rounds`;
+  }
+  return '—';
+}
+
+function fmtData(iso: string) {
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function fmtDataCurta(iso: string) {
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+}
+
+function catLabel(pr: PRRow): string {
+  const c = pr.categoria ?? (pr.rx ? 'rx' : 'scaled');
+  return { rx: 'RX', intermediario: 'INT', scaled: 'SCL', iniciante: 'INI' }[c] ?? c.toUpperCase();
+}
+function catColor(pr: PRRow): string {
+  const c = pr.categoria ?? (pr.rx ? 'rx' : 'scaled');
+  return {
+    rx:            'text-green-400 bg-green-400/10 border-green-400/20',
+    intermediario: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
+    scaled:        'text-orange-400 bg-orange-400/10 border-orange-400/20',
+    iniciante:     'text-zinc-400 bg-zinc-400/10 border-zinc-400/20',
+  }[c] ?? 'text-zinc-400 bg-zinc-400/10 border-zinc-400/20';
+}
+
+const isTempo = exercicio.tipo_resultado === 'tempo';
+
+function isPRPonto(idx: number): boolean {
+  if (idx === 0) return true;
+  const val = getValor(prsAsc[idx]);
+  for (let i = 0; i < idx; i++) {
+    const prev = getValor(prsAsc[i]);
+    if (isTempo ? prev <= val : prev >= val) return false;
+  }
+  return true;
+}
+
+const melhorPR = prsAsc.length > 0
+  ? prsAsc.reduce((best, pr) =>
+      (isTempo ? getValor(pr) < getValor(best) : getValor(pr) > getValor(best)) ? pr : best)
+  : null;
+
+const tipoLabel: Record<string, string> = {
+  peso: 'Carga (kg)', tempo: 'Tempo', reps: 'Repetições', rounds_reps: 'Rounds + Reps',
+};
+
+// ── SVG Chart ─────────────────────────────────────────────────────────────────
+const W = 500, H = 170;
+const PT = 16, PR = 16, PB = 28, PL = 44;
+const cW = W - PL - PR, cH = H - PT - PB;
+
+type Dot = { x: number; y: number; val: string; date: string; isPR: boolean };
+let chartPath = '', chartArea = '';
+let chartDots: Dot[] = [];
+let xLabels: { x: number; label: string }[] = [];
+let yLabels: { y: number; label: string }[] = [];
+
+if (prsAsc.length >= 2) {
+  const valores = prsAsc.map(getValor);
+  let minV = Math.min(...valores), maxV = Math.max(...valores);
+  if (minV === maxV) { minV = Math.max(0, minV - 1); maxV += 1; }
+  const rangeV = maxV - minV;
+
+  const toX = (i: number) => PL + (i / (prsAsc.length - 1)) * cW;
+  const toY = (v: number) => PT + (isTempo ? (v - minV) / rangeV : 1 - (v - minV) / rangeV) * cH;
+
+  const pts = prsAsc.map((pr, i) => ({ x: toX(i), y: toY(getValor(pr)) }));
+  chartPath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  chartArea = `${chartPath} L${pts.at(-1)!.x.toFixed(1)},${(PT + cH).toFixed(1)} L${pts[0].x.toFixed(1)},${(PT + cH).toFixed(1)} Z`;
+
+  chartDots = prsAsc.map((pr, i) => ({
+    x: pts[i].x, y: pts[i].y,
+    val: fmtValor(pr), date: fmtDataCurta(pr.data_registro),
+    isPR: isPRPonto(i),
+  }));
+
+  const step = Math.max(1, Math.ceil(prsAsc.length / 5));
+  for (let i = 0; i < prsAsc.length; i += step)
+    xLabels.push({ x: toX(i), label: fmtDataCurta(prsAsc[i].data_registro) });
+  if (xLabels.at(-1)?.x !== toX(prsAsc.length - 1))
+    xLabels.push({ x: toX(prsAsc.length - 1), label: fmtDataCurta(prsAsc.at(-1)!.data_registro) });
+
+  for (let i = 0; i <= 3; i++) {
+    const v = minV + (i / 3) * rangeV;
+    let label = '';
+    if (exercicio.tipo_resultado === 'peso')  label = `${Math.round(v)}`;
+    else if (exercicio.tipo_resultado === 'reps') label = `${Math.round(v)}`;
+    else if (exercicio.tipo_resultado === 'tempo') {
+      const m = Math.floor(v / 60), s = Math.round(v % 60);
+      label = `${m}:${String(s).padStart(2,'0')}`;
+    } else label = `${Math.floor(v / 10000)}r`;
+    yLabels.push({ y: toY(v), label });
+  }
+}
+---
+
+<DashboardLayout title={exercicio.nome}>
+
+  <!-- Header -->
+  <div class="mb-5 flex items-start justify-between gap-3">
+    <div class="flex items-center gap-3 min-w-0">
+      <a href="/dashboard/resultados"
+        class="shrink-0 flex items-center justify-center h-8 w-8 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/5 transition-colors">
+        <svg class="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
+        </svg>
+      </a>
+      <div class="min-w-0">
+        <h1 class="text-xl font-bold text-foreground truncate">{exercicio.nome}</h1>
+        <p class="text-xs text-muted-foreground mt-0.5">
+          {tipoLabel[exercicio.tipo_resultado] ?? exercicio.tipo_resultado} · {prsAsc.length} registro{prsAsc.length !== 1 ? 's' : ''}
+        </p>
+      </div>
+    </div>
+    <button id="btn-novo-pr" type="button"
+      class="shrink-0 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all">
+      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+      </svg>
+      Nova Marca
+    </button>
+  </div>
+
+  <!-- Sucesso -->
+  {saved && (
+    <div class="mb-5 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 flex items-center gap-2">
+      <svg class="h-4 w-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span class="text-sm font-semibold text-primary">Nova marca registrada!</span>
+    </div>
+  )}
+
+  <!-- Melhor PR -->
+  {melhorPR && (
+    <div class="mb-5 rounded-xl border border-primary/20 bg-gradient-to-r from-primary/10 to-primary/5 p-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl leading-none">🏆</span>
+        <div>
+          <p class="text-[10px] font-semibold text-primary uppercase tracking-wider mb-0.5">Melhor marca</p>
+          <p class="text-3xl font-bold text-primary tabular-nums leading-none">{fmtValor(melhorPR)}</p>
+        </div>
+      </div>
+      <div class="text-right">
+        <p class="text-xs text-muted-foreground mb-1">{fmtData(melhorPR.data_registro)}</p>
+        <span class:list={["text-[10px] font-bold rounded px-2 py-0.5 border", catColor(melhorPR)]}>{catLabel(melhorPR)}</span>
+      </div>
+    </div>
+  )}
+
+  <!-- Gráfico -->
+  {prsAsc.length >= 2 ? (
+    <div class="mb-5 rounded-xl border border-border bg-card p-4">
+      <p class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-3">Progresso</p>
+      <div class="w-full overflow-x-auto">
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" class="min-w-[280px] block">
+          <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="#22c55e" stop-opacity="0.22"/>
+              <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          {yLabels.map(l => (
+            <line x1={PL} y1={l.y} x2={W - PR} y2={l.y}
+              stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="4 3"/>
+          ))}
+          <path d={chartArea} fill="url(#g)"/>
+          <path d={chartPath} fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          {chartDots.map(d => (
+            <circle cx={d.x} cy={d.y} r={d.isPR ? 5 : 3.5}
+              fill={d.isPR ? '#22c55e' : '#111827'}
+              stroke="#22c55e" stroke-width={d.isPR ? 2 : 1.5}/>
+          ))}
+          {xLabels.map(l => (
+            <text x={l.x} y={H - 5} text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.35)" font-family="sans-serif">{l.label}</text>
+          ))}
+          {yLabels.map(l => (
+            <text x={PL - 6} y={l.y + 3.5} text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)" font-family="sans-serif">{l.label}</text>
+          ))}
+        </svg>
+      </div>
+    </div>
+  ) : prsAsc.length === 1 ? (
+    <div class="mb-5 rounded-xl border border-dashed border-border/60 p-4 text-center">
+      <p class="text-xs text-muted-foreground">Adicione mais registros para ver o gráfico de progresso.</p>
+    </div>
+  ) : null}
+
+  <!-- Histórico / Timeline -->
+  {prsDesc.length > 0 ? (
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div class="px-4 py-3 border-b border-border/60">
+        <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Histórico</h3>
+      </div>
+      <div class="divide-y divide-border/40">
+        {prsDesc.map((pr, idx) => {
+          const origIdx = prsAsc.length - 1 - idx;
+          const ehPR = isPRPonto(origIdx);
+          return (
+            <div class:list={["px-4 py-3.5 transition-colors", ehPR ? "bg-primary/5" : ""]}>
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex items-center gap-2 flex-wrap">
+                  {ehPR && (
+                    <span class="shrink-0 text-[9px] font-bold text-primary bg-primary/15 border border-primary/20 rounded px-1.5 py-0.5 tracking-wider">
+                      PR
+                    </span>
+                  )}
+                  <span class="text-xs text-muted-foreground">{fmtData(pr.data_registro)}</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class:list={["text-[9px] font-bold rounded px-1.5 py-0.5 border", catColor(pr)]}>
+                    {catLabel(pr)}
+                  </span>
+                  <span class:list={["text-sm font-bold tabular-nums", ehPR ? "text-primary" : "text-foreground"]}>
+                    {fmtValor(pr)}
+                  </span>
+                </div>
+              </div>
+              {pr.observacao && (
+                <p class="mt-2 text-xs text-zinc-500 italic pl-2 border-l-2 border-border/60 leading-relaxed">
+                  "{pr.observacao}"
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  ) : (
+    <div class="rounded-xl border border-dashed border-border/60 p-10 text-center">
+      <p class="text-sm text-muted-foreground mb-1">Nenhum registro ainda.</p>
+      <p class="text-xs text-zinc-600">Clique em "Nova Marca" para registrar seu primeiro resultado!</p>
+    </div>
+  )}
+
+  <!-- Modal Nova Marca -->
+  <div id="modal-pr" class="hidden fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm p-4 pb-6">
+    <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl p-5">
+
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h2 class="text-base font-bold text-foreground">Registrar Nova Marca</h2>
+          <p class="text-xs text-muted-foreground mt-0.5">{exercicio.nome}</p>
+        </div>
+        <button id="btn-fechar" type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-border/40 transition-colors">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      {exercicio.tipo_resultado === 'peso' && (
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-muted-foreground mb-1.5">Carga *</label>
+          <div class="relative">
+            <input id="m-peso" type="number" step="0.5" min="0" placeholder="ex: 102.5" inputmode="decimal"
+              class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground pr-10 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground pointer-events-none">kg</span>
+          </div>
+        </div>
+      )}
+      {exercicio.tipo_resultado === 'reps' && (
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-muted-foreground mb-1.5">Repetições *</label>
+          <div class="relative">
+            <input id="m-reps" type="number" min="1" placeholder="ex: 50" inputmode="numeric"
+              class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground pr-14 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground pointer-events-none">reps</span>
+          </div>
+        </div>
+      )}
+      {exercicio.tipo_resultado === 'tempo' && (
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-muted-foreground mb-1.5">Tempo * <span class="text-zinc-600 font-normal">(mm:ss)</span></label>
+          <input id="m-tempo" type="text" placeholder="ex: 12:34" maxlength="5" inputmode="numeric"
+            class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+        </div>
+      )}
+      {exercicio.tipo_resultado === 'rounds_reps' && (
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">Rounds *</label>
+            <input id="m-rounds" type="number" min="0" placeholder="ex: 5" inputmode="numeric"
+              class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-muted-foreground mb-1.5">+ Reps extras</label>
+            <input id="m-reps-extra" type="number" min="0" placeholder="ex: 12" inputmode="numeric"
+              class="w-full rounded-lg border border-border bg-background px-3 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+          </div>
+        </div>
+      )}
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-muted-foreground mb-2">Categoria</label>
+        <div class="grid grid-cols-4 gap-2">
+          <label class="cursor-pointer">
+            <input type="radio" name="m-cat" value="rx" class="sr-only peer" checked />
+            <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-primary peer-checked:border-primary/50 peer-checked:bg-primary/10">RX</span>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="m-cat" value="intermediario" class="sr-only peer" />
+            <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-blue-400 peer-checked:border-blue-400/50 peer-checked:bg-blue-400/10">Inter</span>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="m-cat" value="scaled" class="sr-only peer" />
+            <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-orange-400 peer-checked:border-orange-400/50 peer-checked:bg-orange-400/10">Scaled</span>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="m-cat" value="iniciante" class="sr-only peer" />
+            <span class="block text-center py-2 text-xs font-bold rounded-lg border border-border text-muted-foreground transition-all peer-checked:text-zinc-300 peer-checked:border-zinc-400/50 peer-checked:bg-zinc-400/10">Inic</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="block text-xs font-medium text-muted-foreground mb-1.5">Data</label>
+          <input id="m-data" type="date" value={hoje}
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-muted-foreground mb-1.5">Observação <span class="text-zinc-600 font-normal">(opcional)</span></label>
+          <input id="m-obs" type="text" placeholder="ex: novo PR!"
+            class="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"/>
+        </div>
+      </div>
+
+      <div id="m-erro" class="hidden mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"></div>
+
+      <button id="btn-salvar" type="button"
+        class="w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all">
+        Salvar Marca
+      </button>
+    </div>
+  </div>
+
+  <script define:vars={{ exId: exercicio.id, exTipo: exercicio.tipo_resultado }}>
+    const modal   = document.getElementById('modal-pr');
+    const erroEl  = document.getElementById('m-erro');
+
+    document.getElementById('btn-novo-pr').addEventListener('click', () => {
+      modal.classList.remove('hidden');
+      setTimeout(() => {
+        const first = modal.querySelector('input[type="number"], input[type="text"][id^="m-"]');
+        first?.focus();
+      }, 60);
+    });
+
+    document.getElementById('btn-fechar').addEventListener('click', () => modal.classList.add('hidden'));
+    modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
+
+    const tempoInput = document.getElementById('m-tempo');
+    tempoInput?.addEventListener('input', () => {
+      let v = tempoInput.value.replace(/\D/g, '');
+      if (v.length > 4) v = v.slice(0, 4);
+      if (v.length > 2) v = v.slice(0, 2) + ':' + v.slice(2);
+      tempoInput.value = v;
+    });
+
+    document.getElementById('btn-salvar').addEventListener('click', async () => {
+      erroEl.classList.add('hidden');
+      const categoria    = document.querySelector('input[name="m-cat"]:checked')?.value ?? 'rx';
+      const observacao   = document.getElementById('m-obs')?.value || undefined;
+      const data_registro = document.getElementById('m-data')?.value;
+      const payload = { exercicio_id: exId, categoria, observacao, data_registro };
+
+      if (exTipo === 'peso') {
+        const v = parseFloat(document.getElementById('m-peso')?.value ?? '');
+        if (!v || v <= 0) { showErro('Informe a carga em kg.'); return; }
+        payload.valor_peso = v;
+      } else if (exTipo === 'reps') {
+        const v = parseInt(document.getElementById('m-reps')?.value ?? '');
+        if (!v || v <= 0) { showErro('Informe as repetições.'); return; }
+        payload.valor_reps = v;
+      } else if (exTipo === 'tempo') {
+        const parts = (document.getElementById('m-tempo')?.value ?? '').split(':');
+        if (parts.length !== 2) { showErro('Use o formato mm:ss.'); return; }
+        const seg = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        if (!seg || seg <= 0) { showErro('Tempo inválido.'); return; }
+        payload.valor_tempo_seg = seg;
+      } else if (exTipo === 'rounds_reps') {
+        const r = parseInt(document.getElementById('m-rounds')?.value ?? '');
+        if (isNaN(r) || r < 0) { showErro('Informe os rounds.'); return; }
+        payload.valor_rounds     = r;
+        payload.valor_reps_extra = parseInt(document.getElementById('m-reps-extra')?.value ?? '0') || 0;
+      }
+
+      const btn = document.getElementById('btn-salvar');
+      btn.disabled = true; btn.textContent = 'Salvando...';
+
+      try {
+        const res = await fetch('/api/prs/salvar', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        if (!res.ok) { const err = await res.json(); showErro(err.error ?? 'Erro ao salvar.'); }
+        else { window.location.href = `/dashboard/resultados/${exId}?saved=1`; }
+      } catch { showErro('Erro de conexão. Tente novamente.'); }
+      finally  { btn.disabled = false; btn.textContent = 'Salvar Marca'; }
+    });
+
+    function showErro(msg) {
+      erroEl.textContent = msg;
+      erroEl.classList.remove('hidden');
+    }
+  </script>
+
+</DashboardLayout>
