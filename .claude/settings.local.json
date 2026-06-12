@@ -38,7 +38,12 @@
       "Bash(npx supabase *)",
       "Bash(git commit -m 'fix: remove comentário HTML inválido em expressão JSX no resultados.astro *)",
       "Bash(git commit -m 'fix: remove \\) orphan no ternário encadeado de resultados.astro *)",
-      "Bash(git commit -m 'fix: melhora contraste das options no select de tipo de exercício *)"
+      "Bash(git commit -m 'fix: melhora contraste das options no select de tipo de exercício *)",
+      "Bash(mkdir -p \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\resultados\")",
+      "Bash(git commit -m 'feat: página de detalhes do exercício com gráfico e histórico de PRs *)"
+    ],
+    "additionalDirectories": [
+      "e:\\trabalho\\UNAFIT\\sistema-app\\app\\src\\pages\\dashboard"
     ]
   }
 }
