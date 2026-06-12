@@ -36,7 +36,8 @@
       "Bash(curl -s -X POST \"https://api.supabase.com/v1/projects/skcvbaiqeubbyhdcqjkc/database/query\" -H \"Authorization: Bearer sbp_683d0ac7a58423f0c1deac8b74cd552fd55f977b\" -H \"Content-Type: application/json\" -d \"{\\\\\"query\\\\\": \\\\\"ALTER TABLE prs ADD COLUMN IF NOT EXISTS categoria TEXT; UPDATE prs SET categoria = CASE WHEN rx THEN 'rx' ELSE 'scaled' END WHERE categoria IS NULL;\\\\\"}\")",
       "Bash(curl -s -X POST \"https://api.supabase.com/v1/projects/skcvbaiqeubbyhdcqjkc/database/query\" -H \"Authorization: Bearer sbp_5e99b9f2b67c0d3debd31c2384af5f4cc798800d\" -H \"Content-Type: application/json\" -d \"{\\\\\"query\\\\\": \\\\\"ALTER TABLE prs ADD COLUMN IF NOT EXISTS categoria TEXT; UPDATE prs SET categoria = CASE WHEN rx THEN 'rx' ELSE 'scaled' END WHERE categoria IS NULL;\\\\\"}\")",
       "Bash(npx supabase *)",
-      "Bash(git commit -m 'fix: remove comentário HTML inválido em expressão JSX no resultados.astro *)"
+      "Bash(git commit -m 'fix: remove comentário HTML inválido em expressão JSX no resultados.astro *)",
+      "Bash(git commit -m 'fix: remove \\) orphan no ternário encadeado de resultados.astro *)"
     ]
   }
 }
