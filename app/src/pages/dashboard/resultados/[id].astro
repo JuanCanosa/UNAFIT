@@ -261,9 +261,18 @@ if (prsAsc.length >= 2) {
           const origIdx = prsAsc.length - 1 - idx;
           const ehPR = isPRPonto(origIdx);
           return (
-            <div class:list={["px-4 py-3.5 transition-colors", ehPR ? "bg-primary/5" : ""]}>
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex items-center gap-2 flex-wrap">
+            <div class:list={["px-4 py-3.5 transition-colors group/row", ehPR ? "bg-primary/5" : ""]}
+              data-pr-id={pr.id}
+              data-pr-cat={pr.categoria ?? (pr.rx ? 'rx' : 'scaled')}
+              data-pr-data={pr.data_registro}
+              data-pr-obs={pr.observacao ?? ''}
+              data-pr-peso={pr.valor_peso ?? ''}
+              data-pr-reps={pr.valor_reps ?? ''}
+              data-pr-tempo={pr.valor_tempo_seg ?? ''}
+              data-pr-rounds={pr.valor_rounds ?? ''}
+              data-pr-reps-extra={pr.valor_reps_extra ?? ''}>
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 flex-wrap min-w-0">
                   {ehPR && (
                     <span class="shrink-0 text-[9px] font-bold text-primary bg-primary/15 border border-primary/20 rounded px-1.5 py-0.5 tracking-wider">
                       PR
@@ -278,6 +287,18 @@ if (prsAsc.length >= 2) {
                   <span class:list={["text-sm font-bold tabular-nums", ehPR ? "text-primary" : "text-foreground"]}>
                     {fmtValor(pr)}
                   </span>
+                  <button type="button" data-action="editar"
+                    class="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-border/40 transition-colors opacity-0 group-hover/row:opacity-100 focus:opacity-100">
+                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931zm0 0L19.5 7.125"/>
+                    </svg>
+                  </button>
+                  <button type="button" data-action="excluir"
+                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-red-400 hover:bg-red-400/10 transition-colors opacity-0 group-hover/row:opacity-100 focus:opacity-100">
+                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"/>
+                    </svg>
+                  </button>
                 </div>
               </div>
               {pr.observacao && (
@@ -301,9 +322,10 @@ if (prsAsc.length >= 2) {
   <div id="modal-pr" class="hidden fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm p-4 pb-6">
     <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl p-5">
 
+      <input type="hidden" id="m-id" value=""/>
       <div class="flex items-center justify-between mb-5">
         <div>
-          <h2 class="text-base font-bold text-foreground">Registrar Nova Marca</h2>
+          <h2 id="m-titulo" class="text-base font-bold text-foreground">Registrar Nova Marca</h2>
           <p class="text-xs text-muted-foreground mt-0.5">{exercicio.nome}</p>
         </div>
         <button id="btn-fechar" type="button"
@@ -401,20 +423,46 @@ if (prsAsc.length >= 2) {
   </div>
 
   <script define:vars={{ exId: exercicio.id, exTipo: exercicio.tipo_resultado }}>
-    const modal   = document.getElementById('modal-pr');
-    const erroEl  = document.getElementById('m-erro');
+    const modal  = document.getElementById('modal-pr');
+    const erroEl = document.getElementById('m-erro');
+    const mId    = document.getElementById('m-id');
+    const mTitulo = document.getElementById('m-titulo');
+    const btnSalvar = document.getElementById('btn-salvar');
 
-    document.getElementById('btn-novo-pr').addEventListener('click', () => {
-      modal.classList.remove('hidden');
-      setTimeout(() => {
-        const first = modal.querySelector('input[type="number"], input[type="text"][id^="m-"]');
-        first?.focus();
-      }, 60);
+    // ── Abrir modal NOVO ──────────────────────────────────────────────────────
+    document.getElementById('btn-novo-pr').addEventListener('click', () => abrirModal());
+
+    // ── Editar / Excluir via delegação ────────────────────────────────────────
+    document.querySelectorAll('[data-pr-id]').forEach(row => {
+      row.querySelector('[data-action="editar"]')?.addEventListener('click', () => {
+        const d = row.dataset;
+        abrirModal({
+          id:        d.prId,
+          categoria: d.prCat,
+          data:      d.prData,
+          obs:       d.prObs,
+          peso:      d.prPeso,
+          reps:      d.prReps,
+          tempo:     d.prTempo ? segsParaMmss(parseInt(d.prTempo)) : '',
+          rounds:    d.prRounds,
+          repsExtra: d.prRepsExtra,
+        });
+      });
+
+      row.querySelector('[data-action="excluir"]')?.addEventListener('click', () => {
+        const prId = row.dataset.prId;
+        if (!confirm('Excluir este registro?')) return;
+        fetch(`/api/prs/${prId}`, { method: 'DELETE' })
+          .then(r => r.ok ? location.reload() : r.json().then(e => alert(e.error ?? 'Erro ao excluir.')))
+          .catch(() => alert('Erro de conexão.'));
+      });
     });
 
+    // ── Fechar modal ──────────────────────────────────────────────────────────
     document.getElementById('btn-fechar').addEventListener('click', () => modal.classList.add('hidden'));
     modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
 
+    // ── Formato mm:ss ─────────────────────────────────────────────────────────
     const tempoInput = document.getElementById('m-tempo');
     tempoInput?.addEventListener('input', () => {
       let v = tempoInput.value.replace(/\D/g, '');
@@ -423,8 +471,10 @@ if (prsAsc.length >= 2) {
       tempoInput.value = v;
     });
 
-    document.getElementById('btn-salvar').addEventListener('click', async () => {
+    // ── Salvar (novo ou edição) ───────────────────────────────────────────────
+    btnSalvar.addEventListener('click', async () => {
       erroEl.classList.add('hidden');
+      const editId       = mId.value;
       const categoria    = document.querySelector('input[name="m-cat"]:checked')?.value ?? 'rx';
       const observacao   = document.getElementById('m-obs')?.value || undefined;
       const data_registro = document.getElementById('m-data')?.value;
@@ -439,7 +489,7 @@ if (prsAsc.length >= 2) {
         if (!v || v <= 0) { showErro('Informe as repetições.'); return; }
         payload.valor_reps = v;
       } else if (exTipo === 'tempo') {
-        const parts = (document.getElementById('m-tempo')?.value ?? '').split(':');
+        const parts = (tempoInput?.value ?? '').split(':');
         if (parts.length !== 2) { showErro('Use o formato mm:ss.'); return; }
         const seg = parseInt(parts[0]) * 60 + parseInt(parts[1]);
         if (!seg || seg <= 0) { showErro('Tempo inválido.'); return; }
@@ -451,18 +501,58 @@ if (prsAsc.length >= 2) {
         payload.valor_reps_extra = parseInt(document.getElementById('m-reps-extra')?.value ?? '0') || 0;
       }
 
-      const btn = document.getElementById('btn-salvar');
-      btn.disabled = true; btn.textContent = 'Salvando...';
+      btnSalvar.disabled = true;
+      btnSalvar.textContent = editId ? 'Atualizando...' : 'Salvando...';
 
       try {
-        const res = await fetch('/api/prs/salvar', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        const url    = editId ? `/api/prs/${editId}` : '/api/prs/salvar';
+        const method = editId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
         if (!res.ok) { const err = await res.json(); showErro(err.error ?? 'Erro ao salvar.'); }
         else { window.location.href = `/dashboard/resultados/${exId}?saved=1`; }
       } catch { showErro('Erro de conexão. Tente novamente.'); }
-      finally  { btn.disabled = false; btn.textContent = 'Salvar Marca'; }
+      finally  { btnSalvar.disabled = false; btnSalvar.textContent = mId.value ? 'Atualizar' : 'Salvar Marca'; }
     });
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function segsParaMmss(seg) {
+      return `${String(Math.floor(seg / 60)).padStart(2,'0')}:${String(seg % 60).padStart(2,'0')}`;
+    }
+
+    function abrirModal(dados) {
+      erroEl.classList.add('hidden');
+      const editando = !!dados;
+      mId.value = dados?.id ?? '';
+      mTitulo.textContent = editando ? 'Editar Registro' : 'Registrar Nova Marca';
+      btnSalvar.textContent = editando ? 'Atualizar' : 'Salvar Marca';
+
+      // Limpa ou preenche campos
+      const pesoEl   = document.getElementById('m-peso');
+      const repsEl   = document.getElementById('m-reps');
+      const roundsEl = document.getElementById('m-rounds');
+      const extraEl  = document.getElementById('m-reps-extra');
+      if (pesoEl)   pesoEl.value   = dados?.peso      ?? '';
+      if (repsEl)   repsEl.value   = dados?.reps      ?? '';
+      if (tempoInput) tempoInput.value = dados?.tempo ?? '';
+      if (roundsEl) roundsEl.value = dados?.rounds    ?? '';
+      if (extraEl)  extraEl.value  = dados?.repsExtra ?? '';
+
+      document.getElementById('m-data').value = dados?.data ?? new Date().toLocaleDateString('en-CA');
+      document.getElementById('m-obs').value  = dados?.obs  ?? '';
+
+      if (dados?.categoria) {
+        const radio = document.querySelector(`input[name="m-cat"][value="${dados.categoria}"]`);
+        if (radio) radio.checked = true;
+      }
+
+      modal.classList.remove('hidden');
+      setTimeout(() => {
+        const first = modal.querySelector('input[type="number"]:not([type="hidden"]), input[type="text"][id^="m-"]');
+        first?.focus();
+      }, 60);
+    }
 
     function showErro(msg) {
       erroEl.textContent = msg;
