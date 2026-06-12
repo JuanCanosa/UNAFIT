@@ -387,9 +387,7 @@ const hoje = new Date().toLocaleDateString('en-CA');
         </div>
       )}
     </div>
-  ) : (
-    <!-- Nenhum exercício selecionado: lista de exercícios com PRs -->
-    exerciciosSummary.length > 0 ? (
+  ) : exerciciosSummary.length > 0 ? (
       <div>
         <p class="text-xs text-muted-foreground mb-3">
           {exerciciosSummary.length} exercício{exerciciosSummary.length !== 1 ? 's' : ''} registrado{exerciciosSummary.length !== 1 ? 's' : ''}
