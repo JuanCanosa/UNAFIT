@@ -40,7 +40,8 @@
       "Bash(git commit -m 'fix: remove \\) orphan no ternário encadeado de resultados.astro *)",
       "Bash(git commit -m 'fix: melhora contraste das options no select de tipo de exercício *)",
       "Bash(mkdir -p \"e:\\\\trabalho\\\\UNAFIT\\\\sistema-app\\\\app\\\\src\\\\pages\\\\dashboard\\\\resultados\")",
-      "Bash(git commit -m 'feat: página de detalhes do exercício com gráfico e histórico de PRs *)"
+      "Bash(git commit -m 'feat: página de detalhes do exercício com gráfico e histórico de PRs *)",
+      "Bash(git commit -m 'feat: editar e excluir registros de PR na timeline *)"
     ],
     "additionalDirectories": [
       "e:\\trabalho\\UNAFIT\\sistema-app\\app\\src\\pages\\dashboard"
